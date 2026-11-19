@@ -152,4 +152,63 @@ public class ConvertersAndViewModelTests
         Assert.Single(config.Current.Devices);
         Assert.Null(config.Current.SelectedDeviceId);
     }
+
+    [Fact]
+    public void GeneralViewModel_ReflectsState_And_Navigates()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-gen-{Guid.NewGuid():N}.json");
+        var config = new ConfigService(path);
+        var dummyBt = new DummyBluetoothManager();
+        string navigatedTo = "";
+        bool wizardOpened = false;
+
+        var vm = new GeneralViewModel(config, dummyBt, () => wizardOpened = true, target => navigatedTo = target);
+
+        Assert.NotNull(vm.PermissionsSummary);
+        Assert.Equal("未连接遥控器", vm.RemoteSummary);
+        Assert.False(vm.RemoteReady);
+        Assert.NotNull(vm.IntegrationSummary);
+
+        vm.RerunWizard();
+        Assert.True(wizardOpened);
+
+        vm.GoToPermissions();
+        Assert.Equal("Permissions", navigatedTo);
+
+        vm.GoToDevices();
+        Assert.Equal("Devices", navigatedTo);
+
+        vm.GoToIntegrations();
+        Assert.Equal("Integrations", navigatedTo);
+    }
+
+    [Fact]
+    public void AppIntegrationViewModel_EnableDisableAll_PersistsState()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-appint-{Guid.NewGuid():N}.json");
+        var config = new ConfigService(path);
+
+        var vm = new AppIntegrationViewModel(config);
+        Assert.NotEmpty(vm.Applications);
+        Assert.All(vm.Applications, a => Assert.False(a.IsEnabled));
+
+        vm.EnableAll();
+        Assert.All(vm.Applications, a => Assert.True(a.IsEnabled));
+        Assert.True(config.Current.AppIntegrations["wechat"]);
+        Assert.True(config.Current.AppIntegrations["antigravity"]);
+
+        vm.DisableAll();
+        Assert.All(vm.Applications, a => Assert.False(a.IsEnabled));
+        Assert.False(config.Current.AppIntegrations["wechat"]);
+    }
+
+    [Fact]
+    public void AboutViewModel_ExposesAppMetadata()
+    {
+        var vm = new AboutViewModel();
+        Assert.False(string.IsNullOrEmpty(vm.AppVersion));
+        Assert.False(string.IsNullOrEmpty(vm.Architecture));
+        Assert.False(string.IsNullOrEmpty(vm.Runtime));
+        Assert.False(string.IsNullOrEmpty(vm.LogDirectoryPath));
+    }
 }

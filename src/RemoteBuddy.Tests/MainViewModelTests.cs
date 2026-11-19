@@ -51,15 +51,18 @@ public class MainViewModelTests
             var bt = new TestBluetoothManager();
             using var vm = new MainViewModel(config, bt);
 
-            Assert.Equal("Devices", vm.ActivePageName);
+            Assert.Equal("General", vm.ActivePageName);
             Assert.False(vm.IsConnected);
             Assert.Equal("未连接设备", vm.ConnectedDeviceName);
             Assert.False(vm.IsVoiceActive);
             Assert.Equal(0f, vm.CurrentAudioLevel);
-            Assert.NotNull(vm.DevicesVm);
-            Assert.NotNull(vm.MappingVm);
-            Assert.NotNull(vm.IntegrationsVm);
+            Assert.NotNull(vm.GeneralVm);
             Assert.NotNull(vm.EnvironmentVm);
+            Assert.NotNull(vm.DevicesVm);
+            Assert.NotNull(vm.IntegrationsVm);
+            Assert.NotNull(vm.MappingVm);
+            Assert.NotNull(vm.AppIntegrationVm);
+            Assert.NotNull(vm.AboutVm);
             Assert.NotNull(vm.SettingsVm);
         }
         finally
@@ -78,14 +81,26 @@ public class MainViewModelTests
             var bt = new TestBluetoothManager();
             using var vm = new MainViewModel(config, bt);
 
-            vm.Navigate("Mapping");
-            Assert.Equal("Mapping", vm.ActivePageName);
+            vm.Navigate("General");
+            Assert.Equal("General", vm.ActivePageName);
+
+            vm.Navigate("Permissions");
+            Assert.Equal("Permissions", vm.ActivePageName);
+
+            vm.Navigate("Devices");
+            Assert.Equal("Devices", vm.ActivePageName);
 
             vm.Navigate("Integrations");
             Assert.Equal("Integrations", vm.ActivePageName);
 
-            vm.Navigate("Settings");
-            Assert.Equal("Settings", vm.ActivePageName);
+            vm.Navigate("Mapping");
+            Assert.Equal("Mapping", vm.ActivePageName);
+
+            vm.Navigate("AppIntegration");
+            Assert.Equal("AppIntegration", vm.ActivePageName);
+
+            vm.Navigate("About");
+            Assert.Equal("About", vm.ActivePageName);
         }
         finally
         {
