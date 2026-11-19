@@ -118,6 +118,55 @@
 
                                     <Border Height="1" Background="{StaticResource BorderColorBrush}" Margin="0,0,0,16"/>
 
+                                    <!-- G9N9N Voice Button Mode Section -->
+                                    <Border Background="#22252A" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="6" Padding="14" Margin="0,0,0,16"
+                                            Visibility="{Binding IsG9N9N, Converter={StaticResource BoolToVisibilityConverter}}">
+                                        <StackPanel>
+                                            <TextBlock Text="语音键触发方式 (Voice Button Mode)" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,8"/>
+                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                                <RadioButton Content="智能切换 (Smart Toggle)" IsChecked="{Binding IsSmartToggleMode}" GroupName="{Binding Id}"
+                                                             Foreground="{StaticResource PrimaryTextBrush}" VerticalAlignment="Center" Margin="0,0,16,0"/>
+                                                <RadioButton Content="按住说话 (Hold to Talk)" IsChecked="{Binding IsHoldToTalkMode}" GroupName="{Binding Id}"
+                                                             Foreground="{StaticResource PrimaryTextBrush}" VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                            <TextBlock Text="{Binding VoiceModeHelp}" FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- Hardware Usage Guide Section -->
+                                    <!-- 1. G9N9N Guide -->
+                                    <Border Background="#1F2328" BorderBrush="#333740" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,16"
+                                            Visibility="{Binding IsG9N9N, Converter={StaticResource BoolToVisibilityConverter}}">
+                                        <StackPanel>
+                                            <TextBlock Text="💡 硬件使用提示 (G9N9N)" FontSize="12" FontWeight="SemiBold" Foreground="#88CCFF" Margin="0,0,0,6"/>
+                                            <TextBlock Text="• 底部白色指示灯常亮表示正在传输语音，停止后自动熄灭。" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,4"/>
+                                            <TextBlock Text="• 智能切换与按住说话均支持连续保活，最长 5 分钟安全停麦以防耗电。" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,4"/>
+                                            <TextBlock Text="• 智能切换免提收音期间，若按其他实体键会结束收音。" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- 2. T1 Guide -->
+                                    <Border Background="#1F2328" BorderBrush="#333740" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,16"
+                                            Visibility="{Binding IsT1, Converter={StaticResource BoolToVisibilityConverter}}">
+                                        <StackPanel>
+                                            <TextBlock Text="💡 硬件使用提示 (T1 Remote)" FontSize="12" FontWeight="SemiBold" Foreground="#88CCFF" Margin="0,0,0,6"/>
+                                            <TextBlock Text="• 点按免提收音：按一下语音键开始说话、再按一次停止（约 5 分钟安全上限）。" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,4"/>
+                                            <TextBlock Text="• 自动兼容按住说话输入法：收音期间系统自动维持按住状态，无需持续按住遥控器。" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,4"/>
+                                            <TextBlock Text="• 原生直通：确认、方向键、飞鼠与背面 QWERTY 全键盘无需映射即可直接输入打字。" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- 3. Xiaomi Guide -->
+                                    <Border Background="#1F2328" BorderBrush="#333740" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,16"
+                                            Visibility="{Binding IsXiaomi, Converter={StaticResource BoolToVisibilityConverter}}">
+                                        <StackPanel>
+                                            <TextBlock Text="💡 硬件使用提示 (小米遥控器)" FontSize="12" FontWeight="SemiBold" Foreground="#88CCFF" Margin="0,0,0,6"/>
+                                            <TextBlock Text="• 仅支持按住说话：按住语音键说话、松开立即停麦（硬件固件松手即停止推送音频）。" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <Border Height="1" Background="{StaticResource BorderColorBrush}" Margin="0,0,0,16"/>
+
                                     <!-- Technical Device Info Grid -->
                                     <TextBlock Text="设备详细信息" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,12"/>
                                     <Grid>

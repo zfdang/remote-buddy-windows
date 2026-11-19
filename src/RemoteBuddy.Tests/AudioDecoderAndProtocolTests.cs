@@ -465,6 +465,14 @@ public class AudioDecoderAndProtocolTests
             IntPtr.Zero, @"\\?\HID#VID_2717&PID_0030#..."));
         Assert.True(RemoteBuddy.Platform.Windows.Input.RawInputReceiver.IsKnownRemoteDevice(
             IntPtr.Zero, @"\\?\HID#{00001812-0000-1000-8000-00805f9b34fb}_Dev_VID&012717_PID&32b8_REV&00a4_test#..."));
+
+        // T1 Remote path patterns
+        Assert.True(RemoteBuddy.Platform.Windows.Input.RawInputReceiver.IsKnownRemoteDevice(
+            IntPtr.Zero, @"\\?\HID#{00001124-0000-1000-8000-00805f9b34fb}_VID&0002620A_PID&0407#..."));
+        Assert.True(RemoteBuddy.Platform.Windows.Input.RawInputReceiver.IsKnownRemoteDevice(
+            IntPtr.Zero, @"\\?\HID#VID_620A&PID_0407#..."));
+        Assert.True(RemoteBuddy.Platform.Windows.Input.RawInputReceiver.IsKnownRemoteDevice(
+            IntPtr.Zero, @"\\?\HID#T1-REMOTE#..."));
     }
 
     [Fact]

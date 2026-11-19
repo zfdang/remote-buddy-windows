@@ -267,7 +267,7 @@ public sealed class RawInputReceiver : IDisposable
     {
         if (GetHidDeviceInfo(hDevice, out uint vid, out _))
         {
-            if (vid == G9N9NProtocol.VendorId || vid == 0x2717)
+            if (vid == G9N9NProtocol.VendorId || vid == T1RemoteProtocol.VendorId || vid == 0x2717)
             {
                 return true;
             }
@@ -281,7 +281,9 @@ public sealed class RawInputReceiver : IDisposable
         {
             string upper = devicePath.ToUpperInvariant();
             if (upper.Contains("VID_18D1") || upper.Contains("VID&000218D1") || upper.Contains("VID&0118D1") ||
-                upper.Contains("VID_2717") || upper.Contains("VID&00022717") || upper.Contains("VID&012717"))
+                upper.Contains("VID_620A") || upper.Contains("VID&0002620A") || upper.Contains("VID&01620A") ||
+                upper.Contains("VID_2717") || upper.Contains("VID&00022717") || upper.Contains("VID&012717") ||
+                upper.Contains("T1-REMOTE"))
             {
                 return true;
             }
@@ -532,6 +534,14 @@ public sealed class RawInputReceiver : IDisposable
                     {
                         recognized = true;
                     }
+                    else if (T1RemoteProtocol.TryParseReport(slice, out currentButtons, out bool voiceHoldPressed))
+                    {
+                        recognized = true;
+                        if (voiceHoldPressed)
+                        {
+                            PhysicalVoiceKeyPressed?.Invoke();
+                        }
+                    }
                     else if (XiaomiProtocol.TryParseReport(slice, out currentButtons))
                     {
                         recognized = true;
@@ -623,7 +633,7 @@ public sealed class RawInputReceiver : IDisposable
         {
             return slice[0];
         }
-        if (slice.Length >= 3 && (slice[0] == 1 || slice[0] == 2))
+        if (slice.Length >= 3 && (slice[0] == 1 || slice[0] == 2 || slice[0] == 3))
         {
             return slice[0];
         }

@@ -302,6 +302,9 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
         RemoteButton.Power => "电源键",
         RemoteButton.LiveTv => "电视直播键",
         RemoteButton.Menu => "菜单键",
+        RemoteButton.YouTube => "YouTube 键",
+        RemoteButton.Netflix => "Netflix 键",
+        RemoteButton.Input => "输入源切换键 (Input)",
         _ => button.ToString()
     };
 

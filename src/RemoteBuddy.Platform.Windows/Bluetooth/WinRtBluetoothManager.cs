@@ -46,6 +46,10 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
     private TaskCompletionSource<bool>? _capabilitiesTcs;
     private TaskCompletionSource<bool>? _audioStopTcs;
     private System.Threading.Timer? _keepaliveTimer;
+    private readonly G9N9NSmartToggleSession _smartToggle = new();
+    private System.Threading.Timer? _smartToggleReopenTimer;
+    private System.Threading.Timer? _smartToggleDeadlineTimer;
+    public G9N9NVoiceButtonMode VoiceButtonMode { get; set; } = G9N9NVoiceButtonMode.SmartToggle;
     private readonly object _stateLock = new();
 
     public event Action<RemoteDevice>? DeviceDiscovered;
@@ -97,7 +101,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 BluetoothLEDevice.GetDeviceSelectorFromPairingState(true));
             foreach (var info in devices)
             {
-                if (!XiaomiProtocol.IsCandidate(info.Name) && !G9N9NProtocol.IsCandidate(info.Name)) continue;
+                if (!XiaomiProtocol.IsCandidate(info.Name) && !G9N9NProtocol.IsCandidate(info.Name) && !T1RemoteProtocol.IsCandidate(info.Name)) continue;
                 using var device = await BluetoothLEDevice.FromIdAsync(info.Id);
                 if (device == null) continue;
                 AppLogger.Info($"Found paired remote: '{info.Name}' (0x{device.BluetoothAddress:X12}), OS status={device.ConnectionStatus}", "BluetoothManager");
@@ -136,7 +140,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
         string name = args.Advertisement.LocalName;
         if (string.IsNullOrWhiteSpace(name)) return;
 
-        if (XiaomiProtocol.IsCandidate(name) || G9N9NProtocol.IsCandidate(name))
+        if (XiaomiProtocol.IsCandidate(name) || G9N9NProtocol.IsCandidate(name) || T1RemoteProtocol.IsCandidate(name))
         {
             AppLogger.Info($"Discovered candidate remote: '{name}' (Address: 0x{args.BluetoothAddress:X12}, RSSI: {args.RawSignalStrengthInDBm} dBm)", "BluetoothManager");
             var modelType = XiaomiProtocol.DetectModelType(name);
@@ -622,6 +626,8 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
             currentConnGen = _connectionGeneration;
             currentSessGen = _sessionGeneration;
             StopKeepaliveTimer();
+            _smartToggle.Reset();
+            CancelSmartToggleTimers();
 
             if (!_audioStopReceived)
             {
@@ -686,8 +692,8 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
     private void StartKeepaliveTimer()
     {
         StopKeepaliveTimer();
-        // Xiaomi remotes do not support 0x0E MIC_EXTEND and may disconnect; only send to Google candidate remotes
-        if (!G9N9NProtocol.IsCandidate(ConnectedDeviceName)) return;
+        // Xiaomi remotes do not support 0x0E MIC_EXTEND and may disconnect; send to Google & T1 candidate remotes
+        if (!G9N9NProtocol.IsCandidate(ConnectedDeviceName) && !T1RemoteProtocol.IsCandidate(ConnectedDeviceName)) return;
 
         // Bind keepalive callbacks to this session and do not overlap slow GATT writes.
         int connectionGeneration = _connectionGeneration;
@@ -727,6 +733,83 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
     {
         _keepaliveTimer?.Dispose();
         _keepaliveTimer = null;
+    }
+
+    private bool IsSmartToggleEligible()
+    {
+        return G9N9NProtocol.IsCandidate(ConnectedDeviceName) && VoiceButtonMode == G9N9NVoiceButtonMode.SmartToggle;
+    }
+
+    private void CancelSmartToggleTimers()
+    {
+        CancelSmartToggleReopenTimer();
+        CancelSmartToggleDeadlineTimer();
+    }
+
+    private void CancelSmartToggleReopenTimer()
+    {
+        _smartToggleReopenTimer?.Dispose();
+        _smartToggleReopenTimer = null;
+    }
+
+    private void CancelSmartToggleDeadlineTimer()
+    {
+        _smartToggleDeadlineTimer?.Dispose();
+        _smartToggleDeadlineTimer = null;
+    }
+
+    private void ScheduleSmartToggleReopenTimeout(ulong generation)
+    {
+        CancelSmartToggleReopenTimer();
+        _smartToggleReopenTimer = new System.Threading.Timer(_ =>
+        {
+            if (_smartToggle.IsAwaitingReopen && _smartToggle.Generation == generation)
+            {
+                AppLogger.Warn("G9N9N smart-toggle reopen timed out", "BluetoothManager");
+                _smartToggle.Reset();
+                _ = StopVoiceSessionAsync();
+            }
+        }, null, (int)G9N9NSmartToggleSession.ReopenTimeoutMs, Timeout.Infinite);
+    }
+
+    private void ScheduleSmartToggleDeadlineTimer(ulong generation)
+    {
+        CancelSmartToggleDeadlineTimer();
+        _smartToggleDeadlineTimer = new System.Threading.Timer(_ =>
+        {
+            if (_smartToggle.IsHandsFreeActive && _smartToggle.Generation == generation)
+            {
+                AppLogger.Info("G9N9N smart-toggle maximum hands-free duration reached (5 min safety limit); stopping", "BluetoothManager");
+                _smartToggle.EnterClosing();
+                CancelSmartToggleTimers();
+                _ = StopVoiceSessionAsync();
+            }
+        }, null, (int)G9N9NSmartToggleSession.MaximumHandsFreeDurationMs, Timeout.Infinite);
+    }
+
+    private async Task ReopenMicrophoneAsync(ulong generation)
+    {
+        if (_txCharacteristic == null) return;
+        try
+        {
+            byte[] micOpen = ATVVProtocol.BuildMicrophoneOpen();
+            var buffer = CryptographicBuffer.CreateFromByteArray(micOpen);
+            var writeStatus = await _txCharacteristic.WriteValueAsync(buffer, GattWriteOption.WriteWithoutResponse);
+            AppLogger.Info($"G9N9N smart-toggle MicrophoneOpen packet sent. Status={writeStatus}", "BluetoothManager");
+            if (writeStatus != GattCommunicationStatus.Success)
+            {
+                _smartToggle.Reset();
+                CancelSmartToggleTimers();
+                _ = StopVoiceSessionAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error("Exception while reopening microphone for smart-toggle", ex, "BluetoothManager");
+            _smartToggle.Reset();
+            CancelSmartToggleTimers();
+            _ = StopVoiceSessionAsync();
+        }
     }
 
     private void OnAudioValueChanged(GattCharacteristic sender, GattValueChangedEventArgs args)
@@ -835,6 +918,24 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                     lock (_stateLock)
                     {
                         if (capturedConnGen != _connectionGeneration) return;
+                    }
+
+                    if (IsSmartToggleEligible())
+                    {
+                        if (_smartToggle.IsAwaitingReopen)
+                        {
+                            var gen = _smartToggle.EnterHandsFreeActive();
+                            CancelSmartToggleReopenTimer();
+                            if (gen.HasValue) ScheduleSmartToggleDeadlineTimer(gen.Value);
+                            AppLogger.Info("G9N9N smart-toggle reopened; hands-free speech active", "BluetoothManager");
+                        }
+                        else if (_smartToggle.ShouldStopOnRemoteAudioStart(null, _currentSessionId, sessionId))
+                        {
+                            _smartToggle.EnterClosing();
+                            CancelSmartToggleTimers();
+                            _ = StopVoiceSessionAsync();
+                            return;
+                        }
                     }
 
                     // Reject non-16kHz codec (e.g. 8kHz)
@@ -977,6 +1078,21 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 {
                     if (capturedConnGen != _connectionGeneration) return;
                 }
+
+                if (IsSmartToggleEligible())
+                {
+                    if (_smartToggle.IsActive && _smartToggle.ShouldStopOnRemoteOpenRequest())
+                    {
+                        AppLogger.Info("G9N9N smart-toggle voice key pressed second time; stopping hands-free session", "BluetoothManager");
+                        _smartToggle.EnterClosing();
+                        CancelSmartToggleTimers();
+                        _ = StopVoiceSessionAsync();
+                        return;
+                    }
+
+                    _smartToggle.BeginPhysicalPress(Environment.TickCount64);
+                }
+
                 VoiceButtonPressed?.Invoke();
                 _ = StartVoiceSessionAsync();
                 break;
@@ -991,6 +1107,26 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                     _audioStopReceived = true;
                 }
                 _audioStopTcs?.TrySetResult(true);
+
+                if (IsSmartToggleEligible() && _smartToggle.IsActive)
+                {
+                    bool shouldReopen = _smartToggle.ShouldReopenOnPhysicalStop(isRemoteStop: true, localCloseRequested: false, Environment.TickCount64);
+                    if (shouldReopen)
+                    {
+                        AppLogger.Info("G9N9N physical voice key released before 0.7s threshold. Initiating hands-free smart-toggle reopen!", "BluetoothManager");
+                        ulong gen = _smartToggle.EnterAwaitingReopen();
+                        ScheduleSmartToggleReopenTimeout(gen);
+                        _ = ReopenMicrophoneAsync(gen);
+                        return;
+                    }
+                    else
+                    {
+                        AppLogger.Info("G9N9N physical voice key released after 0.7s hold. Stopping hold-to-talk session", "BluetoothManager");
+                        _smartToggle.Reset();
+                        CancelSmartToggleTimers();
+                    }
+                }
+
                 if (_sessionState == BluetoothSessionState.Streaming || _sessionState == BluetoothSessionState.Opening)
                 {
                     _ = StopVoiceSessionAsync();
@@ -1017,6 +1153,8 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
             _sessionState = BluetoothSessionState.Idle;
             _cancelOpenPending = false;
             StopKeepaliveTimer();
+            _smartToggle.Reset();
+            CancelSmartToggleTimers();
             _audioPlayer.Stop();
 
             if (_connectedDevice != null)

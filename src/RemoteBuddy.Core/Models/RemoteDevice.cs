@@ -12,7 +12,14 @@ public enum RemoteModelType
     XiaomiRC003,
     XiaomiARN9,
     GoogleG9N9N,
-    GoogleGY3LE
+    GoogleGY3LE,
+    T1Remote
+}
+
+public enum G9N9NVoiceButtonMode
+{
+    HoldToTalk = 0,
+    SmartToggle = 1
 }
 
 public partial class RemoteDevice : ObservableObject
@@ -42,6 +49,59 @@ public partial class RemoteDevice : ObservableObject
     private float _gain = 1.0f;
 
     [ObservableProperty]
+    private G9N9NVoiceButtonMode _voiceButtonMode = G9N9NVoiceButtonMode.SmartToggle;
+
+    public bool IsG9N9N => ModelType is RemoteModelType.GoogleG9N9N or RemoteModelType.GoogleGY3LE;
+    public bool IsT1 => ModelType == RemoteModelType.T1Remote;
+    public bool IsXiaomi => !IsG9N9N && !IsT1;
+
+    public string VoiceModeHelp => VoiceButtonMode == G9N9NVoiceButtonMode.SmartToggle
+        ? "短按并松开后保持免提收音，再按一次停止；若长按超过 0.7 秒则松手即停。"
+        : "按住 Google Assistant 语音键说话，松开后立即停止收音。";
+
+    public bool IsSmartToggleMode
+    {
+        get => VoiceButtonMode == G9N9NVoiceButtonMode.SmartToggle;
+        set
+        {
+            if (value && VoiceButtonMode != G9N9NVoiceButtonMode.SmartToggle)
+            {
+                VoiceButtonMode = G9N9NVoiceButtonMode.SmartToggle;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(IsHoldToTalkMode));
+            }
+        }
+    }
+
+    public bool IsHoldToTalkMode
+    {
+        get => VoiceButtonMode == G9N9NVoiceButtonMode.HoldToTalk;
+        set
+        {
+            if (value && VoiceButtonMode != G9N9NVoiceButtonMode.HoldToTalk)
+            {
+                VoiceButtonMode = G9N9NVoiceButtonMode.HoldToTalk;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(IsSmartToggleMode));
+            }
+        }
+    }
+
+    partial void OnVoiceButtonModeChanged(G9N9NVoiceButtonMode value)
+    {
+        OnPropertyChanged(nameof(VoiceModeHelp));
+        OnPropertyChanged(nameof(IsSmartToggleMode));
+        OnPropertyChanged(nameof(IsHoldToTalkMode));
+    }
+
+    partial void OnModelTypeChanged(RemoteModelType value)
+    {
+        OnPropertyChanged(nameof(IsG9N9N));
+        OnPropertyChanged(nameof(IsT1));
+        OnPropertyChanged(nameof(IsXiaomi));
+    }
+
+    [ObservableProperty]
     private List<ButtonMapping> _mappings = CreateDefaultMappings(RemoteModelType.Unknown);
 
     public static List<ButtonMapping> CreateDefaultMappings(RemoteModelType type)
@@ -57,6 +117,20 @@ public partial class RemoteDevice : ObservableObject
                 ClickShortcut = shortcut,
                 LongPressAction = ButtonActionType.ContinuousRepeat
             });
+        }
+
+        if (type == RemoteModelType.T1Remote)
+        {
+            // T1 Front-panel 7 customizable buttons: Power, Back, Home, Menu, VolumeUp, VolumeDown, Mute
+            // (OK/Enter and arrow keys pass through natively so rear QWERTY typing is never intercepted)
+            Add(RemoteButton.Power, ButtonActionType.KeyboardShortcut, shortcut: "Backspace");
+            Add(RemoteButton.Back, ButtonActionType.KeyboardShortcut, shortcut: "Escape");
+            Add(RemoteButton.Home, ButtonActionType.KeyboardShortcut, shortcut: "Win+Tab");
+            Add(RemoteButton.Menu, ButtonActionType.KeyboardShortcut, shortcut: "Apps");
+            Add(RemoteButton.VolumeUp, ButtonActionType.MediaControl, media: MediaCommand.VolumeUp);
+            Add(RemoteButton.VolumeDown, ButtonActionType.MediaControl, media: MediaCommand.VolumeDown);
+            Add(RemoteButton.Mute, ButtonActionType.MediaControl, media: MediaCommand.Mute);
+            return list;
         }
 
         Add(RemoteButton.Up, ButtonActionType.KeyboardShortcut, shortcut: "Up");

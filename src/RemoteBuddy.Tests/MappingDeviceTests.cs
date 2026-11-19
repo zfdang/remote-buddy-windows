@@ -34,6 +34,78 @@ public class MappingDeviceTests
         Assert.Equal(ButtonActionType.None, google.Single(m => m.Button == RemoteButton.Power).ClickAction);
     }
 
+    [Fact]
+    public void T1RemoteDefaults_CreateExpectedFrontButtons_WithoutInterceptingKeyboard()
+    {
+        var mappings = RemoteDevice.CreateDefaultMappings(RemoteModelType.T1Remote);
+        Assert.Equal(7, mappings.Count);
+
+        var power = mappings.Single(m => m.Button == RemoteButton.Power);
+        Assert.Equal(ButtonActionType.KeyboardShortcut, power.ClickAction);
+        Assert.Equal("Backspace", power.ClickShortcut);
+
+        var back = mappings.Single(m => m.Button == RemoteButton.Back);
+        Assert.Equal(ButtonActionType.KeyboardShortcut, back.ClickAction);
+        Assert.Equal("Escape", back.ClickShortcut);
+
+        var home = mappings.Single(m => m.Button == RemoteButton.Home);
+        Assert.Equal(ButtonActionType.KeyboardShortcut, home.ClickAction);
+        Assert.Equal("Win+Tab", home.ClickShortcut);
+
+        var menu = mappings.Single(m => m.Button == RemoteButton.Menu);
+        Assert.Equal(ButtonActionType.KeyboardShortcut, menu.ClickAction);
+        Assert.Equal("Apps", menu.ClickShortcut);
+
+        var volUp = mappings.Single(m => m.Button == RemoteButton.VolumeUp);
+        Assert.Equal(ButtonActionType.MediaControl, volUp.ClickAction);
+        Assert.Equal(MediaCommand.VolumeUp, volUp.ClickMedia);
+
+        var volDown = mappings.Single(m => m.Button == RemoteButton.VolumeDown);
+        Assert.Equal(ButtonActionType.MediaControl, volDown.ClickAction);
+        Assert.Equal(MediaCommand.VolumeDown, volDown.ClickMedia);
+
+        var mute = mappings.Single(m => m.Button == RemoteButton.Mute);
+        Assert.Equal(ButtonActionType.MediaControl, mute.ClickAction);
+        Assert.Equal(MediaCommand.Mute, mute.ClickMedia);
+
+        // Enter and arrow keys must not be present in mapped buttons
+        Assert.DoesNotContain(mappings, m => m.Button == RemoteButton.Ok);
+        Assert.DoesNotContain(mappings, m => m.Button == RemoteButton.Up);
+        Assert.DoesNotContain(mappings, m => m.Button == RemoteButton.Down);
+        Assert.DoesNotContain(mappings, m => m.Button == RemoteButton.Left);
+        Assert.DoesNotContain(mappings, m => m.Button == RemoteButton.Right);
+    }
+
+    [Fact]
+    public void RemoteDevice_ModelFlagsAndVoiceButtonMode_WorkAsExpected()
+    {
+        var t1 = new RemoteDevice { ModelType = RemoteModelType.T1Remote };
+        Assert.True(t1.IsT1);
+        Assert.False(t1.IsG9N9N);
+        Assert.False(t1.IsXiaomi);
+
+        var g9n9n = new RemoteDevice { ModelType = RemoteModelType.GoogleG9N9N };
+        Assert.False(g9n9n.IsT1);
+        Assert.True(g9n9n.IsG9N9N);
+        Assert.False(g9n9n.IsXiaomi);
+
+        // Default VoiceButtonMode is SmartToggle
+        Assert.Equal(G9N9NVoiceButtonMode.SmartToggle, g9n9n.VoiceButtonMode);
+        Assert.True(g9n9n.IsSmartToggleMode);
+        Assert.False(g9n9n.IsHoldToTalkMode);
+
+        // Switch to HoldToTalk
+        g9n9n.IsHoldToTalkMode = true;
+        Assert.Equal(G9N9NVoiceButtonMode.HoldToTalk, g9n9n.VoiceButtonMode);
+        Assert.False(g9n9n.IsSmartToggleMode);
+        Assert.True(g9n9n.IsHoldToTalkMode);
+
+        var xiaomi = new RemoteDevice { ModelType = RemoteModelType.XiaomiRC003 };
+        Assert.False(xiaomi.IsT1);
+        Assert.False(xiaomi.IsG9N9N);
+        Assert.True(xiaomi.IsXiaomi);
+    }
+
     [Theory]
     [InlineData(RemoteModelType.XiaomiRC001)]
     [InlineData(RemoteModelType.XiaomiRC003)]

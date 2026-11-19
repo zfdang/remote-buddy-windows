@@ -57,6 +57,13 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 # 5. Publish self-contained executable
 if ($Publish) {
     Write-Host "`n=== Publishing Self-Contained Binary to $OutputDir ===" -ForegroundColor Cyan
+    $runningApp = Get-Process -Name "RemoteBuddy.App" -ErrorAction SilentlyContinue
+    if ($runningApp) {
+        Write-Host "Found running RemoteBuddy.App process (PID $($runningApp.Id)). Stopping it before publishing..." -ForegroundColor Yellow
+        $runningApp | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 500
+    }
+
     & dotnet publish src/RemoteBuddy.App/RemoteBuddy.App.csproj `
         -c Release `
         -r win-x64 `

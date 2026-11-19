@@ -23,6 +23,11 @@ public interface IBluetoothManager : IDisposable
     BluetoothSessionState SessionState { get; }
     string ConnectedDeviceName { get; }
     Guid? ConnectedDeviceContainerId { get; }
+    G9N9NVoiceButtonMode VoiceButtonMode
+    {
+        get => G9N9NVoiceButtonMode.SmartToggle;
+        set { }
+    }
 
     event Action<RemoteDevice>? DeviceDiscovered;
     event Action<bool, string>? ConnectionStatusChanged;
