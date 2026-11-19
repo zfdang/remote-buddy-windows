@@ -1,6 +1,6 @@
-# Voice Input Buddy (Windows)
+# Remote Buddy (Windows)
 
-**Voice Input Buddy（语音搭子）Windows 版** 把蓝牙电视遥控器变成 Windows 电脑上的全局语音输入按钮。拿起遥控器，按住说话、松开结束，即可在当前任意输入框中唤起输入法（微信输入法、豆包输入法等）或系统听写工具进行流畅输入。
+**Remote Buddy（遥控搭子）Windows 版** 把蓝牙电视遥控器变成 Windows 电脑上的全局语音输入按钮。拿起遥控器，按住说话、松开结束，即可在当前任意输入框中唤起输入法（微信输入法、豆包输入法等）或系统听写工具进行流畅输入。
 
 本项目基于 **原生 Windows 技术栈（C# / .NET 10 LTS）** 构建，坚持**纯软件方案**，直接利用电脑内置蓝牙连接遥控器，无需额外购买或插拔任何 USB 硬件。
 
@@ -21,8 +21,8 @@
 ## 🏗️ 架构与工作流
 
 ```text
-遥控器麦克风 → BLE GATT 语音流 → Voice Input Buddy (C# 解码) → WASAPI → 虚拟麦克风 (VB-CABLE) → 输入法
-遥控器语音键 → Raw Input / ATVV → Voice Input Buddy 状态机    → SendInput → 触发目标语音快捷键   → 当前输入框
+遥控器麦克风 → BLE GATT 语音流 → Remote Buddy (C# 解码) → WASAPI → 虚拟麦克风 (VB-CABLE) → 输入法
+遥控器语音键 → Raw Input / ATVV → Remote Buddy 状态机    → SendInput → 触发目标语音快捷键   → 当前输入框
 ```
 
 ---
