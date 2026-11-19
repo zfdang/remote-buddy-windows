@@ -434,10 +434,14 @@ public partial class MappingViewModel : ObservableObject
     private RemoteButton _activeHardwareButton = RemoteButton.None;
 
     public bool IsG9N9N => SelectedDevice?.ModelType is RemoteModelType.GoogleG9N9N or RemoteModelType.GoogleGY3LE;
+    public bool IsT1 => SelectedDevice?.ModelType == RemoteModelType.T1Remote;
+    public bool IsXiaomi => !IsG9N9N && !IsT1;
 
     public string DeviceNote => IsG9N9N
-        ? "G9N9N 仅支持 OK＋方向键发送 Enter，单键映射不可用。短按 OK＋任意方向键可发送 Enter。"
-        : "选择实体按键设置单击与长按动作。点击左侧遥控器按键快速定位，修改后自动保存。";
+        ? "Google G9N9N 遥控器：支持 14 颗实体按键自定义单击与长按动作，支持智能切换免提收音。"
+        : IsT1
+            ? "T1 飞鼠遥控器：正面 7 颗按键（电源、返回、主页、菜单、音量、静音）支持自定义；确认、方向键、飞鼠与背面 QWERTY 全键盘保持系统默认输入。"
+            : "选择实体按键设置单击与长按动作。点击左侧遥控器按键快速定位，修改后自动保存。";
 
     public MappingViewModel(ConfigService config)
     {
@@ -450,6 +454,8 @@ public partial class MappingViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(DeviceNote));
         OnPropertyChanged(nameof(IsG9N9N));
+        OnPropertyChanged(nameof(IsT1));
+        OnPropertyChanged(nameof(IsXiaomi));
         LoadMappings();
     }
 

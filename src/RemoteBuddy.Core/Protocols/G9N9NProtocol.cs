@@ -255,6 +255,7 @@ public static class XiaomiProtocol
     {
         if (string.IsNullOrWhiteSpace(name)) return RemoteModelType.Unknown;
         string clean = name.Trim().ToLowerInvariant();
+        if (T1RemoteProtocol.IsCandidate(name)) return RemoteModelType.T1Remote;
         if (clean.Contains("arn9")) return RemoteModelType.XiaomiARN9;
         if (clean.Contains("rc003") || clean.Contains("2 pro") || clean.Contains("语音遥控器")) return RemoteModelType.XiaomiRC003;
         if (clean.Contains("rc001") || clean.Contains("remote 2") || clean.Contains("遥控器2")) return RemoteModelType.XiaomiRC001;
