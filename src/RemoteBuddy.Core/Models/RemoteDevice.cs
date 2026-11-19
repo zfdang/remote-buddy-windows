@@ -125,4 +125,5 @@ public class AppConfig
     public InputToolConfig InputTool { get; set; } = new();
     public List<RemoteDevice> Devices { get; set; } = new();
     public string? SelectedDeviceId { get; set; }
+    public Dictionary<string, bool> AppIntegrations { get; set; } = new();
 }

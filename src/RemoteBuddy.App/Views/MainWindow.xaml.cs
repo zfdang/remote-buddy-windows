@@ -66,10 +66,13 @@ public partial class MainWindow : Window
     private uint _wmTaskbarCreated = 0;
     public bool IsExplicitExit { get; set; } = false;
 
-    private DevicesPage? _devicesPage;
-    private MappingPage? _mappingPage;
-    private IntegrationsPage? _integrationsPage;
+    private GeneralPage? _generalPage;
     private EnvironmentPage? _environmentPage;
+    private DevicesPage? _devicesPage;
+    private IntegrationsPage? _integrationsPage;
+    private MappingPage? _mappingPage;
+    private AppIntegrationPage? _appIntegrationPage;
+    private AboutPage? _aboutPage;
     private SettingsPage? _settingsPage;
 
     private bool _isSystemShutdown = false;
@@ -261,10 +264,13 @@ public partial class MainWindow : Window
     {
         if (DataContext is MainViewModel vm)
         {
-            _devicesPage = new DevicesPage { DataContext = vm.DevicesVm };
-            _mappingPage = new MappingPage { DataContext = vm.MappingVm };
-            _integrationsPage = new IntegrationsPage { DataContext = vm.IntegrationsVm };
+            _generalPage = new GeneralPage { DataContext = vm.GeneralVm };
             _environmentPage = new EnvironmentPage { DataContext = vm.EnvironmentVm };
+            _devicesPage = new DevicesPage { DataContext = vm.DevicesVm };
+            _integrationsPage = new IntegrationsPage { DataContext = vm.IntegrationsVm };
+            _mappingPage = new MappingPage { DataContext = vm.MappingVm };
+            _appIntegrationPage = new AppIntegrationPage { DataContext = vm.AppIntegrationVm };
+            _aboutPage = new AboutPage { DataContext = vm.AboutVm };
             _settingsPage = new SettingsPage { DataContext = vm.SettingsVm };
 
             vm.PropertyChanged += OnViewModelPropertyChanged;
@@ -284,12 +290,15 @@ public partial class MainWindow : Window
     {
         PageContentContainer.Content = pageName switch
         {
-            "Devices" => _devicesPage,
-            "Mapping" => _mappingPage,
+            "General" => _generalPage,
+            "Permissions" or "Environment" => _environmentPage,
+            "Devices" or "Connection" => _devicesPage,
             "Integrations" => _integrationsPage,
-            "Environment" => _environmentPage,
+            "Mapping" => _mappingPage,
+            "AppIntegration" => _appIntegrationPage,
+            "About" => _aboutPage,
             "Settings" => _settingsPage,
-            _ => _devicesPage
+            _ => _generalPage
         };
     }
 }

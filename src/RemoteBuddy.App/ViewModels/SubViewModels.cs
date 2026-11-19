@@ -799,3 +799,245 @@ public partial class SettingsViewModel : ObservableObject
         AppLogger.OpenLogFolder();
     }
 }
+
+public partial class GeneralViewModel : ObservableObject
+{
+    private readonly ConfigService _config;
+    private readonly IBluetoothManager _bt;
+    private readonly Action _openOnboarding;
+    private readonly Action<string> _navigate;
+
+    [ObservableProperty]
+    private bool _launchAtStartup;
+
+    [ObservableProperty]
+    private bool _minimizeToTrayOnClose;
+
+    public bool PermissionsReady => VirtualAudioAuditor.AuditCableInputDevice() == DriverReadinessStatus.Ready;
+    public string PermissionsSummary => PermissionsReady ? "驱动就绪" : "未检测到驱动";
+
+    public bool RemoteReady => _bt.IsConnected;
+    public string RemoteSummary => _bt.IsConnected ? (!string.IsNullOrEmpty(_bt.ConnectedDeviceName) ? $"已连接: {_bt.ConnectedDeviceName}" : "已连接遥控器") : "未连接遥控器";
+
+    public bool IntegrationReady => !string.IsNullOrEmpty(_config.Current.InputTool.Shortcut);
+    public string IntegrationSummary
+    {
+        get
+        {
+            var tool = _config.Current.InputTool;
+            string toolName = tool.Tool switch
+            {
+                TargetInputTool.WeChatInput => "微信输入法",
+                TargetInputTool.DoubaoInput => "豆包输入法",
+                TargetInputTool.WindowsDictation => "Windows 听写",
+                TargetInputTool.Typeless => "Typeless",
+                _ => "自定义工具"
+            };
+            string mode = tool.TriggerMode == VoiceTriggerMode.HoldToTalk ? "长按说话" : "点按切换";
+            return $"{toolName} ({mode} · {tool.Shortcut})";
+        }
+    }
+
+    public GeneralViewModel(ConfigService config, IBluetoothManager bt, Action openOnboarding, Action<string> navigate)
+    {
+        _config = config;
+        _bt = bt;
+        _openOnboarding = openOnboarding;
+        _navigate = navigate;
+
+        LaunchAtStartup = StartupService.IsLaunchAtStartupEnabled();
+        MinimizeToTrayOnClose = _config.Current.MinimizeToTrayOnClose;
+
+        _bt.ConnectionStatusChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(RemoteReady));
+            OnPropertyChanged(nameof(RemoteSummary));
+        };
+    }
+
+    public void RefreshState()
+    {
+        OnPropertyChanged(nameof(PermissionsReady));
+        OnPropertyChanged(nameof(PermissionsSummary));
+        OnPropertyChanged(nameof(RemoteReady));
+        OnPropertyChanged(nameof(RemoteSummary));
+        OnPropertyChanged(nameof(IntegrationReady));
+        OnPropertyChanged(nameof(IntegrationSummary));
+    }
+
+    partial void OnLaunchAtStartupChanged(bool value)
+    {
+        StartupService.SetLaunchAtStartup(value);
+        _config.Current.LaunchAtStartup = value;
+        _config.Save();
+    }
+
+    partial void OnMinimizeToTrayOnCloseChanged(bool value)
+    {
+        _config.Current.MinimizeToTrayOnClose = value;
+        _config.Save();
+    }
+
+    [RelayCommand]
+    public void RerunWizard() => _openOnboarding.Invoke();
+
+    [RelayCommand]
+    public void GoToPermissions() => _navigate("Permissions");
+
+    [RelayCommand]
+    public void GoToDevices() => _navigate("Devices");
+
+    [RelayCommand]
+    public void GoToIntegrations() => _navigate("Integrations");
+}
+
+public partial class AppIntegrationItemViewModel : ObservableObject
+{
+    public string Id { get; init; } = string.Empty;
+    public string Name { get; init; } = string.Empty;
+    public string Detail { get; init; } = string.Empty;
+
+    [ObservableProperty]
+    private bool _isEnabled;
+
+    private readonly Action _onChanged;
+
+    public AppIntegrationItemViewModel(string id, string name, string detail, bool isEnabled, Action onChanged)
+    {
+        Id = id;
+        Name = name;
+        Detail = detail;
+        _isEnabled = isEnabled;
+        _onChanged = onChanged;
+    }
+
+    partial void OnIsEnabledChanged(bool value)
+    {
+        _onChanged.Invoke();
+    }
+}
+
+public partial class AppIntegrationViewModel : ObservableObject
+{
+    private readonly ConfigService _config;
+
+    public ObservableCollection<AppIntegrationItemViewModel> Applications { get; } = new();
+
+    public AppIntegrationViewModel(ConfigService config)
+    {
+        _config = config;
+        LoadIntegrations();
+    }
+
+    public void LoadIntegrations()
+    {
+        Applications.Clear();
+        var map = _config.Current.AppIntegrations ?? new();
+
+        var presets = new (string Id, string Name, string Detail)[]
+        {
+            ("wechat", "微信 (WeChat)", "优先定位微信会话窗口输入框，支持消息输入与快捷发送"),
+            ("antigravity", "Antigravity", "优先聚焦 Antigravity 对话输入框，无缝输入提示词与指令"),
+            ("chatgpt", "ChatGPT", "优先聚焦 ChatGPT 桌面客户端对话输入框"),
+            ("claude", "Claude", "优先聚焦 Claude 桌面客户端对话输入框"),
+            ("deepseek", "DeepSeek", "优先聚焦 DeepSeek 桌面客户端对话输入框"),
+            ("workbuddy", "WorkBuddy", "优先聚焦 WorkBuddy 输入框，辅助快速录入与日常沟通")
+        };
+
+        foreach (var (id, name, detail) in presets)
+        {
+            bool enabled = map.TryGetValue(id, out var val) && val;
+            Applications.Add(new AppIntegrationItemViewModel(id, name, detail, enabled, Save));
+        }
+    }
+
+    private void Save()
+    {
+        _config.Current.AppIntegrations ??= new();
+        foreach (var app in Applications)
+        {
+            _config.Current.AppIntegrations[app.Id] = app.IsEnabled;
+        }
+        _config.Save();
+    }
+
+    [RelayCommand]
+    public void EnableAll()
+    {
+        foreach (var app in Applications)
+        {
+            app.IsEnabled = true;
+        }
+    }
+
+    [RelayCommand]
+    public void DisableAll()
+    {
+        foreach (var app in Applications)
+        {
+            app.IsEnabled = false;
+        }
+    }
+}
+
+public partial class AboutViewModel : ObservableObject
+{
+    [ObservableProperty]
+    private string _appVersion;
+
+    [ObservableProperty]
+    private string _architecture = Environment.Is64BitProcess ? "x64 (64位)" : "x86 (32位)";
+
+    [ObservableProperty]
+    private string _runtime = $".NET {Environment.Version}";
+
+    [ObservableProperty]
+    private string _osVersion = $"{Environment.OSVersion}";
+
+    [ObservableProperty]
+    private string _logDirectoryPath;
+
+    public AboutViewModel()
+    {
+        LogDirectoryPath = AppLogger.LogDirectory;
+
+        var infoVer = Assembly.GetEntryAssembly()?
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion;
+        if (!string.IsNullOrEmpty(infoVer))
+        {
+            AppVersion = "v" + infoVer.Split('+')[0];
+        }
+        else
+        {
+            var ver = Assembly.GetExecutingAssembly().GetName().Version;
+            AppVersion = ver != null ? $"v{ver.Major}.{ver.Minor}.{ver.Build}" : "v1.0.0";
+        }
+    }
+
+    [RelayCommand]
+    public void OpenLogFolder()
+    {
+        AppLogger.OpenLogFolder();
+    }
+
+    [RelayCommand]
+    public void OpenWebsite()
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("https://remote.zfdang.com") { UseShellExecute = true });
+        }
+        catch { }
+    }
+
+    [RelayCommand]
+    public void OpenGitHub()
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("https://github.com/zfdang/remote-buddy-windows") { UseShellExecute = true });
+        }
+        catch { }
+    }
+}

@@ -39,24 +39,43 @@
                     </StackPanel>
                 </Border>
 
-                <!-- Navigation Buttons -->
-                <StackPanel Margin="10,0">
-                    <Button Content="📱  设备连接" HorizontalContentAlignment="Left" Margin="0,3" Padding="16,10"
-                            Background="{Binding ActivePageName, Converter={StaticResource EqualValueToBrushConverter}, ConverterParameter=Devices}"
-                            Command="{Binding NavigateCommand}" CommandParameter="Devices"/>
-                    <Button Content="⌨️  按键映射" HorizontalContentAlignment="Left" Margin="0,3" Padding="16,10"
-                            Background="{Binding ActivePageName, Converter={StaticResource EqualValueToBrushConverter}, ConverterParameter=Mapping}"
-                            Command="{Binding NavigateCommand}" CommandParameter="Mapping"/>
-                    <Button Content="🎙️  输入法集成" HorizontalContentAlignment="Left" Margin="0,3" Padding="16,10"
-                            Background="{Binding ActivePageName, Converter={StaticResource EqualValueToBrushConverter}, ConverterParameter=Integrations}"
-                            Command="{Binding NavigateCommand}" CommandParameter="Integrations"/>
-                    <Button Content="🛡️  环境与驱动" HorizontalContentAlignment="Left" Margin="0,3" Padding="16,10"
-                            Background="{Binding ActivePageName, Converter={StaticResource EqualValueToBrushConverter}, ConverterParameter=Environment}"
-                            Command="{Binding NavigateCommand}" CommandParameter="Environment"/>
-                    <Button Content="⚙️  通用设置" HorizontalContentAlignment="Left" Margin="0,3" Padding="16,10"
-                            Background="{Binding ActivePageName, Converter={StaticResource EqualValueToBrushConverter}, ConverterParameter=Settings}"
-                            Command="{Binding NavigateCommand}" CommandParameter="Settings"/>
-                </StackPanel>
+                <!-- Navigation Buttons: 3 Groups -->
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="10,0">
+                        <!-- Group 1: General, Permission, Remote, Integration -->
+                        <Button Content="⚙️  通用" HorizontalContentAlignment="Left" Margin="0,2" Padding="14,9"
+                                Background="{Binding ActivePageName, Converter={StaticResource EqualValueToBrushConverter}, ConverterParameter=General}"
+                                Command="{Binding NavigateCommand}" CommandParameter="General"/>
+                        <Button Content="🛡️  权限与驱动" HorizontalContentAlignment="Left" Margin="0,2" Padding="14,9"
+                                Background="{Binding ActivePageName, Converter={StaticResource EqualValueToBrushConverter}, ConverterParameter=Permissions}"
+                                Command="{Binding NavigateCommand}" CommandParameter="Permissions"/>
+                        <Button Content="📱  遥控器连接" HorizontalContentAlignment="Left" Margin="0,2" Padding="14,9"
+                                Background="{Binding ActivePageName, Converter={StaticResource EqualValueToBrushConverter}, ConverterParameter=Devices}"
+                                Command="{Binding NavigateCommand}" CommandParameter="Devices"/>
+                        <Button Content="🎙️  输入法集成" HorizontalContentAlignment="Left" Margin="0,2" Padding="14,9"
+                                Background="{Binding ActivePageName, Converter={StaticResource EqualValueToBrushConverter}, ConverterParameter=Integrations}"
+                                Command="{Binding NavigateCommand}" CommandParameter="Integrations"/>
+
+                        <!-- Divider 1 -->
+                        <Border Height="1" Background="{StaticResource BorderColorBrush}" Margin="4,8"/>
+
+                        <!-- Group 2: Key Mappings, App Integration -->
+                        <Button Content="⌨️  按键映射" HorizontalContentAlignment="Left" Margin="0,2" Padding="14,9"
+                                Background="{Binding ActivePageName, Converter={StaticResource EqualValueToBrushConverter}, ConverterParameter=Mapping}"
+                                Command="{Binding NavigateCommand}" CommandParameter="Mapping"/>
+                        <Button Content="🎯  应用集成" HorizontalContentAlignment="Left" Margin="0,2" Padding="14,9"
+                                Background="{Binding ActivePageName, Converter={StaticResource EqualValueToBrushConverter}, ConverterParameter=AppIntegration}"
+                                Command="{Binding NavigateCommand}" CommandParameter="AppIntegration"/>
+
+                        <!-- Divider 2 -->
+                        <Border Height="1" Background="{StaticResource BorderColorBrush}" Margin="4,8"/>
+
+                        <!-- Group 3: About -->
+                        <Button Content="ℹ️  关于" HorizontalContentAlignment="Left" Margin="0,2" Padding="14,9"
+                                Background="{Binding ActivePageName, Converter={StaticResource EqualValueToBrushConverter}, ConverterParameter=About}"
+                                Command="{Binding NavigateCommand}" CommandParameter="About"/>
+                    </StackPanel>
+                </ScrollViewer>
             </DockPanel>
         </Border>
 

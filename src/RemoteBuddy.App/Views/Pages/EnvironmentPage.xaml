@@ -10,8 +10,8 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <StackPanel>
-                    <TextBlock Text="环境与驱动" FontSize="22" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
-                    <TextBlock Text="系统虚拟音频驱动与底层蓝牙环境状态检查" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,4,0,0"/>
+                    <TextBlock Text="权限与驱动" FontSize="22" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
+                    <TextBlock Text="系统虚拟音频驱动与底层蓝牙输入权限环境检查" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,4,0,0"/>
                 </StackPanel>
                 <Button Grid.Column="1" Content="🔄 刷新状态" VerticalAlignment="Center" Padding="14,8" Background="#007ACC"
                         Command="{Binding RefreshStatusCommand}"/>

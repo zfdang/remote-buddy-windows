@@ -34,7 +34,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private string _currentTitle = "Remote Buddy (Windows)";
 
     [ObservableProperty]
-    private string _activePageName = "Devices";
+    private string _activePageName = "General";
 
     [ObservableProperty]
     private bool _isConnected = false;
@@ -48,10 +48,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private bool _isVoiceActive = false;
 
+    public GeneralViewModel GeneralVm { get; }
     public DevicesViewModel DevicesVm { get; }
     public MappingViewModel MappingVm { get; }
     public IntegrationsViewModel IntegrationsVm { get; }
     public EnvironmentViewModel EnvironmentVm { get; }
+    public AppIntegrationViewModel AppIntegrationVm { get; }
+    public AboutViewModel AboutVm { get; }
     public SettingsViewModel SettingsVm { get; }
 
     private OnboardingViewModel? _activeOnboardingVm;
@@ -75,11 +78,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _bluetoothManager.SessionState is BluetoothSessionState.Opening or BluetoothSessionState.Streaming or BluetoothSessionState.Draining);
         _rawInputReceiver.PhysicalVoiceKeyPressed += _voiceKeyGuard.Arm;
 
+        GeneralVm = new GeneralViewModel(_configService, _bluetoothManager, () => RequestOpenOnboarding?.Invoke(), Navigate);
         DevicesVm = new DevicesViewModel(_configService, _bluetoothManager, () => RequestOpenOnboarding?.Invoke());
         MappingVm = new MappingViewModel(_configService);
         IntegrationsVm = new IntegrationsViewModel(_configService);
         IntegrationsVm.OnConfigurationSaved = UpdateVoiceKeyGuard;
         EnvironmentVm = new EnvironmentViewModel();
+        AppIntegrationVm = new AppIntegrationViewModel(_configService);
+        AboutVm = new AboutViewModel();
         SettingsVm = new SettingsViewModel(_configService, () => RequestOpenOnboarding?.Invoke());
         UpdateVoiceKeyGuard();
 
@@ -219,7 +225,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
     partial void OnActivePageNameChanged(string value)
     {
         StopRepeatTimer();
-        if (value == "Mapping")
+        if (value == "General")
+        {
+            GeneralVm.RefreshState();
+        }
+        else if (value is "Permissions" or "Environment")
+        {
+            EnvironmentVm.RefreshStatus();
+        }
+        else if (value is "Devices" or "Connection")
+        {
+            DevicesVm.ScanForDevices();
+        }
+        else if (value == "Mapping")
         {
             MappingVm.LoadMappings();
         }
@@ -227,6 +245,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             IntegrationsVm.Reload();
             UpdateVoiceKeyGuard();
+        }
+        else if (value == "AppIntegration")
+        {
+            AppIntegrationVm.LoadIntegrations();
         }
     }
 
