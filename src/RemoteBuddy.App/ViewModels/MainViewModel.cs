@@ -235,7 +235,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         else if (value is "Devices" or "Connection")
         {
-            DevicesVm.ScanForDevices();
+            // Device view active
         }
         else if (value == "Mapping")
         {

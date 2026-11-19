@@ -152,6 +152,15 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
+    public void ScanForDevices()
+    {
+        if (!IsScanning)
+        {
+            ToggleScan();
+        }
+    }
+
+    [RelayCommand]
     public async Task ConnectDeviceAsync(RemoteDevice? device)
     {
         if (device == null) return;
