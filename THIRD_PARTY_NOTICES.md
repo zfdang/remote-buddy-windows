@@ -1,7 +1,7 @@
 # Third-Party Notices
 
-This distribution of Voice Input Buddy for Windows includes third-party software components licensed under open-source licenses. Voice Input Buddy itself is licensed under the GNU General Public License v3.0 (GPL-3.0-only). Complete source code for each release is available at the matching Git tag at:
-<https://github.com/zfdang/voice-input-buddy-windows>
+This distribution of Remote Buddy for Windows includes third-party software components licensed under open-source licenses. Remote Buddy itself is licensed under the GNU General Public License v3.0 (GPL-3.0-only). Complete source code for each release is available at the matching Git tag at:
+<https://github.com/zfdang/remote-buddy-windows>
 
 ---
 

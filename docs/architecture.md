@@ -1,6 +1,6 @@
-# Voice Input Buddy (Windows) - 软件架构设计
+# Remote Buddy (Windows) - 软件架构设计
 
-Voice Input Buddy for Windows 是面向 Windows 10/11 的纯软件版硬件语音桥接工具。其目标是将闲置的蓝牙电视遥控器（如小米蓝牙遥控器、Google Chromecast 遥控器等）直接通过电脑自带蓝牙连接，将其打造成系统全局的“按住说话”语音输入按键，并将遥控器麦克风拾取的声音低延迟送入微信输入法、豆包输入法、Windows 11 自带语音听写等目标工具中。
+Remote Buddy for Windows 是面向 Windows 10/11 的纯软件版硬件语音桥接工具。其目标是将闲置的蓝牙电视遥控器（如小米蓝牙遥控器、Google Chromecast 遥控器等）直接通过电脑自带蓝牙连接，将其打造成系统全局的“按住说话”语音输入按键，并将遥控器麦克风拾取的声音低延迟送入微信输入法、豆包输入法、Windows 11 自带语音听写等目标工具中。
 
 本项目坚持**纯软件方案**，无需任何额外 USB 开发板或硬件接收器。
 
@@ -14,7 +14,7 @@ Voice Input Buddy for Windows 是面向 Windows 10/11 的纯软件版硬件语�
 └──────────────┬──────────────────┘
                │ 电脑内置蓝牙 (BLE / HID)
 ┌──────────────▼─────────────────────────────────────────────────┐
-│ Voice Input Buddy for Windows (C# / .NET 10 LTS 宿主进程)      │
+│ Remote Buddy for Windows (C# / .NET 10 LTS 宿主进程)      │
 │                                                                │
 │ ┌──────────────────────┐      ┌──────────────────────────────┐ │
 │ │  WinRT BLE 管理器     │      │   HID / RawInput 监听器      │ │
@@ -65,21 +65,21 @@ Voice Input Buddy for Windows 是面向 Windows 10/11 的纯软件版硬件语�
 应用整体采用 MVVM 架构，业务引擎与 UI 解耦，核心分为以下 5 个逻辑层：
 
 ```text
-VoiceInputBuddy.sln
-├── src/VoiceInputBuddy.Core/             # 纯业务核心库 (无 UI 依赖)
+RemoteBuddy.sln
+├── src/RemoteBuddy.Core/             # 纯业务核心库 (无 UI 依赖)
 │   ├── Bluetooth/                        # WinRT BLE 连接、扫描、重连与保活看门狗
 │   ├── Protocols/                        # ATVV 完整控制协议 (CAPS/START/STOP/SYNC)
 │   ├── Audio/                            # ADPCM 解码器、同步恢复、WASAPI 环形推流队列
 │   ├── Input/                            # Raw Input 监听、时序编排、SendInput 原生注入
 │   └── Config/                           # 用户设置持久化 (JSON)
 │
-├── src/VoiceInputBuddy.App/              # 桌面客户端 (WPF + WPF-UI)
+├── src/RemoteBuddy.App/              # 桌面客户端 (WPF + WPF-UI)
 │   ├── Views/                            # 主界面、设置向导、按键映射视图、关于窗口
 │   ├── ViewModels/                       # MVVM 视图模型 (CommunityToolkit.Mvvm)
 │   ├── Tray/                             # 系统托盘图标、上下文菜单、后台运行管理
 │   └── Services/                         # 驱动就绪检查、转写验收验证、自启动管理
 │
-└── src/VoiceInputBuddy.Installer/        # Inno Setup 脚本与多语言资源
+└── src/RemoteBuddy.Installer/        # Inno Setup 脚本与多语言资源
 ```
 
 ### 1. Bluetooth & Protocol Runtime
@@ -118,7 +118,7 @@ VoiceInputBuddy.sln
 
 为了便于排查遥控器连接、ATVV 协议协商、按键映射与驱动状态等问题，程序内置了线程安全的轻量级本地诊断日志（`AppLogger`）：
 
-* **日志存储位置**：`%APPDATA%\VoiceInputBuddy\logs\app.log`
+* **日志存储位置**：`%APPDATA%\RemoteBuddy\logs\app.log`
 * **滚动与归档策略**：单文件上限 5MB，最多保留 3 个归档副本（`app.1.log` ~ `app.3.log`），占用磁盘空间严格受限（< 20MB）。
 * **诊断记录范围**：
   * 进程生命周期与异常（未捕获异常、启动参数、平台信息）；

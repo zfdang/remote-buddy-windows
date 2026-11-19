@@ -1,6 +1,6 @@
 # 开发路线图与里程碑 (Development Roadmap)
 
-本文档规划了 `voice-input-buddy-windows` 从核心链路验证到正式发布的阶段性里程碑与验收门槛。
+本文档规划了 `remote-buddy-windows` 从核心链路验证到正式发布的阶段性里程碑与验收门槛。
 
 ---
 

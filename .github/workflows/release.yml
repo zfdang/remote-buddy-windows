@@ -40,17 +40,17 @@ jobs:
           cat "$RUNNER_TEMP/release-version" >> "$GITHUB_OUTPUT"
 
       - name: Restore solution
-        run: dotnet restore VoiceInputBuddy.sln
+        run: dotnet restore RemoteBuddy.sln
 
       - name: Build solution
-        run: dotnet build VoiceInputBuddy.sln -c Release -p:Version="${{ env.RELEASE_PACKAGE_VERSION }}"
+        run: dotnet build RemoteBuddy.sln -c Release -p:Version="${{ env.RELEASE_PACKAGE_VERSION }}"
 
       - name: Run unit tests
-        run: dotnet test VoiceInputBuddy.sln -c Release --no-build --verbosity normal
+        run: dotnet test RemoteBuddy.sln -c Release --no-build --verbosity normal
 
       - name: Publish self-contained executable
         run: |
-          dotnet publish src/VoiceInputBuddy.App/VoiceInputBuddy.App.csproj `
+          dotnet publish src/RemoteBuddy.App/RemoteBuddy.App.csproj `
             -c Release `
             -r win-x64 `
             --self-contained true `
@@ -65,7 +65,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist/release
           Copy-Item LICENSE dist/publish/win-x64/
           Copy-Item THIRD_PARTY_NOTICES.md dist/publish/win-x64/
-          Compress-Archive -Path dist/publish/win-x64/* -DestinationPath "dist/release/Voice_Input_Buddy_${{ env.RELEASE_TAG }}_Windows_x64.zip"
+          Compress-Archive -Path dist/publish/win-x64/* -DestinationPath "dist/release/Remote_Buddy_Windows_${{ env.RELEASE_TAG }}_x64.zip"
 
       - name: Upload Windows build artifact
         uses: actions/upload-artifact@v4
@@ -101,6 +101,6 @@ jobs:
             echo "Creating new release $RELEASE_TAG..."
             gh release create "$RELEASE_TAG" release/* \
               --target "${{ github.sha }}" \
-              --title "Voice Input Buddy (Windows) $RELEASE_TAG" \
-              --notes "Voice Input Buddy for Windows automated release $RELEASE_TAG."
+              --title "Remote Buddy (Windows) $RELEASE_TAG" \
+              --notes "Remote Buddy for Windows automated release $RELEASE_TAG."
           fi
