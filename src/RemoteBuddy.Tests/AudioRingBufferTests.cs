@@ -86,4 +86,48 @@ public class AudioRingBufferTests
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new AudioRingBuffer(capacity));
     }
+
+    [Fact]
+    public async Task RingBuffer_ConcurrentReadWrite_ThreadSafeWithoutExceptions()
+    {
+        var ring = new AudioRingBuffer(capacity: 1024);
+        var exceptions = new System.Collections.Concurrent.ConcurrentBag<Exception>();
+
+        var writeTask = Task.Run(() =>
+        {
+            try
+            {
+                short[] block = new short[64];
+                for (int i = 0; i < 150; i++)
+                {
+                    ring.Write(block);
+                    Thread.Yield();
+                }
+            }
+            catch (Exception ex)
+            {
+                exceptions.Add(ex);
+            }
+        });
+
+        var readTask = Task.Run(() =>
+        {
+            try
+            {
+                short[] readBuf = new short[64];
+                for (int i = 0; i < 150; i++)
+                {
+                    ring.Read(readBuf);
+                    Thread.Yield();
+                }
+            }
+            catch (Exception ex)
+            {
+                exceptions.Add(ex);
+            }
+        });
+
+        await Task.WhenAll(writeTask, readTask);
+        Assert.Empty(exceptions);
+    }
 }

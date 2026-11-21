@@ -238,8 +238,8 @@ public static class NativeInputSender
     {
         if (!TryParseShortcut(shortcut, out var modifiers, out ushort mainKey)) return false;
 
-        // Only press and release modifiers that are not already physically held by the user
-        var ownedModifiers = modifiers.Where(m => !IsKeyPhysicallyDown(m)).ToList();
+        // Only press and release modifiers that are not already physically held by the user (excluding keys we synthetically hold)
+        var ownedModifiers = modifiers.Where(m => !(IsKeyPhysicallyDown(m) && !_heldSyntheticKeys.ContainsKey(m))).ToList();
 
         var inputs = new List<INPUT>();
         foreach (var mod in ownedModifiers) inputs.Add(CreateKeyInput(mod, false));

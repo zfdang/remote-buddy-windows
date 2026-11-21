@@ -7,6 +7,7 @@ using RemoteBuddy.App.ViewModels;
 using RemoteBuddy.Core.Bluetooth;
 using RemoteBuddy.Core.Config;
 using RemoteBuddy.Core.Models;
+using RemoteBuddy.Platform.Windows.Audio;
 using Xunit;
 
 namespace RemoteBuddy.Tests;
@@ -24,6 +25,7 @@ public class ConvertersAndViewModelTests
         public string ConnectedDeviceName => string.Empty;
         public ulong ConnectedDeviceAddress => 0;
         public Guid? ConnectedDeviceContainerId => null;
+        public G9N9NVoiceButtonMode VoiceButtonMode { get; set; } = G9N9NVoiceButtonMode.SmartToggle;
 
         public event Action<RemoteDevice>? DeviceDiscovered;
         public event Action<bool, string>? ConnectionStatusChanged { add { } remove { } }
@@ -252,12 +254,14 @@ public class ConvertersAndViewModelTests
         Assert.Equal(WizardMode.Integration, intWizard.Mode);
         Assert.Equal(1, intWizard.CurrentStep);
         Assert.Equal(WizardStep.ImeConfig, intWizard.CurrentWizardStep);
+        Assert.Equal("第 1 步：配置目标语音输入工具", intWizard.StepTitle);
 
         intWizard.SelectedTool = TargetInputTool.WeChatInput;
         intWizard.ShortcutText = "Ctrl+F5";
         intWizard.NextStep();
         Assert.Equal(2, intWizard.CurrentStep);
         Assert.Equal(WizardStep.TranscriptionVerify, intWizard.CurrentWizardStep);
+        Assert.Equal("第 2 步：真实输入法转写验收", intWizard.StepTitle);
 
         dummyBt.RaiseVoiceSessionEnded();
         intWizard.TranscriptionTestText = "语音转写测试";
@@ -265,6 +269,7 @@ public class ConvertersAndViewModelTests
         intWizard.NextStep();
         Assert.Equal(3, intWizard.CurrentStep);
         Assert.Equal(WizardStep.Complete, intWizard.CurrentWizardStep);
+        Assert.Equal("第 3 步：输入法集成配置完成", intWizard.StepTitle);
         intWizard.Complete();
         Assert.True(intWizard.IsCompleted);
         intWizard.Dispose();
@@ -318,5 +323,22 @@ public class ConvertersAndViewModelTests
 
         Assert.Equal("My G9N9N Updated", vm.DiscoveredDevices[0].Name);
         Assert.Single(vm.DiscoveredDevices);
+    }
+
+    [Fact]
+    public void EnvironmentViewModel_DriverStatusBadgeText_TranslatesAccurately()
+    {
+        var vm = new EnvironmentViewModel();
+        vm.DriverStatus = DriverReadinessStatus.Ready;
+        Assert.Equal("已就绪", vm.DriverStatusBadgeText);
+
+        vm.DriverStatus = DriverReadinessStatus.NotInstalled;
+        Assert.Equal("未安装", vm.DriverStatusBadgeText);
+
+        vm.DriverStatus = DriverReadinessStatus.RebootRequired;
+        Assert.Equal("需重启", vm.DriverStatusBadgeText);
+
+        vm.DriverStatus = DriverReadinessStatus.InitializationFailed;
+        Assert.Equal("初始化失败", vm.DriverStatusBadgeText);
     }
 }

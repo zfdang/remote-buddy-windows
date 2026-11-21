@@ -22,13 +22,16 @@ public class MainViewModelTests
         public string ConnectedDeviceName => string.Empty;
         public ulong ConnectedDeviceAddress => 0;
         public Guid? ConnectedDeviceContainerId => null;
+        public G9N9NVoiceButtonMode VoiceButtonMode { get; set; } = G9N9NVoiceButtonMode.SmartToggle;
 
         public event Action<RemoteDevice>? DeviceDiscovered { add { } remove { } }
-        public event Action<bool, string>? ConnectionStatusChanged { add { } remove { } }
+        public event Action<bool, string>? ConnectionStatusChanged;
         public event Action<float>? AudioLevelChanged { add { } remove { } }
         public event Action? VoiceButtonPressed { add { } remove { } }
         public event Action? VoiceSessionStarted { add { } remove { } }
         public event Action? VoiceSessionEnded { add { } remove { } }
+
+        public void RaiseConnectionStatusChanged(bool connected, string name) => ConnectionStatusChanged?.Invoke(connected, name);
 
         public void StartScanning() => IsScanning = true;
         public void StopScanning() => IsScanning = false;
@@ -120,6 +123,39 @@ public class MainViewModelTests
             using var vm = new MainViewModel(config, bt);
 
             vm.HandleDeviceRemoval(new IntPtr(0x1234));
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void MainViewModel_Connection_SynchronizesVoiceButtonModeToBluetoothManager()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-mvm-vbm-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var device = new RemoteDevice
+            {
+                Id = "DEV_G9N9N",
+                Name = "Chromecast Remote",
+                BluetoothAddress = 0x4754514C6FCC,
+                VoiceButtonMode = G9N9NVoiceButtonMode.HoldToTalk
+            };
+            config.Current.Devices.Add(device);
+            config.Current.SelectedDeviceId = device.Id;
+
+            var bt = new TestBluetoothManager
+            {
+                VoiceButtonMode = G9N9NVoiceButtonMode.SmartToggle
+            };
+
+            using var vm = new MainViewModel(config, bt);
+            bt.RaiseConnectionStatusChanged(true, "Chromecast Remote");
+
+            Assert.Equal(G9N9NVoiceButtonMode.HoldToTalk, bt.VoiceButtonMode);
         }
         finally
         {

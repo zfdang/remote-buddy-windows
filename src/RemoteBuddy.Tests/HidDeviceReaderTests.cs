@@ -24,6 +24,7 @@ public class HidDeviceReaderTests
         public string ConnectedDeviceName { get; set; } = "Test Remote";
         public ulong ConnectedDeviceAddress => 0x4754514C6FCC;
         public Guid? ConnectedDeviceContainerId => null;
+        public G9N9NVoiceButtonMode VoiceButtonMode { get; set; } = G9N9NVoiceButtonMode.SmartToggle;
 
         public event Action<RemoteDevice>? DeviceDiscovered;
         public event Action<bool, string>? ConnectionStatusChanged;

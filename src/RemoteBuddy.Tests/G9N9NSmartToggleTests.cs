@@ -1,7 +1,9 @@
 // Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
+using RemoteBuddy.Core.Models;
 using RemoteBuddy.Core.Protocols;
+using RemoteBuddy.Platform.Windows.Bluetooth;
 using Xunit;
 
 namespace RemoteBuddy.Tests;
@@ -85,5 +87,48 @@ public class G9N9NSmartToggleTests
         // When physical stop later arrives, should still reopen
         bool shouldReopen = session.ShouldReopenOnPhysicalStop(isRemoteStop: true, localCloseRequested: false, start + 250);
         Assert.True(shouldReopen);
+    }
+
+    [Fact]
+    public void VoiceButtonMode_HoldToTalk_DisablesSmartToggleEligibility()
+    {
+        using var manager = new WinRtBluetoothManager();
+        manager.ConnectedDeviceNameOverride = "Chromecast Remote";
+
+        manager.VoiceButtonMode = G9N9NVoiceButtonMode.SmartToggle;
+        Assert.True(manager.IsSmartToggleEligible());
+
+        manager.VoiceButtonMode = G9N9NVoiceButtonMode.HoldToTalk;
+        Assert.False(manager.IsSmartToggleEligible());
+    }
+
+    [Fact]
+    public void G9N9NSmartToggleSession_ConcurrentTransitions_MaintainsPhaseConsistency()
+    {
+        var session = new G9N9NSmartToggleSession();
+        var exceptions = new System.Collections.Concurrent.ConcurrentBag<Exception>();
+
+        Parallel.For(0, 500, i =>
+        {
+            try
+            {
+                long now = i * 10;
+                session.BeginPhysicalPress(now);
+                _ = session.RecordShortReleaseDuringPreparation(true, false, now + 100);
+                _ = session.ShouldReopenOnPhysicalStop(true, false, now + 200);
+                _ = session.EnterAwaitingReopen();
+                _ = session.EnterHandsFreeActive();
+                _ = session.ShouldStopOnRemoteOpenRequest();
+                _ = session.ShouldStopOnRemoteAudioStart(0x03, 1, 2);
+                _ = session.EnterClosing();
+                session.Reset();
+            }
+            catch (Exception ex)
+            {
+                exceptions.Add(ex);
+            }
+        });
+
+        Assert.Empty(exceptions);
     }
 }

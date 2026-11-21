@@ -30,6 +30,12 @@ public static class AppLogger
     private static bool _isEnabled = true;
     private static bool _isInitialized = false;
 
+#if DEBUG
+    public static LogLevel MinimumLevel { get; set; } = LogLevel.Debug;
+#else
+    public static LogLevel MinimumLevel { get; set; } = LogLevel.Info;
+#endif
+
     public static string LogDirectory
     {
         get
@@ -154,6 +160,7 @@ public static class AppLogger
     private static void WriteEntry(LogLevel level, string message, string? component, Exception? ex)
     {
         if (!_isEnabled) return;
+        if (level < MinimumLevel) return;
         EnsureInitialized();
 
         string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");

@@ -47,7 +47,7 @@ SOFTWARE.
 ```text
 MIT License
 
-Copyright (c) 2021-2024 Leszek Pomian
+Copyright (c) 2021-2025 Leszek Pomianowski and WPF UI Contributors
 All rights reserved.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -202,7 +202,7 @@ END OF microsoft/segoe-fluent-icons-font NOTICES AND INFORMATION
 - **License:** MIT
 
 ```text
-Microsoft Public License (Ms-PL) / MIT License
+MIT License
 
 Copyright (c) 2020 Mark Heath and Contributors
 

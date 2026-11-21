@@ -90,6 +90,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         if (_selectedDevice != null)
         {
             _bt.CurrentGain = _selectedDevice.Gain;
+            _bt.VoiceButtonMode = _selectedDevice.VoiceButtonMode;
         }
 
         _onDeviceDiscovered = (dev) =>
@@ -172,6 +173,11 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
             DiscoveredDevices.Add(dev);
         }
         SelectedDevice = DiscoveredDevices.FirstOrDefault(d => d.Id == _config.Current.SelectedDeviceId);
+        if (SelectedDevice != null)
+        {
+            _bt.CurrentGain = SelectedDevice.Gain;
+            _bt.VoiceButtonMode = SelectedDevice.VoiceButtonMode;
+        }
         OnPropertyChanged(nameof(HasDevices));
         OnPropertyChanged(nameof(ConnectedDeviceName));
         OnPropertyChanged(nameof(IsConnected));
@@ -179,13 +185,24 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
 
     private void OnDevicePropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(RemoteDevice.Gain) && sender is RemoteDevice dev)
+        if (sender is RemoteDevice dev)
         {
-            if (dev.Id == _config.Current.SelectedDeviceId || dev.BluetoothAddress == SelectedDevice?.BluetoothAddress)
+            if (e.PropertyName == nameof(RemoteDevice.Gain))
             {
-                _bt.CurrentGain = dev.Gain;
+                if (dev.Id == _config.Current.SelectedDeviceId || dev.BluetoothAddress == SelectedDevice?.BluetoothAddress)
+                {
+                    _bt.CurrentGain = dev.Gain;
+                }
+                _config.Save();
             }
-            _config.Save();
+            else if (e.PropertyName == nameof(RemoteDevice.VoiceButtonMode))
+            {
+                if (dev.Id == _config.Current.SelectedDeviceId || dev.BluetoothAddress == SelectedDevice?.BluetoothAddress)
+                {
+                    _bt.VoiceButtonMode = dev.VoiceButtonMode;
+                }
+                _config.Save();
+            }
         }
     }
 
@@ -801,7 +818,16 @@ public partial class IntegrationsViewModel : ObservableObject
 public partial class EnvironmentViewModel : ObservableObject
 {
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DriverStatusBadgeText))]
     private DriverReadinessStatus _driverStatus;
+
+    public string DriverStatusBadgeText => DriverStatus switch
+    {
+        DriverReadinessStatus.Ready => "已就绪",
+        DriverReadinessStatus.NotInstalled => "未安装",
+        DriverReadinessStatus.RebootRequired => "需重启",
+        _ => "初始化失败"
+    };
 
     [ObservableProperty]
     private string _statusDescription = string.Empty;

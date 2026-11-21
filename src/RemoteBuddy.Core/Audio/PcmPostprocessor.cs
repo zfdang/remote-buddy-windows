@@ -27,7 +27,8 @@ public sealed class PcmPostprocessor
             int value = samples[i];
             int last = _previous ?? value;
             int beforeLast = _preceding ?? last;
-            int filtered = (beforeLast + 2 * last + value) >> 2;
+            int sum = beforeLast + 2 * last + value;
+            int filtered = sum / 4;
             _preceding = last;
             _previous = value;
 

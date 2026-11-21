@@ -184,22 +184,7 @@ public sealed class WasapiAudioPlayer : IDisposable
 
     public async Task DrainAsync(int timeoutMs = 60, CancellationToken ct = default)
     {
-        int waitTime;
-        lock (_lock)
-        {
-            if (_waveProvider != null)
-            {
-                int bytesLeft = _waveProvider.BufferedBytes;
-                // 16kHz 16-bit mono = 32,000 bytes/sec
-                int msLeft = (int)((bytesLeft / 32000.0) * 1000.0);
-                waitTime = Math.Clamp(msLeft + 20, 20, 500);
-            }
-            else
-            {
-                waitTime = timeoutMs;
-            }
-        }
-
+        int waitTime = CalculateDrainWaitTime(timeoutMs);
         try
         {
             await Task.Delay(waitTime, ct).ConfigureAwait(false);
@@ -209,22 +194,25 @@ public sealed class WasapiAudioPlayer : IDisposable
 
     public void Drain(int timeoutMs = 60)
     {
-        int waitTime;
+        int waitTime = CalculateDrainWaitTime(timeoutMs);
+        Thread.Sleep(waitTime);
+    }
+
+    private int CalculateDrainWaitTime(int timeoutMs)
+    {
         lock (_lock)
         {
             if (_waveProvider != null)
             {
                 int bytesLeft = _waveProvider.BufferedBytes;
+                // 16kHz 16-bit mono = 32,000 bytes/sec
                 int msLeft = (int)((bytesLeft / 32000.0) * 1000.0);
-                waitTime = Math.Clamp(msLeft + 20, 20, 500);
+                int neededMs = msLeft + 20;
+                int maxTimeout = Math.Max(timeoutMs, 20);
+                return Math.Clamp(neededMs, 20, maxTimeout);
             }
-            else
-            {
-                waitTime = timeoutMs;
-            }
+            return Math.Max(timeoutMs, 0);
         }
-
-        Thread.Sleep(waitTime);
     }
 
     public void Stop()
