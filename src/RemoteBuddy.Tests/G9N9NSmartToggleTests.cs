@@ -93,8 +93,7 @@ public class G9N9NSmartToggleTests
     public void VoiceButtonMode_HoldToTalk_DisablesSmartToggleEligibility()
     {
         using var manager = new WinRtBluetoothManager();
-        typeof(WinRtBluetoothManager).GetProperty(nameof(WinRtBluetoothManager.ConnectedDeviceName))!
-            .SetValue(manager, "Chromecast Remote");
+        manager.ConnectedDeviceNameOverride = "Chromecast Remote";
 
         manager.VoiceButtonMode = G9N9NVoiceButtonMode.SmartToggle;
         Assert.True(manager.IsSmartToggleEligible());

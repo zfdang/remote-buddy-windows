@@ -65,7 +65,8 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
     public bool IsStreaming => _sessionState == BluetoothSessionState.Streaming;
     public float CurrentGain { get; set; } = 1.0f;
     public BluetoothSessionState SessionState => _sessionState;
-    public string ConnectedDeviceName => _connectedDevice?.Name ?? string.Empty;
+    internal string? ConnectedDeviceNameOverride { get; set; }
+    public string ConnectedDeviceName => ConnectedDeviceNameOverride ?? _connectedDevice?.Name ?? string.Empty;
     public ulong ConnectedDeviceAddress => _connectedDevice?.BluetoothAddress ?? 0;
     public Guid? ConnectedDeviceContainerId { get; private set; }
 

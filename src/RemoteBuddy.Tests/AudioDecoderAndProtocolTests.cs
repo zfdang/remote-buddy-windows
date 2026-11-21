@@ -591,11 +591,17 @@ public class AudioDecoderAndProtocolTests
         // sample 2: (-1000 - 4000 - 3000) / 4 = -2000
         Assert.Equal(-2000, samples[2]);
 
-        // Near-zero symmetry: sum = -4 / 4 = -1; sum = -1 / 4 = 0, verifying no arithmetic shift bias to -1
+        // Near-zero symmetry: an impulse of -1 on a zero stream yields sum = -1.
+        // Integer division -1 / 4 = 0, verifying no arithmetic shift bias (-1 >> 2 = -1).
         postprocessor.Reset();
-        short[] smallNegative = [-1, -1, -1];
-        postprocessor.Process(smallNegative, 1.0f);
-        Assert.Equal(0, smallNegative[0]);
+        short[] impulseNegative = [0, 0, -1];
+        postprocessor.Process(impulseNegative, 1.0f);
+        Assert.Equal(0, impulseNegative[2]);
+
+        postprocessor.Reset();
+        short[] impulsePositive = [0, 0, 1];
+        postprocessor.Process(impulsePositive, 1.0f);
+        Assert.Equal(0, impulsePositive[2]);
     }
 
     [Fact]
