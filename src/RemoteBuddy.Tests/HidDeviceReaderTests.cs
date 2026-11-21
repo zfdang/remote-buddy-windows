@@ -117,8 +117,20 @@ public class HidDeviceReaderTests
 
         // Advance to Step 4
         vmFull.NextStep(); // Step 2: DriverCheck
+        Assert.Equal(WizardStep.DriverCheck, vmFull.CurrentWizardStep);
+
+        // Verification gate: if driver is NotInstalled, NextStep() blocks
+        vmFull.DriverStatus = DriverReadinessStatus.NotInstalled;
+        vmFull.NextStep();
+        Assert.Equal(WizardStep.DriverCheck, vmFull.CurrentWizardStep);
+        Assert.False(string.IsNullOrEmpty(vmFull.ValidationError));
+
+        // When driver becomes ready, NextStep() advances to Step 3 (DeviceConnect)
         vmFull.DriverStatus = DriverReadinessStatus.Ready;
         vmFull.NextStep(); // Step 3: DeviceConnect
+        Assert.Equal(WizardStep.DeviceConnect, vmFull.CurrentWizardStep);
+        Assert.Empty(vmFull.ValidationError);
+
         vmFull.SelectedDevice = new RemoteDevice { Id = "TEST2", Name = "Test Remote 2" };
         mockBt.RaiseConnectionStatusChanged(true, "Test Remote 2");
         vmFull.NextStep(); // Step 4: ButtonTest
@@ -130,5 +142,23 @@ public class HidDeviceReaderTests
         vmFull.NotifyButtonPressed(RemoteButton.Up);
         Assert.True(vmFull.HasButtonTested);
         Assert.Contains("方向上键", vmFull.LastPressedButtonName);
+    }
+
+    [Fact]
+    public void VirtualAudioAuditor_StatusOverride_OverridesAuditResult()
+    {
+        try
+        {
+            VirtualAudioAuditor.StatusOverride = DriverReadinessStatus.Ready;
+            Assert.Equal(DriverReadinessStatus.Ready, VirtualAudioAuditor.AuditCableInputDevice(forceRefresh: true));
+            Assert.Equal(DriverReadinessStatus.Ready, VirtualAudioAuditor.GetCachedStatus());
+
+            VirtualAudioAuditor.StatusOverride = DriverReadinessStatus.RebootRequired;
+            Assert.Equal(DriverReadinessStatus.RebootRequired, VirtualAudioAuditor.AuditCableInputDevice(forceRefresh: true));
+        }
+        finally
+        {
+            VirtualAudioAuditor.StatusOverride = null;
+        }
     }
 }
