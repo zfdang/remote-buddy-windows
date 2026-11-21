@@ -90,6 +90,17 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private DriverReadinessStatus _driverStatus;
 
+    partial void OnDriverStatusChanged(DriverReadinessStatus value)
+    {
+        DriverStatusMessage = value switch
+        {
+            DriverReadinessStatus.Ready => "✅ VB-CABLE 虚拟麦克风已就绪，音频服务工作正常。",
+            DriverReadinessStatus.NotInstalled => "❌ 未检测到 VB-CABLE。请点击下方按钮前往官网下载安装。",
+            DriverReadinessStatus.RebootRequired => "⚠️ 检测到虚拟声卡安装未完全生效，请重启电脑完成系统音频服务初始化。",
+            _ => "❌ 虚拟麦克风初始化失败，请在设备管理器中检查设备状态。"
+        };
+    }
+
     [ObservableProperty]
     private string _driverStatusMessage = string.Empty;
 
@@ -339,14 +350,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     [RelayCommand]
     public void RefreshDriverStatus()
     {
-        DriverStatus = VirtualAudioAuditor.AuditCableInputDevice();
-        DriverStatusMessage = DriverStatus switch
-        {
-            DriverReadinessStatus.Ready => "✅ VB-CABLE 虚拟麦克风已就绪，音频服务工作正常。",
-            DriverReadinessStatus.NotInstalled => "❌ 未检测到 VB-CABLE。请点击下方按钮前往官网下载安装。",
-            DriverReadinessStatus.RebootRequired => "⚠️ 检测到虚拟声卡安装未完全生效，请重启电脑完成系统音频服务初始化。",
-            _ => "❌ 虚拟麦克风初始化失败，请在设备管理器中检查设备状态。"
-        };
+        DriverStatus = VirtualAudioAuditor.AuditCableInputDevice(forceRefresh: true);
     }
 
     [RelayCommand]
@@ -503,7 +507,10 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
         switch (CurrentWizardStep)
         {
             case WizardStep.DriverCheck:
-                RefreshDriverStatus();
+                if (DriverStatus != DriverReadinessStatus.Ready)
+                {
+                    RefreshDriverStatus();
+                }
                 if (DriverStatus != DriverReadinessStatus.Ready)
                 {
                     ValidationError = "请先安装 VB-CABLE 并确保音频端点就绪（如需重启请先重启电脑）。";
@@ -587,7 +594,10 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     {
         if (Mode == WizardMode.Full)
         {
-            RefreshDriverStatus();
+            if (DriverStatus != DriverReadinessStatus.Ready)
+            {
+                RefreshDriverStatus();
+            }
             if (DriverStatus != DriverReadinessStatus.Ready)
             {
                 ValidationError = "虚拟麦克风驱动未就绪，无法完成设置。";

@@ -23,10 +23,17 @@ public static class VirtualAudioAuditor
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(5);
     private static readonly object _auditLock = new();
 
+    public static DriverReadinessStatus? StatusOverride { get; set; }
+
     public static DriverReadinessStatus AuditCableInputDevice(bool forceRefresh = false)
     {
         lock (_auditLock)
         {
+            if (StatusOverride.HasValue)
+            {
+                return StatusOverride.Value;
+            }
+
             if (!forceRefresh && DateTime.UtcNow - _lastAuditTime < CacheTtl)
             {
                 return _cachedStatus;
@@ -42,6 +49,11 @@ public static class VirtualAudioAuditor
     {
         lock (_auditLock)
         {
+            if (StatusOverride.HasValue)
+            {
+                return StatusOverride.Value;
+            }
+
             return _lastAuditTime == DateTime.MinValue ? AuditCableInputDevice(forceRefresh: false) : _cachedStatus;
         }
     }
