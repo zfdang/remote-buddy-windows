@@ -22,6 +22,7 @@ public interface IBluetoothManager : IDisposable
     float CurrentGain { get; set; }
     BluetoothSessionState SessionState { get; }
     string ConnectedDeviceName { get; }
+    ulong ConnectedDeviceAddress { get; }
     Guid? ConnectedDeviceContainerId { get; }
     G9N9NVoiceButtonMode VoiceButtonMode
     {

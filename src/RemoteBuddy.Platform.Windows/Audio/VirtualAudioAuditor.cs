@@ -18,7 +18,35 @@ public enum DriverReadinessStatus
 
 public static class VirtualAudioAuditor
 {
-    public static DriverReadinessStatus AuditCableInputDevice()
+    private static DriverReadinessStatus _cachedStatus = DriverReadinessStatus.NotInstalled;
+    private static DateTime _lastAuditTime = DateTime.MinValue;
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(5);
+    private static readonly object _auditLock = new();
+
+    public static DriverReadinessStatus AuditCableInputDevice(bool forceRefresh = false)
+    {
+        lock (_auditLock)
+        {
+            if (!forceRefresh && DateTime.UtcNow - _lastAuditTime < CacheTtl)
+            {
+                return _cachedStatus;
+            }
+
+            _cachedStatus = RunAudit();
+            _lastAuditTime = DateTime.UtcNow;
+            return _cachedStatus;
+        }
+    }
+
+    public static DriverReadinessStatus GetCachedStatus()
+    {
+        lock (_auditLock)
+        {
+            return _lastAuditTime == DateTime.MinValue ? AuditCableInputDevice(forceRefresh: false) : _cachedStatus;
+        }
+    }
+
+    private static DriverReadinessStatus RunAudit()
     {
         try
         {

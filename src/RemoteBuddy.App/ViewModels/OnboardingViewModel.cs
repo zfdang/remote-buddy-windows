@@ -15,15 +15,68 @@ using RemoteBuddy.Platform.Windows.Input;
 
 namespace RemoteBuddy.App.ViewModels;
 
+public enum WizardMode
+{
+    Full,
+    DeviceOnly,
+    Integration
+}
+
+public enum WizardStep
+{
+    Welcome,
+    DriverCheck,
+    DeviceConnect,
+    ButtonTest,
+    AudioTest,
+    ImeConfig,
+    TranscriptionVerify,
+    Complete
+}
+
 public partial class OnboardingViewModel : ObservableObject, IDisposable
 {
     private readonly ConfigService _config;
     private readonly IBluetoothManager _bt;
 
+    private readonly WizardStep[] _activeSteps;
+
     private readonly Action<RemoteDevice> _onDeviceDiscovered;
     private readonly Action<bool, string> _onConnectionChanged;
     private readonly Action<float> _onAudioLevelChanged;
     private readonly Action _onVoiceSessionEnded;
+    private readonly Action _onVoiceSessionStarted;
+
+    public WizardMode Mode { get; }
+
+    public WizardStep CurrentWizardStep => _activeSteps[Math.Clamp(CurrentStep - 1, 0, _activeSteps.Length - 1)];
+
+    public string WindowTitle => Mode switch
+    {
+        WizardMode.DeviceOnly => "添加遥控器向导 - Remote Buddy",
+        WizardMode.Integration => "输入法集成向导 - Remote Buddy",
+        _ => "设置向导 - Remote Buddy"
+    };
+
+    public string StepProgressText => $"第 {CurrentStep} / {TotalSteps} 步";
+
+    public bool IsCompleted { get; private set; } = false;
+
+    public string CompleteSummaryTitle => Mode switch
+    {
+        WizardMode.DeviceOnly => "🎉 遥控器添加完成！",
+        WizardMode.Integration => "🎉 输入法集成配置完成！",
+        _ => "🎉 配置全部完成！"
+    };
+
+    public string CompleteSummaryDescription => Mode switch
+    {
+        WizardMode.DeviceOnly => SelectedDevice != null
+            ? $"遥控器「{SelectedDevice.Name}」已成功连接并完成测试。点击“完成”即可保存至您的遥控器列表并开始使用。"
+            : "遥控器已成功连接并完成测试。点击“完成”即可保存至您的遥控器列表并开始使用。",
+        WizardMode.Integration => $"已成功配置「{SelectedTool}」语音输入法（快捷键 {ShortcutText}）。在任意应用中按住遥控器说话即可体验流畅的语音输入。",
+        _ => "所有音频链路与输入法快捷键已就绪。在任意应用程序或文档中，拿起遥控器按住说话即可畅享语音输入。"
+    };
 
     [ObservableProperty]
     private int _currentStep = 1;
@@ -89,19 +142,59 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
 
     public event Action? RequestClose;
 
-    public OnboardingViewModel(ConfigService config, IBluetoothManager bt)
+    public OnboardingViewModel(ConfigService config, IBluetoothManager bt, WizardMode mode = WizardMode.Full)
     {
         _config = config;
         _bt = bt;
+        Mode = mode;
 
-        SelectedTool = _config.Current.InputTool.Tool;
-        TriggerMode = _config.Current.InputTool.TriggerMode;
-        ShortcutText = _config.Current.InputTool.Shortcut;
-        IsDeviceConnected = _bt.IsReady;
-        SelectedDevice = _config.Current.Devices.FirstOrDefault(d => d.Id == _config.Current.SelectedDeviceId);
-        foreach (var device in _config.Current.Devices)
-            DiscoveredDevices.Add(device);
-        if (IsDeviceConnected) DeviceConnectionStatus = "语音服务已就绪，可以继续。";
+        if (Mode == WizardMode.DeviceOnly)
+        {
+            _activeSteps =
+            [
+                WizardStep.DeviceConnect,
+                WizardStep.ButtonTest,
+                WizardStep.AudioTest,
+                WizardStep.Complete
+            ];
+            DeviceConnectionStatus = "点击“扫描设备”查找遥控器，然后点击“连接”。";
+        }
+        else if (Mode == WizardMode.Integration)
+        {
+            _activeSteps =
+            [
+                WizardStep.ImeConfig,
+                WizardStep.TranscriptionVerify,
+                WizardStep.Complete
+            ];
+            SelectedTool = _config.Current.InputTool.Tool;
+            TriggerMode = _config.Current.InputTool.TriggerMode;
+            ShortcutText = _config.Current.InputTool.Shortcut;
+        }
+        else
+        {
+            _activeSteps =
+            [
+                WizardStep.Welcome,
+                WizardStep.DriverCheck,
+                WizardStep.DeviceConnect,
+                WizardStep.ButtonTest,
+                WizardStep.AudioTest,
+                WizardStep.ImeConfig,
+                WizardStep.TranscriptionVerify,
+                WizardStep.Complete
+            ];
+            SelectedTool = _config.Current.InputTool.Tool;
+            TriggerMode = _config.Current.InputTool.TriggerMode;
+            ShortcutText = _config.Current.InputTool.Shortcut;
+            IsDeviceConnected = _bt.IsReady;
+            SelectedDevice = _config.Current.Devices.FirstOrDefault(d => d.Id == _config.Current.SelectedDeviceId);
+            foreach (var device in _config.Current.Devices)
+                DiscoveredDevices.Add(device);
+            if (IsDeviceConnected) DeviceConnectionStatus = "语音服务已就绪，可以继续。";
+        }
+
+        TotalSteps = _activeSteps.Length;
 
         _onDeviceDiscovered = (dev) =>
         {
@@ -144,7 +237,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             void Update()
             {
                 LiveAudioLevel = level;
-                if (CurrentStep == 5 && level > 0.05f)
+                if (CurrentWizardStep == WizardStep.AudioTest && level > 0.05f)
                 {
                     HasAudioTested = true;
                 }
@@ -165,9 +258,30 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             void Update()
             {
                 LiveAudioLevel = 0f;
-                if (CurrentStep == 7)
+                if (CurrentWizardStep == WizardStep.TranscriptionVerify)
                 {
                     _hasVoiceTranscriptionSessionOccurred = true;
+                }
+            }
+
+            if (App.Current?.Dispatcher != null && !App.Current.Dispatcher.CheckAccess())
+            {
+                App.Current.Dispatcher.BeginInvoke(Update);
+            }
+            else
+            {
+                Update();
+            }
+        };
+
+        _onVoiceSessionStarted = () =>
+        {
+            void Update()
+            {
+                if (CurrentWizardStep == WizardStep.ButtonTest)
+                {
+                    LastPressedButtonName = "已按下: 语音键 (Voice)";
+                    HasButtonTested = true;
                 }
             }
 
@@ -185,6 +299,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
         _bt.ConnectionStatusChanged += _onConnectionChanged;
         _bt.AudioLevelChanged += _onAudioLevelChanged;
         _bt.VoiceSessionEnded += _onVoiceSessionEnded;
+        _bt.VoiceSessionStarted += _onVoiceSessionStarted;
 
         RefreshDriverStatus();
         UpdateStepMetadata();
@@ -201,6 +316,24 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
         _bt.ConnectionStatusChanged -= _onConnectionChanged;
         _bt.AudioLevelChanged -= _onAudioLevelChanged;
         _bt.VoiceSessionEnded -= _onVoiceSessionEnded;
+        _bt.VoiceSessionStarted -= _onVoiceSessionStarted;
+
+        if (!IsCompleted && Mode == WizardMode.DeviceOnly)
+        {
+            AppLogger.Info("AddDevice wizard closed without completion: discarding unverified device connection", "OnboardingViewModel");
+            if (_bt.IsConnected)
+            {
+                _bt.Disconnect();
+            }
+            if (!string.IsNullOrEmpty(_config.Current.SelectedDeviceId))
+            {
+                var prevDev = _config.Current.Devices.FirstOrDefault(d => d.Id == _config.Current.SelectedDeviceId);
+                if (prevDev != null && prevDev.BluetoothAddress != 0)
+                {
+                    _ = _bt.ConnectAsync(prevDev.BluetoothAddress);
+                }
+            }
+        }
     }
 
     [RelayCommand]
@@ -264,12 +397,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             {
                 device.Mappings = RemoteDevice.CreateDefaultMappings(device.ModelType);
             }
-            _config.Current.SelectedDeviceId = device.Id;
-            if (!_config.Current.Devices.Any(d => d.Id == device.Id))
-            {
-                _config.Current.Devices.Add(device);
-            }
-            _config.Save();
+            DeviceConnectionStatus = $"语音服务已就绪：{device.Name}";
         }
         else
         {
@@ -281,7 +409,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
 
     public void NotifyButtonPressed(RemoteButton button)
     {
-        if (CurrentStep != 4 || button == RemoteButton.None) return;
+        if (CurrentWizardStep != WizardStep.ButtonTest || button == RemoteButton.None) return;
         LastPressedButtonName = $"已按下: {GetButtonFriendlyName(button)}";
         HasButtonTested = true;
     }
@@ -310,12 +438,16 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
 
     partial void OnCurrentStepChanged(int value)
     {
-        if (value == 4)
+        if (CurrentWizardStep == WizardStep.ButtonTest)
         {
             HasButtonTested = false;
             LastPressedButtonName = "尚未检测到按键";
         }
-        if (value == 5) HasAudioTested = false;
+        if (CurrentWizardStep == WizardStep.AudioTest)
+        {
+            HasAudioTested = false;
+        }
+        UpdateStepMetadata();
     }
 
     [RelayCommand]
@@ -361,16 +493,16 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     public void NextStep()
     {
         ValidationError = string.Empty;
-        if (CurrentStep == 3 && IsScanning)
+        if (CurrentWizardStep == WizardStep.DeviceConnect && IsScanning)
         {
             _bt.StopScanning();
             IsScanning = false;
         }
 
         // Validation gates for each step
-        switch (CurrentStep)
+        switch (CurrentWizardStep)
         {
-            case 2: // Driver Check
+            case WizardStep.DriverCheck:
                 RefreshDriverStatus();
                 if (DriverStatus != DriverReadinessStatus.Ready)
                 {
@@ -379,24 +511,24 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
                 }
                 break;
 
-            case 3: // Device Pairing
+            case WizardStep.DeviceConnect:
                 if (!IsDeviceConnected)
                 {
                     ValidationError = "请先点击设备的“连接”，等待语音服务就绪。Windows 蓝牙连接状态不能代替应用内语音服务连接。";
-                    AppLogger.Warn($"Step 3 blocked: IsDeviceConnected={IsDeviceConnected}, ManagerReady={_bt.IsReady}, Status={DeviceConnectionStatus}", "OnboardingViewModel");
+                    AppLogger.Warn($"DeviceConnect blocked: IsDeviceConnected={IsDeviceConnected}, ManagerReady={_bt.IsReady}, Status={DeviceConnectionStatus}", "OnboardingViewModel");
                     return;
                 }
                 break;
 
-            case 4: // Button Test
+            case WizardStep.ButtonTest:
                 if (!HasButtonTested)
                 {
-                    ValidationError = "请先在遥控器上按下一个按键以验证按键链路正常。";
+                    ValidationError = "请先在遥控器上按下一个按键（方向键、OK 或语音键）以验证按键链路正常。";
                     return;
                 }
                 break;
 
-            case 5: // Voice Test
+            case WizardStep.AudioTest:
                 if (!HasAudioTested)
                 {
                     ValidationError = "请按住遥控器语音键说话，确保电平条产生跳动反馈。";
@@ -404,11 +536,11 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
                 }
                 break;
 
-            case 6: // IME Tool Configuration
+            case WizardStep.ImeConfig:
                 if (!SaveToolConfig()) return;
                 break;
 
-            case 7: // Live Transcription Verification
+            case WizardStep.TranscriptionVerify:
                 if (!_hasVoiceTranscriptionSessionOccurred)
                 {
                     ValidationError = "请先按住遥控器语音键在下方输入框中完成一次实际语音转写。";
@@ -429,7 +561,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
 
         if (CurrentStep < TotalSteps)
         {
-            AppLogger.Info($"Onboarding progressing from Step {CurrentStep} to {CurrentStep + 1}", "OnboardingViewModel");
+            AppLogger.Info($"Wizard progressing from Step {CurrentStep} to {CurrentStep + 1} ({CurrentWizardStep})", "OnboardingViewModel");
             CurrentStep++;
             UpdateStepMetadata();
         }
@@ -453,38 +585,94 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     [RelayCommand]
     public void Complete()
     {
-        RefreshDriverStatus();
-        if (DriverStatus != DriverReadinessStatus.Ready)
+        if (Mode == WizardMode.Full)
         {
-            ValidationError = "虚拟麦克风驱动未就绪，无法完成设置。";
-            return;
+            RefreshDriverStatus();
+            if (DriverStatus != DriverReadinessStatus.Ready)
+            {
+                ValidationError = "虚拟麦克风驱动未就绪，无法完成设置。";
+                return;
+            }
+            if (!IsDeviceConnected)
+            {
+                ValidationError = "遥控器未连接，无法完成设置。";
+                return;
+            }
+            if (!SaveToolConfig()) return;
+            _config.Current.HasCompletedOnboarding = true;
         }
-        if (!IsDeviceConnected)
+        else if (Mode == WizardMode.DeviceOnly)
         {
-            ValidationError = "遥控器未连接，无法完成设置。";
-            return;
+            if (!IsDeviceConnected)
+            {
+                ValidationError = "遥控器未连接，无法完成添加。";
+                return;
+            }
         }
-        if (!SaveToolConfig()) return;
-        _config.Current.HasCompletedOnboarding = true;
+        else if (Mode == WizardMode.Integration)
+        {
+            if (!SaveToolConfig()) return;
+        }
+
+        if (SelectedDevice != null)
+        {
+            if (string.IsNullOrEmpty(SelectedDevice.HidDevicePath) && SelectedDevice.BluetoothAddress != 0)
+            {
+                var info = HidDeviceReader.FindBestDevice(SelectedDevice.BluetoothAddress);
+                if (info != null)
+                {
+                    SelectedDevice.HidDevicePath = info.Path;
+                    SelectedDevice.HidUsagePage = info.UsagePage;
+                    SelectedDevice.HidUsage = info.Usage;
+                    SelectedDevice.HidReportLength = info.InputReportByteLength;
+                    SelectedDevice.HidCaptureStatus = "已就绪 (RawInput & Direct Stream)";
+                }
+            }
+
+            if (!_config.Current.Devices.Any(d => d.Id == SelectedDevice.Id))
+            {
+                _config.Current.Devices.Add(SelectedDevice);
+            }
+            _config.Current.SelectedDeviceId = SelectedDevice.Id;
+            AppLogger.Info($"Wizard completed: device '{SelectedDevice.Name}' (0x{SelectedDevice.BluetoothAddress:X12}) added to configuration", "OnboardingViewModel");
+        }
         _config.Save();
-        AppLogger.Info("Onboarding wizard completed and configuration saved", "OnboardingViewModel");
+        IsCompleted = true;
+        AppLogger.Info($"Wizard completed (Mode={Mode}) and configuration saved", "OnboardingViewModel");
         RequestClose?.Invoke();
     }
 
     private void UpdateStepMetadata()
     {
-        StepTitle = CurrentStep switch
+        if (Mode == WizardMode.Full)
         {
-            1 => "第 1 步：欢迎与界面语言",
-            2 => "第 2 步：虚拟麦克风驱动检查 (VB-CABLE)",
-            3 => "第 3 步：选择并连接遥控器",
-            4 => "第 4 步：遥控器按键响应测试",
-            5 => "第 5 步：麦克风拾音与动态波形测试",
-            6 => "第 6 步：配置目标语音输入工具",
-            7 => "第 7 步：真实输入法转写验收",
-            8 => "第 8 步：设置完成与使用说明",
-            _ => "设置向导"
-        };
+            StepTitle = CurrentWizardStep switch
+            {
+                WizardStep.Welcome => "第 1 步：欢迎与界面语言",
+                WizardStep.DriverCheck => "第 2 步：虚拟麦克风驱动检查 (VB-CABLE)",
+                WizardStep.DeviceConnect => "第 3 步：选择并连接遥控器",
+                WizardStep.ButtonTest => "第 4 步：遥控器按键响应测试",
+                WizardStep.AudioTest => "第 5 步：麦克风拾音与动态波形测试",
+                WizardStep.ImeConfig => "第 6 步：配置目标语音输入工具",
+                WizardStep.TranscriptionVerify => "第 7 步：真实输入法转写验收",
+                WizardStep.Complete => "第 8 步：设置完成与使用说明",
+                _ => "首次设置向导"
+            };
+        }
+        else
+        {
+            StepTitle = CurrentWizardStep switch
+            {
+                WizardStep.DeviceConnect => "第 1 步：选择并连接遥控器",
+                WizardStep.ButtonTest => "第 2 步：遥控器按键响应测试",
+                WizardStep.AudioTest => "第 3 步：麦克风拾音与动态波形测试",
+                WizardStep.Complete => "第 4 步：遥控器添加完成",
+                _ => "添加遥控器向导"
+            };
+        }
+        OnPropertyChanged(nameof(StepProgressText));
+        OnPropertyChanged(nameof(CompleteSummaryTitle));
+        OnPropertyChanged(nameof(CompleteSummaryDescription));
         OnPropertyChanged(nameof(NextButtonText));
         OnPropertyChanged(nameof(CanGoPrevious));
     }

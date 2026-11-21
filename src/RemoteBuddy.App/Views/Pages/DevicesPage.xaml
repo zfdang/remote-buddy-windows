@@ -39,7 +39,21 @@
 
         <!-- Device Cards List -->
         <ScrollViewer VerticalScrollBarVisibility="Auto">
-            <ItemsControl ItemsSource="{Binding DiscoveredDevices}">
+            <StackPanel>
+                <!-- Empty State Card -->
+                <Border Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" Margin="0,0,0,16" Padding="32" CornerRadius="8"
+                        Visibility="{Binding HasDevices, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Inverse}">
+                    <StackPanel HorizontalAlignment="Center">
+                        <TextBlock Text="🎮" FontSize="36" HorizontalAlignment="Center" Margin="0,0,0,12"/>
+                        <TextBlock Text="暂未配置遥控器" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" HorizontalAlignment="Center" Margin="0,0,0,6"/>
+                        <TextBlock Text="请点击上方「➕ 添加新设备」运行向导，配对遥控器并完成按键和语音测试。" FontSize="13" Foreground="{StaticResource SecondaryTextBrush}" HorizontalAlignment="Center" Margin="0,0,0,18" TextAlignment="Center"/>
+                        <Button Content="➕ 运行添加设备向导" Padding="16,8" Background="#007ACC" HorizontalAlignment="Center"
+                                Command="{Binding AddDeviceCommand}"/>
+                    </StackPanel>
+                </Border>
+
+                <ItemsControl ItemsSource="{Binding DiscoveredDevices}"
+                              Visibility="{Binding HasDevices, Converter={StaticResource BoolToVisibilityConverter}}">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
                         <Border Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" Margin="0,0,0,16" Padding="20" CornerRadius="8">
@@ -177,6 +191,8 @@
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
                                         </Grid.RowDefinitions>
 
                                         <!-- MAC / ID -->
@@ -192,15 +208,33 @@
                                         </StackPanel>
 
                                         <!-- Audio Spec -->
-                                        <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,14,0">
+                                        <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,14,12">
                                             <TextBlock Text="音频传输规格" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"/>
                                             <TextBlock Text="16kHz 16-bit Mono (IMA-ADPCM)" FontSize="13" Foreground="{StaticResource PrimaryTextBrush}" FontWeight="Medium" Margin="0,2,0,0"/>
                                         </StackPanel>
 
                                         <!-- Voice Protocol -->
-                                        <StackPanel Grid.Row="1" Grid.Column="1">
+                                        <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,0,0,12">
                                             <TextBlock Text="语音通信协议" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"/>
                                             <TextBlock Text="Android TV Voice (ATVV GATT)" FontSize="13" Foreground="{StaticResource PrimaryTextBrush}" FontWeight="Medium" Margin="0,2,0,0"/>
+                                        </StackPanel>
+
+                                        <!-- HID Spec Summary -->
+                                        <StackPanel Grid.Row="2" Grid.Column="0" Margin="0,0,14,12">
+                                            <TextBlock Text="HID 集合与报告规格" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"/>
+                                            <TextBlock Text="{Binding HidSpecSummary}" FontSize="13" Foreground="{StaticResource PrimaryTextBrush}" FontWeight="Medium" Margin="0,2,0,0"/>
+                                        </StackPanel>
+
+                                        <!-- HID Capture Status -->
+                                        <StackPanel Grid.Row="2" Grid.Column="1" Margin="0,0,0,12">
+                                            <TextBlock Text="HID 采集链路状态" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"/>
+                                            <TextBlock Text="{Binding HidCaptureStatus, TargetNullValue='已就绪'}" FontSize="13" Foreground="#00CC66" FontWeight="Medium" Margin="0,2,0,0"/>
+                                        </StackPanel>
+
+                                        <!-- HID Device Path -->
+                                        <StackPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2">
+                                            <TextBlock Text="HID 硬件接口路径" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"/>
+                                            <TextBlock Text="{Binding HidDevicePath, TargetNullValue='未检测到匹配 HID 路径'}" FontSize="11" FontFamily="Consolas" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,2,0,0"/>
                                         </StackPanel>
                                     </Grid>
                                 </StackPanel>
@@ -209,6 +243,7 @@
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
             </ItemsControl>
+            </StackPanel>
         </ScrollViewer>
     </DockPanel>
 </UserControl>

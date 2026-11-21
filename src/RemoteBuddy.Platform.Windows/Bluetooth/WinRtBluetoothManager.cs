@@ -66,6 +66,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
     public float CurrentGain { get; set; } = 1.0f;
     public BluetoothSessionState SessionState => _sessionState;
     public string ConnectedDeviceName => _connectedDevice?.Name ?? string.Empty;
+    public ulong ConnectedDeviceAddress => _connectedDevice?.BluetoothAddress ?? 0;
     public Guid? ConnectedDeviceContainerId { get; private set; }
 
     public void StartScan() => StartScanning();

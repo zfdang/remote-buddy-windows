@@ -5,11 +5,19 @@
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="0,0,0,24">
             <!-- Page Header -->
-            <StackPanel Margin="0,0,0,20">
-                <TextBlock Text="输入法集成" FontSize="22" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
-                <TextBlock Text="配合微信键盘、豆包或系统语音输入使用。遥控器说话时，会自动唤起所选工具并传输麦克风音频。"
-                           Foreground="{StaticResource SecondaryTextBrush}" Margin="0,4,0,0" TextWrapping="Wrap"/>
-            </StackPanel>
+            <Grid Margin="0,0,0,20">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="输入法集成" FontSize="22" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
+                    <TextBlock Text="配合微信键盘、豆包或系统语音输入使用。遥控器说话时，会自动唤起所选工具并传输麦克风音频。"
+                               Foreground="{StaticResource SecondaryTextBrush}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+                <Button Grid.Column="1" Content="🚀 运行配置向导" Padding="14,8" Background="#007ACC" VerticalAlignment="Center"
+                        Command="{Binding RunWizardCommand}"/>
+            </Grid>
 
             <!-- Current Configuration Card -->
             <Border Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="8" Padding="20" Margin="0,0,0,22">

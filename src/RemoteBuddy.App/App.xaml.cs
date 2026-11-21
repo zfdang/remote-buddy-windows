@@ -63,12 +63,12 @@ public partial class App : Application
         // Ensure HWND is initialized so RawInputReceiver is active for onboarding
         new System.Windows.Interop.WindowInteropHelper(mainWindow).EnsureHandle();
 
-        _mainViewModel.RequestOpenOnboarding += ShowOnboardingWindow;
+        _mainViewModel.RequestOpenWizard += ShowWizardWindow;
 
         if (!_configService.Current.HasCompletedOnboarding)
         {
             AppLogger.Info("First-time setup detected: opening Onboarding wizard", "App");
-            ShowOnboardingWindow();
+            ShowWizardWindow(WizardMode.Full);
             if (!_configService.Current.HasCompletedOnboarding)
             {
                 AppLogger.Info("First-time setup was not completed, shutting down application.", "App");
@@ -99,12 +99,12 @@ public partial class App : Application
         AppLogger.Info("Application startup sequence completed successfully", "App");
     }
 
-    private void ShowOnboardingWindow()
+    private void ShowWizardWindow(WizardMode mode = WizardMode.Full)
     {
         if (_configService == null || _bluetoothManager == null || _mainViewModel == null) return;
 
-        AppLogger.Info("Showing onboarding dialog window", "App");
-        var onboardingVm = new OnboardingViewModel(_configService, _bluetoothManager);
+        AppLogger.Info($"Showing wizard dialog window: Mode={mode}", "App");
+        var onboardingVm = new OnboardingViewModel(_configService, _bluetoothManager, mode);
         _mainViewModel.ActiveOnboardingVm = onboardingVm;
 
         var onboardingWin = new OnboardingWindow { DataContext = onboardingVm };
@@ -117,14 +117,16 @@ public partial class App : Application
         try
         {
             onboardingWin.ShowDialog();
-            AppLogger.Info($"Onboarding dialog closed. HasCompletedOnboarding={_configService.Current.HasCompletedOnboarding}", "App");
+            AppLogger.Info($"Wizard dialog closed. Mode={mode}, HasCompletedOnboarding={_configService.Current.HasCompletedOnboarding}", "App");
         }
         finally
         {
             onboardingVm.Dispose();
             _mainViewModel.ActiveOnboardingVm = null;
+            _mainViewModel.DevicesVm.Reload();
             _mainViewModel.IntegrationsVm.Reload();
             _mainViewModel.MappingVm.LoadMappings();
+            _mainViewModel.GeneralVm.RefreshState();
             _mainViewModel.UpdateVoiceKeyGuard();
         }
     }

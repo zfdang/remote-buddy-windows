@@ -12,6 +12,7 @@ using RemoteBuddy.Core.Diagnostics;
 using RemoteBuddy.Core.Models;
 using RemoteBuddy.Platform.Windows.Audio;
 using RemoteBuddy.Platform.Windows.Bluetooth;
+using RemoteBuddy.Platform.Windows.Input;
 using RemoteBuddy.Platform.Windows.Services;
 
 namespace RemoteBuddy.App.ViewModels;
@@ -20,7 +21,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
 {
     private readonly ConfigService _config;
     private readonly IBluetoothManager _bt;
-    private readonly Action? _openOnboarding;
+    private readonly Action<WizardMode>? _openWizard;
     private readonly Action<RemoteDevice> _onDeviceDiscovered;
     private readonly Action<bool, string> _onConnectionChanged;
 
@@ -38,6 +39,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
 
     public string ConnectedDeviceName => _bt.IsConnected ? _bt.ConnectedDeviceName : "未连接设备";
     public bool IsConnected => _bt.IsConnected;
+    public bool HasDevices => DiscoveredDevices.Count > 0;
 
     public string VoiceIntegrationSummary
     {
@@ -57,15 +59,30 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         }
     }
 
-    public DevicesViewModel(ConfigService config, IBluetoothManager bt, Action? openOnboarding = null)
+    public DevicesViewModel(ConfigService config, IBluetoothManager bt, Action<WizardMode>? openWizard = null)
     {
         _config = config;
         _bt = bt;
-        _openOnboarding = openOnboarding;
+        _openWizard = openWizard;
 
         foreach (var dev in _config.Current.Devices)
         {
             dev.PropertyChanged += OnDevicePropertyChanged;
+            dev.IsConnected = _bt.IsConnected && (_bt.ConnectedDeviceName == dev.Name || dev.BluetoothAddress == _bt.ConnectedDeviceAddress || dev.BluetoothAddress.ToString("X") == _config.Current.SelectedDeviceId);
+
+            if (string.IsNullOrEmpty(dev.HidDevicePath) && dev.BluetoothAddress != 0)
+            {
+                var info = HidDeviceReader.FindBestDevice(dev.BluetoothAddress);
+                if (info != null)
+                {
+                    dev.HidDevicePath = info.Path;
+                    dev.HidUsagePage = info.UsagePage;
+                    dev.HidUsage = info.Usage;
+                    dev.HidReportLength = info.InputReportByteLength;
+                    dev.HidCaptureStatus = "已就绪 (RawInput & Direct Stream)";
+                }
+            }
+
             DiscoveredDevices.Add(dev);
         }
 
@@ -77,36 +94,87 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
 
         _onDeviceDiscovered = (dev) =>
         {
-            App.Current?.Dispatcher?.BeginInvoke(() =>
+            void Update()
             {
-                var existing = DiscoveredDevices.FirstOrDefault(d => d.BluetoothAddress == dev.BluetoothAddress);
-                if (existing == null)
-                {
-                    dev.PropertyChanged += OnDevicePropertyChanged;
-                    DiscoveredDevices.Add(dev);
-                }
-                else
+                var existing = DiscoveredDevices.FirstOrDefault(d => d.BluetoothAddress == dev.BluetoothAddress || d.Id == dev.Id);
+                if (existing != null)
                 {
                     existing.Name = dev.Name;
                     existing.ModelType = dev.ModelType;
                 }
-            });
+            }
+
+            if (App.Current?.Dispatcher != null && !App.Current.Dispatcher.CheckAccess())
+            {
+                App.Current.Dispatcher.BeginInvoke(Update);
+            }
+            else
+            {
+                Update();
+            }
         };
         _bt.DeviceDiscovered += _onDeviceDiscovered;
 
         _onConnectionChanged = (connected, name) =>
         {
-            App.Current?.Dispatcher?.BeginInvoke(() =>
+            void Update()
             {
                 OnPropertyChanged(nameof(ConnectedDeviceName));
                 OnPropertyChanged(nameof(IsConnected));
                 foreach (var dev in DiscoveredDevices)
                 {
-                    dev.IsConnected = connected && (dev.Name == name || dev.BluetoothAddress.ToString("X") == _config.Current.SelectedDeviceId);
+                    dev.IsConnected = connected && (dev.Name == name || dev.BluetoothAddress == _bt.ConnectedDeviceAddress || dev.BluetoothAddress.ToString("X") == _config.Current.SelectedDeviceId);
                 }
-            });
+            }
+
+            if (App.Current?.Dispatcher != null && !App.Current.Dispatcher.CheckAccess())
+            {
+                App.Current.Dispatcher.BeginInvoke(Update);
+            }
+            else
+            {
+                Update();
+            }
         };
         _bt.ConnectionStatusChanged += _onConnectionChanged;
+    }
+
+    public DevicesViewModel(ConfigService config, IBluetoothManager bt, Action openOnboarding)
+        : this(config, bt, mode => openOnboarding())
+    {
+    }
+
+    public void Reload()
+    {
+        foreach (var dev in DiscoveredDevices)
+        {
+            dev.PropertyChanged -= OnDevicePropertyChanged;
+        }
+        DiscoveredDevices.Clear();
+        foreach (var dev in _config.Current.Devices)
+        {
+            dev.PropertyChanged += OnDevicePropertyChanged;
+            dev.IsConnected = _bt.IsConnected && (_bt.ConnectedDeviceName == dev.Name || dev.BluetoothAddress == _bt.ConnectedDeviceAddress || dev.BluetoothAddress.ToString("X") == _config.Current.SelectedDeviceId);
+
+            if (string.IsNullOrEmpty(dev.HidDevicePath) && dev.BluetoothAddress != 0)
+            {
+                var info = HidDeviceReader.FindBestDevice(dev.BluetoothAddress);
+                if (info != null)
+                {
+                    dev.HidDevicePath = info.Path;
+                    dev.HidUsagePage = info.UsagePage;
+                    dev.HidUsage = info.Usage;
+                    dev.HidReportLength = info.InputReportByteLength;
+                    dev.HidCaptureStatus = "已就绪 (RawInput & Direct Stream)";
+                }
+            }
+
+            DiscoveredDevices.Add(dev);
+        }
+        SelectedDevice = DiscoveredDevices.FirstOrDefault(d => d.Id == _config.Current.SelectedDeviceId);
+        OnPropertyChanged(nameof(HasDevices));
+        OnPropertyChanged(nameof(ConnectedDeviceName));
+        OnPropertyChanged(nameof(IsConnected));
     }
 
     private void OnDevicePropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -134,7 +202,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
     [RelayCommand]
     public void AddDevice()
     {
-        _openOnboarding?.Invoke();
+        _openWizard?.Invoke(WizardMode.DeviceOnly);
     }
 
     [RelayCommand]
@@ -214,6 +282,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
             _config.Current.SelectedDeviceId = null;
         }
         _config.Save();
+        OnPropertyChanged(nameof(HasDevices));
         OnPropertyChanged(nameof(ConnectedDeviceName));
         OnPropertyChanged(nameof(IsConnected));
     }
@@ -654,11 +723,17 @@ public partial class IntegrationsViewModel : ObservableObject
         }
     }
 
-    public IntegrationsViewModel(ConfigService config)
+    private readonly Action<WizardMode>? _openWizard;
+
+    public IntegrationsViewModel(ConfigService config, Action<WizardMode>? openWizard = null)
     {
         _config = config;
+        _openWizard = openWizard;
         Reload();
     }
+
+    [RelayCommand]
+    public void RunWizard() => _openWizard?.Invoke(WizardMode.Integration);
 
     public void Reload()
     {
@@ -753,7 +828,7 @@ public partial class EnvironmentViewModel : ObservableObject
 public partial class SettingsViewModel : ObservableObject
 {
     private readonly ConfigService _config;
-    private readonly Action _openOnboarding;
+    private readonly Action<WizardMode>? _openWizard;
 
     [ObservableProperty]
     private bool _launchAtStartup;
@@ -767,10 +842,10 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private string _logDirectoryPath;
 
-    public SettingsViewModel(ConfigService config, Action openOnboarding)
+    public SettingsViewModel(ConfigService config, Action<WizardMode>? openWizard = null)
     {
         _config = config;
-        _openOnboarding = openOnboarding;
+        _openWizard = openWizard;
         LaunchAtStartup = StartupService.IsLaunchAtStartupEnabled();
         MinimizeToTrayOnClose = _config.Current.MinimizeToTrayOnClose;
         LogDirectoryPath = AppLogger.LogDirectory;
@@ -789,6 +864,11 @@ public partial class SettingsViewModel : ObservableObject
         }
     }
 
+    public SettingsViewModel(ConfigService config, Action openOnboarding)
+        : this(config, mode => openOnboarding())
+    {
+    }
+
     partial void OnLaunchAtStartupChanged(bool value)
     {
         StartupService.SetLaunchAtStartup(value);
@@ -805,7 +885,7 @@ public partial class SettingsViewModel : ObservableObject
     [RelayCommand]
     public void RerunWizard()
     {
-        _openOnboarding.Invoke();
+        _openWizard?.Invoke(WizardMode.Full);
     }
 
     [RelayCommand]
@@ -819,7 +899,7 @@ public partial class GeneralViewModel : ObservableObject
 {
     private readonly ConfigService _config;
     private readonly IBluetoothManager _bt;
-    private readonly Action _openOnboarding;
+    private readonly Action<WizardMode> _openWizard;
     private readonly Action<string> _navigate;
 
     [ObservableProperty]
@@ -828,13 +908,38 @@ public partial class GeneralViewModel : ObservableObject
     [ObservableProperty]
     private bool _minimizeToTrayOnClose;
 
-    public bool PermissionsReady => VirtualAudioAuditor.AuditCableInputDevice() == DriverReadinessStatus.Ready;
-    public string PermissionsSummary => PermissionsReady ? "驱动就绪" : "未检测到驱动";
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PermissionsReady))]
+    [NotifyPropertyChangedFor(nameof(PermissionsStatusText))]
+    [NotifyPropertyChangedFor(nameof(PermissionsStatusBrush))]
+    [NotifyPropertyChangedFor(nameof(PermissionsBadgeBackground))]
+    [NotifyPropertyChangedFor(nameof(PermissionsBorderBrush))]
+    [NotifyPropertyChangedFor(nameof(PermissionsIcon))]
+    [NotifyPropertyChangedFor(nameof(PermissionsSummary))]
+    private DriverReadinessStatus _driverStatus = VirtualAudioAuditor.GetCachedStatus();
+
+    public bool PermissionsReady => DriverStatus == DriverReadinessStatus.Ready;
+    public string PermissionsStatusText => PermissionsReady ? "驱动就绪" : "缺少驱动";
+    public string PermissionsStatusBrush => PermissionsReady ? "#44FF88" : "#FFAA33";
+    public string PermissionsBadgeBackground => PermissionsReady ? "#1C3827" : "#332200";
+    public string PermissionsBorderBrush => PermissionsReady ? "#2D6A42" : "#664400";
+    public string PermissionsIcon => PermissionsReady ? "✓" : "⚠";
+    public string PermissionsSummary => PermissionsReady ? "VB-CABLE 虚拟麦克风已就绪，音频服务工作正常" : "未检测到 VB-CABLE 虚拟音频驱动，请进入检查并安装";
 
     public bool RemoteReady => _bt.IsConnected;
-    public string RemoteSummary => _bt.IsConnected ? (!string.IsNullOrEmpty(_bt.ConnectedDeviceName) ? $"已连接: {_bt.ConnectedDeviceName}" : "已连接遥控器") : "未连接遥控器";
+    public string RemoteStatusText => RemoteReady ? "已连接" : "未连接";
+    public string RemoteStatusBrush => RemoteReady ? "#44FF88" : "#FFAA33";
+    public string RemoteBadgeBackground => RemoteReady ? "#1C3827" : "#332200";
+    public string RemoteBorderBrush => RemoteReady ? "#2D6A42" : "#664400";
+    public string RemoteIcon => RemoteReady ? "✓" : "⚠";
+    public string RemoteSummary => _bt.IsConnected ? (!string.IsNullOrEmpty(_bt.ConnectedDeviceName) ? $"已连接 {_bt.ConnectedDeviceName}，语音服务就绪" : "已连接蓝牙遥控器") : "未连接遥控器";
 
     public bool IntegrationReady => !string.IsNullOrEmpty(_config.Current.InputTool.Shortcut);
+    public string IntegrationStatusText => IntegrationReady ? "已配置" : "未配置";
+    public string IntegrationStatusBrush => IntegrationReady ? "#44FF88" : "#FFAA33";
+    public string IntegrationBadgeBackground => IntegrationReady ? "#1C3827" : "#332200";
+    public string IntegrationBorderBrush => IntegrationReady ? "#2D6A42" : "#664400";
+    public string IntegrationIcon => IntegrationReady ? "✓" : "⚠";
     public string IntegrationSummary
     {
         get
@@ -853,11 +958,11 @@ public partial class GeneralViewModel : ObservableObject
         }
     }
 
-    public GeneralViewModel(ConfigService config, IBluetoothManager bt, Action openOnboarding, Action<string> navigate)
+    public GeneralViewModel(ConfigService config, IBluetoothManager bt, Action<WizardMode> openWizard, Action<string> navigate)
     {
         _config = config;
         _bt = bt;
-        _openOnboarding = openOnboarding;
+        _openWizard = openWizard;
         _navigate = navigate;
 
         LaunchAtStartup = StartupService.IsLaunchAtStartupEnabled();
@@ -865,18 +970,61 @@ public partial class GeneralViewModel : ObservableObject
 
         _bt.ConnectionStatusChanged += (_, _) =>
         {
-            OnPropertyChanged(nameof(RemoteReady));
-            OnPropertyChanged(nameof(RemoteSummary));
+            if (System.Windows.Application.Current?.Dispatcher != null)
+            {
+                System.Windows.Application.Current.Dispatcher.BeginInvoke(new Action(RefreshState));
+            }
+            else
+            {
+                RefreshState();
+            }
         };
+    }
+
+    public GeneralViewModel(ConfigService config, IBluetoothManager bt, Action openOnboarding, Action<string> navigate)
+        : this(config, bt, mode => openOnboarding(), navigate)
+    {
     }
 
     public void RefreshState()
     {
+        DriverStatus = VirtualAudioAuditor.GetCachedStatus();
+        _ = Task.Run(() =>
+        {
+            var status = VirtualAudioAuditor.AuditCableInputDevice(forceRefresh: true);
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
+            if (dispatcher != null && !dispatcher.CheckAccess())
+            {
+                dispatcher.BeginInvoke(new Action(() => DriverStatus = status));
+            }
+            else
+            {
+                DriverStatus = status;
+            }
+        });
+
         OnPropertyChanged(nameof(PermissionsReady));
+        OnPropertyChanged(nameof(PermissionsStatusText));
+        OnPropertyChanged(nameof(PermissionsStatusBrush));
+        OnPropertyChanged(nameof(PermissionsBadgeBackground));
+        OnPropertyChanged(nameof(PermissionsBorderBrush));
+        OnPropertyChanged(nameof(PermissionsIcon));
         OnPropertyChanged(nameof(PermissionsSummary));
+
         OnPropertyChanged(nameof(RemoteReady));
+        OnPropertyChanged(nameof(RemoteStatusText));
+        OnPropertyChanged(nameof(RemoteStatusBrush));
+        OnPropertyChanged(nameof(RemoteBadgeBackground));
+        OnPropertyChanged(nameof(RemoteBorderBrush));
+        OnPropertyChanged(nameof(RemoteIcon));
         OnPropertyChanged(nameof(RemoteSummary));
+
         OnPropertyChanged(nameof(IntegrationReady));
+        OnPropertyChanged(nameof(IntegrationStatusText));
+        OnPropertyChanged(nameof(IntegrationStatusBrush));
+        OnPropertyChanged(nameof(IntegrationBadgeBackground));
+        OnPropertyChanged(nameof(IntegrationBorderBrush));
+        OnPropertyChanged(nameof(IntegrationIcon));
         OnPropertyChanged(nameof(IntegrationSummary));
     }
 
@@ -894,7 +1042,13 @@ public partial class GeneralViewModel : ObservableObject
     }
 
     [RelayCommand]
-    public void RerunWizard() => _openOnboarding.Invoke();
+    public void RerunWizard() => _openWizard(WizardMode.Full);
+
+    [RelayCommand]
+    public void RunDeviceWizard() => _openWizard(WizardMode.DeviceOnly);
+
+    [RelayCommand]
+    public void RunIntegrationWizard() => _openWizard(WizardMode.Integration);
 
     [RelayCommand]
     public void GoToPermissions() => _navigate("Permissions");

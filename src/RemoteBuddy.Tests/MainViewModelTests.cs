@@ -20,6 +20,7 @@ public class MainViewModelTests
         public float CurrentGain { get; set; } = 1.0f;
         public BluetoothSessionState SessionState => BluetoothSessionState.Idle;
         public string ConnectedDeviceName => string.Empty;
+        public ulong ConnectedDeviceAddress => 0;
         public Guid? ConnectedDeviceContainerId => null;
 
         public event Action<RemoteDevice>? DeviceDiscovered { add { } remove { } }

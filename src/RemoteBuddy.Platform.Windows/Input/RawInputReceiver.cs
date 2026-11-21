@@ -18,6 +18,7 @@ public sealed class RawInputReceiver : IDisposable
     private const int RIDEV_DEVNOTIFY = 0x00002000;
     private const int RIDEV_REMOVE = 0x00000001;
     private const byte KeyboardReportId = 0xFF;
+    private const uint RIDI_PREPARSEDDATA = 0x20000005;
     private const uint RIDI_DEVICENAME = 0x20000007;
     private const uint RIDI_DEVICEINFO = 0x2000000b;
 
@@ -90,6 +91,17 @@ public sealed class RawInputReceiver : IDisposable
         uint uiCommand,
         IntPtr pData,
         ref uint pcbSize);
+
+    [DllImport("hid.dll", SetLastError = true)]
+    private static extern int HidP_GetUsages(
+        int ReportType,
+        ushort UsagePage,
+        ushort LinkCollection,
+        [Out] ushort[] UsageList,
+        ref uint UsageLength,
+        IntPtr PreparsedData,
+        IntPtr Report,
+        uint ReportLength);
 
     [DllImport("cfgmgr32.dll", EntryPoint = "CM_Get_Device_Interface_PropertyW", SetLastError = true)]
     private static extern uint CM_Get_Device_Interface_Property(
@@ -280,9 +292,11 @@ public sealed class RawInputReceiver : IDisposable
         if (!string.IsNullOrEmpty(devicePath))
         {
             string upper = devicePath.ToUpperInvariant();
-            if (upper.Contains("VID_18D1") || upper.Contains("VID&000218D1") || upper.Contains("VID&0118D1") ||
-                upper.Contains("VID_620A") || upper.Contains("VID&0002620A") || upper.Contains("VID&01620A") ||
-                upper.Contains("VID_2717") || upper.Contains("VID&00022717") || upper.Contains("VID&012717") ||
+            if (upper.Contains("VID_18D1") || upper.Contains("VID&000218D1") || upper.Contains("VID&0118D1") || upper.Contains("VID&0218D1") ||
+                upper.Contains("VID_620A") || upper.Contains("VID&0002620A") || upper.Contains("VID&01620A") || upper.Contains("VID&02620A") ||
+                upper.Contains("VID_2717") || upper.Contains("VID&00022717") || upper.Contains("VID&012717") || upper.Contains("VID&022717") ||
+                upper.Contains("PID_9450") || upper.Contains("PID&9450") ||
+                upper.Contains("PID_32B8") || upper.Contains("PID&32B8") ||
                 upper.Contains("T1-REMOTE"))
             {
                 return true;
@@ -297,22 +311,33 @@ public sealed class RawInputReceiver : IDisposable
         return false;
     }
 
-    public static bool EvaluateDeviceMatch(Guid? targetContainerId, IntPtr hDevice, string devicePath)
+    public static bool EvaluateDeviceMatch(Guid? targetContainerId, IntPtr hDevice, string devicePath, ulong targetBluetoothAddress = 0)
     {
         // SendInput events have no physical source. Admitting them feeds our
         // shortcut output back into the mapping pipeline indefinitely.
         if (hDevice == IntPtr.Zero) return false;
+
+        // 1. Direct match by Bluetooth MAC address in device path
+        if (targetBluetoothAddress != 0)
+        {
+            string macHex = targetBluetoothAddress.ToString("X").ToUpperInvariant();
+            if (macHex.Length >= 6 && devicePath.ToUpperInvariant().Contains(macHex))
+            {
+                return true;
+            }
+        }
+
         Guid? deviceContainerId = GetDeviceContainerId(devicePath);
 
         if (targetContainerId.HasValue)
         {
-            if (deviceContainerId.HasValue)
+            if (deviceContainerId.HasValue && deviceContainerId.Value == targetContainerId.Value)
             {
-                // Strict check: if both have Container ID, they MUST match!
-                return deviceContainerId.Value == targetContainerId.Value;
+                return true;
             }
 
-            // Target remote is known, but incoming device interface has no Container ID.
+            // Target remote is known, but incoming device interface may report a different container ID
+            // (e.g. AEP container ID vs PnP devnode container ID on BLE), or no container ID.
             // Require verified remote identity (VID / device path); unverified devices (standard keyboards) must be rejected.
             return IsKnownRemoteDevice(hDevice, devicePath);
         }
@@ -529,22 +554,59 @@ public sealed class RawInputReceiver : IDisposable
                     var slice = rawBytes.AsSpan(i * reportSize, reportSize);
                     AppLogger.Debug($"Remote HID button report: {Convert.ToHexString(slice)}", "RawInputReceiver");
                     bool recognized = false;
-                    List<RemoteButton> currentButtons;
-                    if (G9N9NProtocol.TryParseReport(slice, out currentButtons))
+                    List<RemoteButton> currentButtons = new();
+
+                    // 1. First try parsing through Windows HID API (HidP_GetUsages)
+                    uint preparsedSize = 0;
+                    GetRawInputDeviceInfo(hDevice, RIDI_PREPARSEDDATA, IntPtr.Zero, ref preparsedSize);
+                    if (preparsedSize > 0)
                     {
-                        recognized = true;
-                    }
-                    else if (T1RemoteProtocol.TryParseReport(slice, out currentButtons, out bool voiceHoldPressed))
-                    {
-                        recognized = true;
-                        if (voiceHoldPressed)
+                        IntPtr preparsed = Marshal.AllocHGlobal((int)preparsedSize);
+                        try
                         {
-                            PhysicalVoiceKeyPressed?.Invoke();
+                            if (GetRawInputDeviceInfo(hDevice, RIDI_PREPARSEDDATA, preparsed, ref preparsedSize) == preparsedSize)
+                            {
+                                uint usageLength = 16;
+                                ushort[] usages = new ushort[usageLength];
+                                IntPtr pReport = IntPtr.Add(buffer, dataOffset + (i * reportSize));
+                                if (HidP_GetUsages(0, 0x0C, 0, usages, ref usageLength, preparsed, pReport, (uint)reportSize) >= 0 && usageLength > 0)
+                                {
+                                    for (int u = 0; u < usageLength; u++)
+                                    {
+                                        if (G9N9NProtocol.ConsumerButtons.TryGetValue(usages[u], out var btn))
+                                        {
+                                            currentButtons.Add(btn);
+                                        }
+                                    }
+                                    recognized = true;
+                                }
+                            }
+                        }
+                        finally
+                        {
+                            Marshal.FreeHGlobal(preparsed);
                         }
                     }
-                    else if (XiaomiProtocol.TryParseReport(slice, out currentButtons))
+
+                    // 2. Fallback to protocol report parsers
+                    if (!recognized || currentButtons.Count == 0)
                     {
-                        recognized = true;
+                        if (G9N9NProtocol.TryParseReport(slice, out currentButtons))
+                        {
+                            recognized = true;
+                        }
+                        else if (T1RemoteProtocol.TryParseReport(slice, out currentButtons, out bool voiceHoldPressed))
+                        {
+                            recognized = true;
+                            if (voiceHoldPressed)
+                            {
+                                PhysicalVoiceKeyPressed?.Invoke();
+                            }
+                        }
+                        else if (XiaomiProtocol.TryParseReport(slice, out currentButtons))
+                        {
+                            recognized = true;
+                        }
                     }
 
                     if (!recognized)

@@ -20,6 +20,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly ConfigService _configService;
     private readonly IBluetoothManager _bluetoothManager;
     private readonly RawInputReceiver _rawInputReceiver = new();
+    private readonly HidDeviceReader _hidDeviceReader = new();
     private readonly RemoteVoiceKeyGuard _voiceKeyGuard;
     private readonly Dictionary<IntPtr, (Guid? Target, bool Accepted)> _deviceAdmissionLog = new();
     private ActiveVoiceSession? _activeVoiceSession;
@@ -68,7 +69,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    public event Action? RequestOpenOnboarding;
+    public event Action<WizardMode>? RequestOpenWizard;
 
     public MainViewModel(ConfigService configService, IBluetoothManager bluetoothManager)
     {
@@ -78,15 +79,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _bluetoothManager.SessionState is BluetoothSessionState.Opening or BluetoothSessionState.Streaming or BluetoothSessionState.Draining);
         _rawInputReceiver.PhysicalVoiceKeyPressed += _voiceKeyGuard.Arm;
 
-        GeneralVm = new GeneralViewModel(_configService, _bluetoothManager, () => RequestOpenOnboarding?.Invoke(), Navigate);
-        DevicesVm = new DevicesViewModel(_configService, _bluetoothManager, () => RequestOpenOnboarding?.Invoke());
+        GeneralVm = new GeneralViewModel(_configService, _bluetoothManager, mode => RequestOpenWizard?.Invoke(mode), Navigate);
+        DevicesVm = new DevicesViewModel(_configService, _bluetoothManager, mode => RequestOpenWizard?.Invoke(mode));
         MappingVm = new MappingViewModel(_configService);
-        IntegrationsVm = new IntegrationsViewModel(_configService);
+        IntegrationsVm = new IntegrationsViewModel(_configService, mode => RequestOpenWizard?.Invoke(mode));
         IntegrationsVm.OnConfigurationSaved = UpdateVoiceKeyGuard;
         EnvironmentVm = new EnvironmentViewModel();
         AppIntegrationVm = new AppIntegrationViewModel(_configService);
         AboutVm = new AboutViewModel();
-        SettingsVm = new SettingsViewModel(_configService, () => RequestOpenOnboarding?.Invoke());
+        SettingsVm = new SettingsViewModel(_configService, mode => RequestOpenWizard?.Invoke(mode));
         UpdateVoiceKeyGuard();
 
         _rawInputReceiver.DeviceFilter = IsTargetDevice;
@@ -97,6 +98,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _bluetoothManager.VoiceSessionEnded += OnVoiceSessionEnded;
         _bluetoothManager.VoiceButtonPressed += OnVoiceButtonPressed;
         _rawInputReceiver.ButtonEvent += OnRawButtonEvent;
+        _hidDeviceReader.ButtonEvent += OnHidButtonEvent;
+    }
+
+    private void OnHidButtonEvent(RemoteButton button, bool isDown)
+    {
+        OnRawButtonEvent(IntPtr.Zero, button, isDown);
     }
 
     private void OnConnectionStatusChanged(bool connected, string name)
@@ -113,6 +120,37 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 _voiceKeyGuard.Clear();
                 StopRepeatTimer();
                 _rawInputReceiver.ResetDeviceState();
+                _hidDeviceReader.Stop();
+            }
+            else
+            {
+                if (_registeredHwnd != IntPtr.Zero)
+                {
+                    _rawInputReceiver.Register(_registeredHwnd);
+                }
+
+                ulong addr = _bluetoothManager.ConnectedDeviceAddress;
+                if (addr != 0)
+                {
+                    var dev = _configService.Current.Devices.FirstOrDefault(d => d.BluetoothAddress == addr);
+                    var hidInfo = HidDeviceReader.FindBestDevice(addr);
+                    if (hidInfo != null)
+                    {
+                        if (dev != null)
+                        {
+                            dev.HidDevicePath = hidInfo.Path;
+                            dev.HidUsagePage = hidInfo.UsagePage;
+                            dev.HidUsage = hidInfo.Usage;
+                            dev.HidReportLength = hidInfo.InputReportByteLength;
+                            dev.HidCaptureStatus = "已就绪 (RawInput & Direct Stream)";
+                        }
+                        _hidDeviceReader.Start(hidInfo.Path, hidInfo.InputReportByteLength);
+                    }
+                    else
+                    {
+                        _hidDeviceReader.StartForRemote(addr);
+                    }
+                }
             }
         }
 
@@ -146,7 +184,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         void Update()
         {
             IsVoiceActive = true;
-            if (ActiveOnboardingVm is { CurrentStep: not 7 }) return;
+            if (ActiveOnboardingVm != null && ActiveOnboardingVm.CurrentWizardStep != WizardStep.TranscriptionVerify) return;
             UpdateVoiceKeyGuard();
             // ATVV is itself a verified remote source. Some Windows BLE HID
             // paths do not deliver a source-bearing F5 Raw Input event, so
@@ -217,7 +255,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         App.Current?.Dispatcher.BeginInvoke(new Action(() =>
         {
-            if (ActiveOnboardingVm?.CurrentStep == 4)
+            if (ActiveOnboardingVm?.CurrentWizardStep == WizardStep.ButtonTest)
                 ActiveOnboardingVm.NotifyButtonPressed(RemoteButton.Voice);
         }));
     }
@@ -260,8 +298,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         AppLogger.Debug($"VoiceKeyGuard updated: SuppressionEnabled={_voiceKeyGuard.IsSuppressionEnabled} (Shortcut='{shortcut}')", "MainViewModel");
     }
 
+    private IntPtr _registeredHwnd = IntPtr.Zero;
+
     public void RegisterRawInput(IntPtr hwnd)
     {
+        _registeredHwnd = hwnd;
         AppLogger.Info($"Remote voice F5 guard installed: {_voiceKeyGuard.Install()}", "MainViewModel");
         _rawInputReceiver.Register(hwnd);
     }
@@ -269,19 +310,25 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private bool IsTargetDevice(IntPtr hDevice, string devicePath)
     {
-        // 1. Establish HID vs BLE correspondence through official Windows Container ID
+        // 1. Establish HID vs BLE correspondence through official Windows Container ID or Bluetooth MAC
         Guid? targetContainerId = _bluetoothManager.ConnectedDeviceContainerId
             ?? ActiveOnboardingVm?.SelectedDevice?.ContainerId
             ?? _configService.Current.Devices.FirstOrDefault(d => d.Id == _configService.Current.SelectedDeviceId)?.ContainerId;
 
-        bool accepted = RawInputReceiver.EvaluateDeviceMatch(targetContainerId, hDevice, devicePath);
+        ulong targetAddress = _bluetoothManager.ConnectedDeviceAddress;
+        if (targetAddress == 0 && ActiveOnboardingVm?.SelectedDevice != null)
+        {
+            targetAddress = ActiveOnboardingVm.SelectedDevice.BluetoothAddress;
+        }
+
+        bool accepted = RawInputReceiver.EvaluateDeviceMatch(targetContainerId, hDevice, devicePath, targetAddress);
         if (!_deviceAdmissionLog.TryGetValue(hDevice, out var previous) ||
             previous != (targetContainerId, accepted))
         {
             if (_deviceAdmissionLog.Count > 100) _deviceAdmissionLog.Clear();
             _deviceAdmissionLog[hDevice] = (targetContainerId, accepted);
             AppLogger.Info($"RawInput device admission: Accepted={accepted}, TargetContainer={targetContainerId}, " +
-                $"InputContainer={RawInputReceiver.GetDeviceContainerId(devicePath)}, Path='{devicePath}'", "MainViewModel");
+                $"TargetAddress=0x{targetAddress:X12}, InputContainer={RawInputReceiver.GetDeviceContainerId(devicePath)}, Path='{devicePath}'", "MainViewModel");
         }
         return accepted;
     }
@@ -295,7 +342,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 ActiveOnboardingVm.NotifyButtonPressed(button);
             }
-            if (button != RemoteButton.Voice || ActiveOnboardingVm.CurrentStep is not (5 or 7))
+            if (button != RemoteButton.Voice || (ActiveOnboardingVm.CurrentWizardStep is not (WizardStep.AudioTest or WizardStep.TranscriptionVerify)))
                 return;
         }
 
@@ -488,6 +535,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _bluetoothManager.VoiceButtonPressed -= OnVoiceButtonPressed;
         _rawInputReceiver.ButtonEvent -= OnRawButtonEvent;
         _rawInputReceiver.PhysicalVoiceKeyPressed -= _voiceKeyGuard.Arm;
+        _hidDeviceReader.ButtonEvent -= OnHidButtonEvent;
+        _hidDeviceReader.Dispose();
 
         ReleaseHeldVoiceShortcut();
         _voiceKeyGuard.Dispose();

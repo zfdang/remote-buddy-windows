@@ -533,6 +533,12 @@ public class AudioDecoderAndProtocolTests
         Assert.True(RemoteBuddy.Platform.Windows.Input.RawInputReceiver.EvaluateDeviceMatch(
             targetContainer, (IntPtr)1234, remotePath));
 
+        // Issue #16 scenario: Windows BLE GATT prefix VID&0218D1 and PID&9450 with target Bluetooth MAC address
+        string g9n9nIssue16Path = @"\\?\HID#{00001812-0000-1000-8000-00805f9b34fb}_DEV_VID&0218D1_PID&9450_REV&0032_5347DD011BD0&COL01#{4d1e55b2-f16f-11cf-88cb-001111000030}";
+        ulong g9n9nMac = 0x5347DD011BD0;
+        Assert.True(RemoteBuddy.Platform.Windows.Input.RawInputReceiver.EvaluateDeviceMatch(
+            targetContainer, (IntPtr)1234, g9n9nIssue16Path, g9n9nMac));
+
         // When target remote is unknown (null): normal keyboard MUST be rejected!
         Assert.False(RemoteBuddy.Platform.Windows.Input.RawInputReceiver.EvaluateDeviceMatch(
             null, (IntPtr)1234, keyboardPath));
