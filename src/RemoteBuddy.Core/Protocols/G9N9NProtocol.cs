@@ -70,28 +70,34 @@ public static class G9N9NProtocol
         {
             slice = slice[1..];
         }
-
-        if (slice.Length < 2) return false;
-
-        if (slice[0] > IndexedConsumerUsages.Length || slice[1] > IndexedConsumerUsages.Length)
+        else if (slice.Length == 2 && slice[0] == 1)
         {
-            return false;
+            slice = slice[1..];
         }
 
-        for (int i = 0; i < 2; i++)
+        if (slice.IsEmpty) return false;
+
+        bool hasValidIndex = false;
+        for (int i = 0; i < slice.Length && i < 2; i++)
         {
             byte index = slice[i];
-            if (index > 0 && index <= IndexedConsumerUsages.Length)
+            if (index == 0) continue;
+            if (index <= IndexedConsumerUsages.Length)
             {
+                hasValidIndex = true;
                 ushort usage = IndexedConsumerUsages[index - 1];
                 if (ConsumerButtons.TryGetValue(usage, out var btn))
                 {
                     buttons.Add(btn);
                 }
             }
+            else
+            {
+                return false;
+            }
         }
 
-        return true;
+        return buttons.Count > 0 || hasValidIndex || (slice.Length >= 1 && slice[0] == 0);
     }
 
     public static bool TryParseReport2(ReadOnlySpan<byte> data, out List<RemoteButton> buttons)
@@ -130,8 +136,28 @@ public static class G9N9NProtocol
         buttons = new();
         if (data.IsEmpty) return false;
 
-        // With Report ID 1 (Report 1 is 1 byte ID + 2 bytes data)
-        if (data.Length >= 3 && data[0] == 1)
+        // Case: 1 byte (short report payload or release)
+        if (data.Length == 1)
+        {
+            byte val = data[0];
+            if (val == 0)
+            {
+                return true; // release
+            }
+            if (val <= IndexedConsumerUsages.Length)
+            {
+                ushort usage = IndexedConsumerUsages[val - 1];
+                if (ConsumerButtons.TryGetValue(usage, out var btn))
+                {
+                    buttons.Add(btn);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // With Report ID 1 (Report 1 is 1 byte ID + 1 or 2 bytes data)
+        if (data.Length >= 2 && data[0] == 1)
         {
             return TryParseReport1(data, out buttons);
         }

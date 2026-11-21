@@ -22,14 +22,18 @@ public class ConvertersAndViewModelTests
         public float CurrentGain { get; set; } = 1.0f;
         public BluetoothSessionState SessionState => BluetoothSessionState.Idle;
         public string ConnectedDeviceName => string.Empty;
+        public ulong ConnectedDeviceAddress => 0;
         public Guid? ConnectedDeviceContainerId => null;
 
-        public event Action<RemoteDevice>? DeviceDiscovered { add { } remove { } }
+        public event Action<RemoteDevice>? DeviceDiscovered;
         public event Action<bool, string>? ConnectionStatusChanged { add { } remove { } }
         public event Action<float>? AudioLevelChanged { add { } remove { } }
         public event Action? VoiceButtonPressed { add { } remove { } }
         public event Action? VoiceSessionStarted { add { } remove { } }
-        public event Action? VoiceSessionEnded { add { } remove { } }
+        public event Action? VoiceSessionEnded;
+
+        public void RaiseDeviceDiscovered(RemoteDevice dev) => DeviceDiscovered?.Invoke(dev);
+        public void RaiseVoiceSessionEnded() => VoiceSessionEnded?.Invoke();
 
         public void StartScanning() => IsScanning = true;
         public void StopScanning() => IsScanning = false;
@@ -210,5 +214,109 @@ public class ConvertersAndViewModelTests
         Assert.False(string.IsNullOrEmpty(vm.Architecture));
         Assert.False(string.IsNullOrEmpty(vm.Runtime));
         Assert.False(string.IsNullOrEmpty(vm.LogDirectoryPath));
+    }
+
+    [Fact]
+    public void OnboardingViewModel_ScopedWizards_FollowExpectedPath()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-wizard-{Guid.NewGuid():N}.json");
+        var config = new ConfigService(path);
+        var dummyBt = new DummyBluetoothManager();
+
+        // 1. DeviceOnly wizard test: 4 steps (Connect -> Buttons -> Audio -> Complete)
+        var deviceWizard = new OnboardingViewModel(config, dummyBt, WizardMode.DeviceOnly);
+        Assert.Equal(WizardMode.DeviceOnly, deviceWizard.Mode);
+        Assert.Equal(1, deviceWizard.CurrentStep);
+        Assert.Equal(WizardStep.DeviceConnect, deviceWizard.CurrentWizardStep);
+
+        deviceWizard.IsDeviceConnected = true;
+        deviceWizard.NextStep();
+        Assert.Equal(2, deviceWizard.CurrentStep);
+        Assert.Equal(WizardStep.ButtonTest, deviceWizard.CurrentWizardStep);
+
+        deviceWizard.NotifyButtonPressed(RemoteButton.Ok);
+        deviceWizard.NextStep();
+        Assert.Equal(3, deviceWizard.CurrentStep);
+        Assert.Equal(WizardStep.AudioTest, deviceWizard.CurrentWizardStep);
+
+        deviceWizard.HasAudioTested = true;
+        deviceWizard.NextStep();
+        Assert.Equal(4, deviceWizard.CurrentStep);
+        Assert.Equal(WizardStep.Complete, deviceWizard.CurrentWizardStep);
+        deviceWizard.Dispose();
+        // Disposed without Complete(): device list must remain empty
+        Assert.Empty(config.Current.Devices);
+
+        // 2. Integration wizard test: 3 steps (Tool selection -> Transcription test -> Complete)
+        var intWizard = new OnboardingViewModel(config, dummyBt, WizardMode.Integration);
+        Assert.Equal(WizardMode.Integration, intWizard.Mode);
+        Assert.Equal(1, intWizard.CurrentStep);
+        Assert.Equal(WizardStep.ImeConfig, intWizard.CurrentWizardStep);
+
+        intWizard.SelectedTool = TargetInputTool.WeChatInput;
+        intWizard.ShortcutText = "Ctrl+F5";
+        intWizard.NextStep();
+        Assert.Equal(2, intWizard.CurrentStep);
+        Assert.Equal(WizardStep.TranscriptionVerify, intWizard.CurrentWizardStep);
+
+        dummyBt.RaiseVoiceSessionEnded();
+        intWizard.TranscriptionTestText = "语音转写测试";
+        intWizard.IsTranscriptionVerified = true;
+        intWizard.NextStep();
+        Assert.Equal(3, intWizard.CurrentStep);
+        Assert.Equal(WizardStep.Complete, intWizard.CurrentWizardStep);
+        intWizard.Complete();
+        Assert.True(intWizard.IsCompleted);
+        intWizard.Dispose();
+    }
+
+    [Fact]
+    public void DevicesViewModel_OnlyShowsConfiguredDevices_AndIgnoresRawDiscoveredDevices()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-devvm-{Guid.NewGuid():N}.json");
+        var config = new ConfigService(path);
+        var dummyBt = new DummyBluetoothManager();
+
+        var vm = new DevicesViewModel(config, dummyBt);
+        Assert.False(vm.HasDevices);
+        Assert.Empty(vm.DiscoveredDevices);
+
+        // Raw device discovered over Bluetooth should NOT be added to DiscoveredDevices
+        dummyBt.RaiseDeviceDiscovered(new RemoteDevice
+        {
+            Id = "random-unpaired",
+            Name = "Air Device",
+            BluetoothAddress = 0xAABBCCDDEEFF,
+            ModelType = RemoteModelType.GoogleG9N9N
+        });
+
+        Assert.False(vm.HasDevices);
+        Assert.Empty(vm.DiscoveredDevices);
+
+        // When a configured device is added and reloaded
+        config.Current.Devices.Add(new RemoteDevice
+        {
+            Id = "configured-device",
+            Name = "My G9N9N",
+            BluetoothAddress = 0x112233445566,
+            ModelType = RemoteModelType.GoogleG9N9N
+        });
+        vm.Reload();
+
+        Assert.True(vm.HasDevices);
+        Assert.Single(vm.DiscoveredDevices);
+        Assert.Equal("My G9N9N", vm.DiscoveredDevices[0].Name);
+
+        // Discovered update for existing configured device updates its properties
+        dummyBt.RaiseDeviceDiscovered(new RemoteDevice
+        {
+            Id = "configured-device",
+            Name = "My G9N9N Updated",
+            BluetoothAddress = 0x112233445566,
+            ModelType = RemoteModelType.GoogleG9N9N
+        });
+
+        Assert.Equal("My G9N9N Updated", vm.DiscoveredDevices[0].Name);
+        Assert.Single(vm.DiscoveredDevices);
     }
 }

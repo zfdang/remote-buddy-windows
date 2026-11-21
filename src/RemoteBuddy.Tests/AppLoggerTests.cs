@@ -6,6 +6,7 @@ using Xunit;
 
 namespace RemoteBuddy.Tests;
 
+[Collection("AppLogger")]
 public class AppLoggerTests : IDisposable
 {
     private readonly string _tempLogDir;

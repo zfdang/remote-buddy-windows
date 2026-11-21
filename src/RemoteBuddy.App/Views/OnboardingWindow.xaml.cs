@@ -4,7 +4,9 @@
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Interop;
 using RemoteBuddy.App.ViewModels;
+using RemoteBuddy.Core.Models;
 
 namespace RemoteBuddy.App.Views;
 
@@ -17,8 +19,39 @@ public partial class OnboardingWindow : Window
         Closed += OnClosed;
     }
 
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        var hwnd = new WindowInteropHelper(this).Handle;
+        HwndSource.FromHwnd(hwnd)?.AddHook(WndProc);
+        if (Application.Current?.MainWindow?.DataContext is MainViewModel vm)
+        {
+            vm.RegisterRawInput(hwnd);
+        }
+    }
+
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg == 0x00FF /* WM_INPUT */)
+        {
+            if (Application.Current?.MainWindow?.DataContext is MainViewModel vm)
+            {
+                vm.ProcessRawInput(lParam);
+            }
+        }
+        return IntPtr.Zero;
+    }
+
     private void OnClosed(object? sender, EventArgs e)
     {
+        if (Application.Current?.MainWindow is { } mw)
+        {
+            var hwnd = new WindowInteropHelper(mw).Handle;
+            if (mw.DataContext is MainViewModel mainVm)
+            {
+                mainVm.RegisterRawInput(hwnd);
+            }
+        }
         if (DataContext is OnboardingViewModel vm)
         {
             vm.PropertyChanged -= OnVmPropertyChanged;
@@ -28,14 +61,25 @@ public partial class OnboardingWindow : Window
 
     protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
-        // The remote also produces normal Windows keyboard input. During the
-        // button test, keep arrows and Enter (OK) from navigating or activating controls;
-        // Raw Input still delivers their physical button events independently.
-        if (DataContext is OnboardingViewModel { CurrentStep: 4 } &&
-            e.Key is Key.Up or Key.Down or Key.Left or Key.Right or Key.Return)
+        if (DataContext is OnboardingViewModel vm && vm.CurrentWizardStep == WizardStep.ButtonTest)
         {
-            e.Handled = true;
-            return;
+            var button = e.Key switch
+            {
+                Key.Up => RemoteButton.Up,
+                Key.Down => RemoteButton.Down,
+                Key.Left => RemoteButton.Left,
+                Key.Right => RemoteButton.Right,
+                Key.Return => RemoteButton.Ok,
+                Key.Back or Key.Escape => RemoteButton.Back,
+                _ => RemoteButton.None
+            };
+
+            if (button != RemoteButton.None)
+            {
+                vm.NotifyButtonPressed(button);
+                e.Handled = true;
+                return;
+            }
         }
         base.OnPreviewKeyDown(e);
     }
@@ -45,7 +89,7 @@ public partial class OnboardingWindow : Window
         if (DataContext is OnboardingViewModel vm)
         {
             vm.PropertyChanged += OnVmPropertyChanged;
-            UpdatePanels(vm.CurrentStep);
+            UpdatePanels(vm.CurrentWizardStep);
         }
     }
 
@@ -53,19 +97,19 @@ public partial class OnboardingWindow : Window
     {
         if (e.PropertyName == nameof(OnboardingViewModel.CurrentStep) && sender is OnboardingViewModel vm)
         {
-            UpdatePanels(vm.CurrentStep);
+            UpdatePanels(vm.CurrentWizardStep);
         }
     }
 
-    private void UpdatePanels(int step)
+    private void UpdatePanels(WizardStep step)
     {
-        Step1Panel.Visibility = step == 1 ? Visibility.Visible : Visibility.Collapsed;
-        Step2Panel.Visibility = step == 2 ? Visibility.Visible : Visibility.Collapsed;
-        Step3Panel.Visibility = step == 3 ? Visibility.Visible : Visibility.Collapsed;
-        Step4Panel.Visibility = step == 4 ? Visibility.Visible : Visibility.Collapsed;
-        Step5Panel.Visibility = step == 5 ? Visibility.Visible : Visibility.Collapsed;
-        Step6Panel.Visibility = step == 6 ? Visibility.Visible : Visibility.Collapsed;
-        Step7Panel.Visibility = step == 7 ? Visibility.Visible : Visibility.Collapsed;
-        Step8Panel.Visibility = step == 8 ? Visibility.Visible : Visibility.Collapsed;
+        Step1Panel.Visibility = step == WizardStep.Welcome ? Visibility.Visible : Visibility.Collapsed;
+        Step2Panel.Visibility = step == WizardStep.DriverCheck ? Visibility.Visible : Visibility.Collapsed;
+        Step3Panel.Visibility = step == WizardStep.DeviceConnect ? Visibility.Visible : Visibility.Collapsed;
+        Step4Panel.Visibility = step == WizardStep.ButtonTest ? Visibility.Visible : Visibility.Collapsed;
+        Step5Panel.Visibility = step == WizardStep.AudioTest ? Visibility.Visible : Visibility.Collapsed;
+        Step6Panel.Visibility = step == WizardStep.ImeConfig ? Visibility.Visible : Visibility.Collapsed;
+        Step7Panel.Visibility = step == WizardStep.TranscriptionVerify ? Visibility.Visible : Visibility.Collapsed;
+        Step8Panel.Visibility = step == WizardStep.Complete ? Visibility.Visible : Visibility.Collapsed;
     }
 }

@@ -51,6 +51,32 @@ public partial class RemoteDevice : ObservableObject
     [ObservableProperty]
     private G9N9NVoiceButtonMode _voiceButtonMode = G9N9NVoiceButtonMode.SmartToggle;
 
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasHidInfo))]
+    [NotifyPropertyChangedFor(nameof(HidSpecSummary))]
+    private string? _hidDevicePath;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HidSpecSummary))]
+    private ushort _hidUsagePage;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HidSpecSummary))]
+    private ushort _hidUsage;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HidSpecSummary))]
+    private int _hidReportLength;
+
+    [ObservableProperty]
+    private string _hidCaptureStatus = "待匹配";
+
+    public bool HasHidInfo => !string.IsNullOrEmpty(HidDevicePath);
+
+    public string HidSpecSummary => HidUsagePage != 0
+        ? $"Page 0x{HidUsagePage:X4} · Usage 0x{HidUsage:X4} · 报告 {HidReportLength} 字节"
+        : "标准 Consumer Control (待检测)";
+
     public bool IsG9N9N => ModelType is RemoteModelType.GoogleG9N9N or RemoteModelType.GoogleGY3LE;
     public bool IsT1 => ModelType == RemoteModelType.T1Remote;
     public bool IsXiaomi => !IsG9N9N && !IsT1;

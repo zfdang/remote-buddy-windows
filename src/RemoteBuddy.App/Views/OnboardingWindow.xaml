@@ -5,7 +5,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="clr-namespace:RemoteBuddy.App.ViewModels"
         mc:Ignorable="d"
-        Title="设置向导 - Remote Buddy" Height="600" Width="800"
+        Title="{Binding WindowTitle}" Height="600" Width="800"
         Icon="/Resources/app.ico"
         ResizeMode="NoResize" WindowStartupLocation="CenterScreen"
         Background="{StaticResource PrimaryBackgroundBrush}">
@@ -20,7 +20,7 @@
         <Border Grid.Row="0" Margin="0,0,0,16" Padding="0,0,0,14" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="0,0,0,1">
             <DockPanel>
                 <TextBlock Text="{Binding StepTitle}" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" VerticalAlignment="Center"/>
-                <TextBlock Text="{Binding CurrentStep, StringFormat='第 {0} / 8 步'}" Foreground="{StaticResource SecondaryTextBrush}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                <TextBlock Text="{Binding StepProgressText}" Foreground="{StaticResource SecondaryTextBrush}" HorizontalAlignment="Right" VerticalAlignment="Center"/>
             </DockPanel>
         </Border>
 
@@ -139,8 +139,8 @@
 
             <!-- Step 8: Completion -->
             <StackPanel x:Name="Step8Panel" Visibility="Collapsed">
-                <TextBlock Text="🎉 配置全部完成！" FontSize="20" FontWeight="Bold" Foreground="#00CC66" Margin="0,0,0,10"/>
-                <TextBlock Text="所有音频链路与输入法快捷键已就绪。在任意应用程序或文档中，拿起遥控器按住说话即可畅享语音输入。" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,20"/>
+                <TextBlock Text="{Binding CompleteSummaryTitle}" FontSize="20" FontWeight="Bold" Foreground="#00CC66" Margin="0,0,0,10"/>
+                <TextBlock Text="{Binding CompleteSummaryDescription}" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,20"/>
             </StackPanel>
         </Grid>
 
