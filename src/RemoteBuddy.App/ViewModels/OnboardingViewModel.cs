@@ -316,8 +316,13 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
         UpdateStepMetadata();
     }
 
+    private bool _isDisposed = false;
+
     public void Dispose()
     {
+        if (_isDisposed) return;
+        _isDisposed = true;
+
         if (IsScanning)
         {
             _bt.StopScanning();
@@ -654,9 +659,9 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
 
     private void UpdateStepMetadata()
     {
-        if (Mode == WizardMode.Full)
+        StepTitle = Mode switch
         {
-            StepTitle = CurrentWizardStep switch
+            WizardMode.Full => CurrentWizardStep switch
             {
                 WizardStep.Welcome => "第 1 步：欢迎与界面语言",
                 WizardStep.DriverCheck => "第 2 步：虚拟麦克风驱动检查 (VB-CABLE)",
@@ -667,19 +672,25 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
                 WizardStep.TranscriptionVerify => "第 7 步：真实输入法转写验收",
                 WizardStep.Complete => "第 8 步：设置完成与使用说明",
                 _ => "首次设置向导"
-            };
-        }
-        else
-        {
-            StepTitle = CurrentWizardStep switch
+            },
+            WizardMode.Integration => CurrentWizardStep switch
+            {
+                WizardStep.ImeConfig => "第 1 步：配置目标语音输入工具",
+                WizardStep.TranscriptionVerify => "第 2 步：真实输入法转写验收",
+                WizardStep.Complete => "第 3 步：输入法集成配置完成",
+                _ => "输入法集成向导"
+            },
+            _ => CurrentWizardStep switch
             {
                 WizardStep.DeviceConnect => "第 1 步：选择并连接遥控器",
                 WizardStep.ButtonTest => "第 2 步：遥控器按键响应测试",
                 WizardStep.AudioTest => "第 3 步：麦克风拾音与动态波形测试",
                 WizardStep.Complete => "第 4 步：遥控器添加完成",
                 _ => "添加遥控器向导"
-            };
-        }
+            }
+        };
+
+        OnPropertyChanged(nameof(CurrentWizardStep));
         OnPropertyChanged(nameof(StepProgressText));
         OnPropertyChanged(nameof(CompleteSummaryTitle));
         OnPropertyChanged(nameof(CompleteSummaryDescription));

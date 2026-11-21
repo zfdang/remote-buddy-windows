@@ -12,4 +12,10 @@
     <PackageReference Include="NAudio.Wasapi" Version="22.0.0" />
     <PackageReference Include="NAudio.Core" Version="2.2.1" />
   </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>RemoteBuddy.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
 </Project>

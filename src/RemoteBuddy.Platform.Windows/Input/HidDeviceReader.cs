@@ -211,11 +211,20 @@ public sealed class HidDeviceReader : IDisposable
         return null;
     }
 
+    public static bool PathMatchesVendorId(string pathUpper, ushort vendorId)
+    {
+        if (vendorId == 0) return false;
+        string v = vendorId.ToString("X4");
+        return pathUpper.Contains($"VID&0001{v}") ||
+               pathUpper.Contains($"VID&0002{v}") ||
+               pathUpper.Contains($"VID&01{v}") ||
+               pathUpper.Contains($"VID&02{v}") ||
+               pathUpper.Contains($"VID_{v}");
+    }
+
     public static HidDeviceInfo? FindBestDevice(ulong bluetoothAddress, ushort vendorId = 0)
     {
         string addrHex = bluetoothAddress != 0 ? bluetoothAddress.ToString("X").ToUpperInvariant() : string.Empty;
-        string vidHex = vendorId != 0 ? $"VID&01{vendorId:X4}" : string.Empty;
-        string vidHex02 = vendorId != 0 ? $"VID&02{vendorId:X4}" : string.Empty;
 
         var paths = EnumerateHidDevicePaths();
         var matching = new List<HidDeviceInfo>();
@@ -223,7 +232,7 @@ public sealed class HidDeviceReader : IDisposable
         {
             string upper = p.ToUpperInvariant();
             bool match = (!string.IsNullOrEmpty(addrHex) && addrHex.Length >= 6 && upper.Contains(addrHex))
-                || (!string.IsNullOrEmpty(vidHex) && (upper.Contains(vidHex) || upper.Contains(vidHex02)));
+                || PathMatchesVendorId(upper, vendorId);
 
             if (match)
             {
@@ -367,8 +376,6 @@ public sealed class HidDeviceReader : IDisposable
                 if (bytesRead > 0)
                 {
                     var slice = buffer.AsSpan(0, (int)bytesRead);
-                    AppLogger.Debug($"HidDeviceReader raw report: {Convert.ToHexString(slice)}", "HidDeviceReader");
-
                     List<RemoteButton> currentButtons;
                     if (G9N9NProtocol.TryParseReport(slice, out currentButtons) ||
                         T1RemoteProtocol.TryParseReport(slice, out currentButtons, out _) ||

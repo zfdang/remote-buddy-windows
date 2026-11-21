@@ -27,114 +27,156 @@ public sealed class G9N9NSmartToggleSession
         Closing
     }
 
-    public Phase CurrentPhase { get; private set; } = Phase.Idle;
-    public ulong Generation { get; private set; } = 0;
+    private readonly object _lock = new();
+
+    private Phase _currentPhase = Phase.Idle;
+    public Phase CurrentPhase
+    {
+        get { lock (_lock) return _currentPhase; }
+        private set { lock (_lock) _currentPhase = value; }
+    }
+
+    private ulong _generation = 0;
+    public ulong Generation
+    {
+        get { lock (_lock) return _generation; }
+        private set { lock (_lock) _generation = value; }
+    }
 
     private long _startedAtMs = 0;
     private long? _physicalReleasedAtMs = null;
 
-    public bool IsActive => CurrentPhase != Phase.Idle;
-    public bool IsAwaitingReopen => CurrentPhase == Phase.AwaitingReopen;
-    public bool IsHandsFreeActive => CurrentPhase == Phase.HandsFreeActive;
-    public bool IsClosing => CurrentPhase == Phase.Closing;
+    public bool IsActive { get { lock (_lock) return _currentPhase != Phase.Idle; } }
+    public bool IsAwaitingReopen { get { lock (_lock) return _currentPhase == Phase.AwaitingReopen; } }
+    public bool IsHandsFreeActive { get { lock (_lock) return _currentPhase == Phase.HandsFreeActive; } }
+    public bool IsClosing { get { lock (_lock) return _currentPhase == Phase.Closing; } }
 
-    public bool IsAwaitingReopenWithPendingPreparationRelease =>
-        CurrentPhase == Phase.PhysicalPressed && _physicalReleasedAtMs.HasValue;
+    public bool IsAwaitingReopenWithPendingPreparationRelease
+    {
+        get { lock (_lock) return _currentPhase == Phase.PhysicalPressed && _physicalReleasedAtMs.HasValue; }
+    }
 
     public void BeginPhysicalPress(long nowMs)
     {
-        Generation++;
-        CurrentPhase = Phase.PhysicalPressed;
-        _startedAtMs = nowMs;
-        _physicalReleasedAtMs = null;
+        lock (_lock)
+        {
+            _generation++;
+            _currentPhase = Phase.PhysicalPressed;
+            _startedAtMs = nowMs;
+            _physicalReleasedAtMs = null;
+        }
     }
 
     public bool RecordShortReleaseDuringPreparation(bool isRemoteStop, bool localCloseRequested, long nowMs)
     {
-        if (CurrentPhase != Phase.PhysicalPressed || !isRemoteStop || localCloseRequested)
-            return false;
-
-        long releaseTime = _physicalReleasedAtMs ?? nowMs;
-        if (releaseTime - _startedAtMs < HoldThresholdMs)
+        lock (_lock)
         {
-            _physicalReleasedAtMs = releaseTime;
-            return true;
-        }
+            if (_currentPhase != Phase.PhysicalPressed || !isRemoteStop || localCloseRequested)
+                return false;
 
-        return false;
+            long releaseTime = _physicalReleasedAtMs ?? nowMs;
+            if (releaseTime - _startedAtMs < HoldThresholdMs)
+            {
+                _physicalReleasedAtMs = releaseTime;
+                return true;
+            }
+
+            return false;
+        }
     }
 
     public bool ShouldReopenOnPhysicalStop(bool isRemoteStop, bool localCloseRequested, long nowMs)
     {
-        if (CurrentPhase != Phase.PhysicalPressed || !isRemoteStop || localCloseRequested)
-            return false;
+        lock (_lock)
+        {
+            if (_currentPhase != Phase.PhysicalPressed || !isRemoteStop || localCloseRequested)
+                return false;
 
-        long releaseTime = _physicalReleasedAtMs ?? nowMs;
-        return (releaseTime - _startedAtMs) < HoldThresholdMs;
+            long releaseTime = _physicalReleasedAtMs ?? nowMs;
+            return (releaseTime - _startedAtMs) < HoldThresholdMs;
+        }
     }
 
     public ulong EnterAwaitingReopen()
     {
-        Generation++;
-        CurrentPhase = Phase.AwaitingReopen;
-        return Generation;
+        lock (_lock)
+        {
+            _generation++;
+            _currentPhase = Phase.AwaitingReopen;
+            return _generation;
+        }
     }
 
     public ulong? EnterHandsFreeActive()
     {
-        if (CurrentPhase != Phase.AwaitingReopen) return null;
-        Generation++;
-        CurrentPhase = Phase.HandsFreeActive;
-        return Generation;
+        lock (_lock)
+        {
+            if (_currentPhase != Phase.AwaitingReopen) return null;
+            _generation++;
+            _currentPhase = Phase.HandsFreeActive;
+            return _generation;
+        }
     }
 
     public bool ShouldStopOnRemoteOpenRequest()
     {
-        return CurrentPhase switch
+        lock (_lock)
         {
-            Phase.PhysicalPressed => _physicalReleasedAtMs.HasValue,
-            Phase.AwaitingReopen or Phase.HandsFreeActive or Phase.Closing => true,
-            _ => false
-        };
+            return _currentPhase switch
+            {
+                Phase.PhysicalPressed => _physicalReleasedAtMs.HasValue,
+                Phase.AwaitingReopen or Phase.HandsFreeActive or Phase.Closing => true,
+                _ => false
+            };
+        }
     }
 
     public bool ShouldStopOnRemoteAudioStart(byte? interaction, byte? activeSessionId, byte? incomingSessionId)
     {
-        return CurrentPhase switch
+        lock (_lock)
         {
-            Phase.Closing => true,
-            Phase.HandsFreeActive =>
-                interaction == 0x03 || (incomingSessionId.HasValue && incomingSessionId != activeSessionId),
-            Phase.AwaitingReopen => interaction == 0x03,
-            Phase.PhysicalPressed => _physicalReleasedAtMs.HasValue && interaction == 0x03,
-            _ => false
-        };
+            return _currentPhase switch
+            {
+                Phase.Closing => true,
+                Phase.HandsFreeActive =>
+                    interaction == 0x03 || (incomingSessionId.HasValue && incomingSessionId != activeSessionId),
+                Phase.AwaitingReopen => interaction == 0x03,
+                Phase.PhysicalPressed => _physicalReleasedAtMs.HasValue && interaction == 0x03,
+                _ => false
+            };
+        }
     }
 
     public ulong? EnterClosing()
     {
-        switch (CurrentPhase)
+        lock (_lock)
         {
-            case Phase.PhysicalPressed when _physicalReleasedAtMs.HasValue:
-            case Phase.AwaitingReopen:
-            case Phase.HandsFreeActive:
-                Generation++;
-                CurrentPhase = Phase.Closing;
-                return Generation;
+            switch (_currentPhase)
+            {
+                case Phase.PhysicalPressed when _physicalReleasedAtMs.HasValue:
+                case Phase.AwaitingReopen:
+                case Phase.HandsFreeActive:
+                    _generation++;
+                    _currentPhase = Phase.Closing;
+                    return _generation;
 
-            case Phase.Closing:
-                return Generation;
+                case Phase.Closing:
+                    return _generation;
 
-            default:
-                return null;
+                default:
+                    return null;
+            }
         }
     }
 
     public void Reset()
     {
-        Generation++;
-        CurrentPhase = Phase.Idle;
-        _startedAtMs = 0;
-        _physicalReleasedAtMs = null;
+        lock (_lock)
+        {
+            _generation++;
+            _currentPhase = Phase.Idle;
+            _startedAtMs = 0;
+            _physicalReleasedAtMs = null;
+        }
     }
 }

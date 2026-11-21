@@ -23,7 +23,7 @@
                     <DockPanel LastChildFill="False" Margin="0,0,0,12">
                         <TextBlock Text="VB-CABLE 虚拟麦克风音频驱动" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" DockPanel.Dock="Left"/>
                         <Border Background="#1C3827" BorderBrush="#2D6A42" BorderThickness="1" CornerRadius="10" Padding="10,3" DockPanel.Dock="Right">
-                            <TextBlock Text="{Binding DriverStatus}" Foreground="#44FF88" FontSize="12" FontWeight="Medium"/>
+                            <TextBlock Text="{Binding DriverStatusBadgeText}" Foreground="#44FF88" FontSize="12" FontWeight="Medium"/>
                         </Border>
                     </DockPanel>
 
@@ -55,7 +55,7 @@
                             <StackPanel>
                                 <TextBlock Text="📶 WinRT BLE" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
                                 <TextBlock Text="Windows.Devices.Bluetooth" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,3,0,8"/>
-                                <TextBlock Text="🟢 正常运行" FontSize="12" Foreground="#00CC66"/>
+                                <TextBlock Text="Windows 原生蓝牙协议栈" FontSize="12" Foreground="{StaticResource SecondaryTextBrush}"/>
                             </StackPanel>
                         </Border>
 
@@ -64,7 +64,7 @@
                             <StackPanel>
                                 <TextBlock Text="⌨️ RawInput" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
                                 <TextBlock Text="WM_INPUT 硬件监听" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,3,0,8"/>
-                                <TextBlock Text="🟢 正常运行" FontSize="12" Foreground="#00CC66"/>
+                                <TextBlock Text="免独占硬件报文监听" FontSize="12" Foreground="{StaticResource SecondaryTextBrush}"/>
                             </StackPanel>
                         </Border>
 
@@ -73,7 +73,7 @@
                             <StackPanel>
                                 <TextBlock Text="🛡️ KeyGuard" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
                                 <TextBlock Text="LowLevel Keyboard Hook" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,3,0,8"/>
-                                <TextBlock Text="🟢 正常运行" FontSize="12" Foreground="#00CC66"/>
+                                <TextBlock Text="系统级低级钩子保护" FontSize="12" Foreground="{StaticResource SecondaryTextBrush}"/>
                             </StackPanel>
                         </Border>
                     </Grid>

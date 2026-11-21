@@ -69,6 +69,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    private readonly object _buttonDedupLock = new();
+    private RemoteButton _lastDedupButton = RemoteButton.None;
+    private bool _lastDedupIsDown = false;
+    private long _lastDedupTimeMs = 0;
+
     public event Action<WizardMode>? RequestOpenWizard;
 
     public MainViewModel(ConfigService configService, IBluetoothManager bluetoothManager)
@@ -103,7 +108,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnHidButtonEvent(RemoteButton button, bool isDown)
     {
-        OnRawButtonEvent(IntPtr.Zero, button, isDown);
+        if (System.Windows.Application.Current?.Dispatcher != null && !System.Windows.Application.Current.Dispatcher.CheckAccess())
+        {
+            System.Windows.Application.Current.Dispatcher.BeginInvoke(new Action(() => OnRawButtonEvent(IntPtr.Zero, button, isDown)));
+        }
+        else
+        {
+            OnRawButtonEvent(IntPtr.Zero, button, isDown);
+        }
     }
 
     private void OnConnectionStatusChanged(bool connected, string name)
@@ -130,9 +142,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
 
                 ulong addr = _bluetoothManager.ConnectedDeviceAddress;
+                var dev = _configService.Current.Devices.FirstOrDefault(d => 
+                    (addr != 0 && d.BluetoothAddress == addr) || 
+                    d.Id == _configService.Current.SelectedDeviceId);
+                if (dev != null)
+                {
+                    _bluetoothManager.VoiceButtonMode = dev.VoiceButtonMode;
+                }
+
                 if (addr != 0)
                 {
-                    var dev = _configService.Current.Devices.FirstOrDefault(d => d.BluetoothAddress == addr);
                     var hidInfo = HidDeviceReader.FindBestDevice(addr);
                     if (hidInfo != null)
                     {
@@ -335,6 +354,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnRawButtonEvent(IntPtr hDevice, RemoteButton button, bool isDown)
     {
+        lock (_buttonDedupLock)
+        {
+            long now = Environment.TickCount64;
+            if (button == _lastDedupButton && isDown == _lastDedupIsDown && (now - _lastDedupTimeMs) < 60)
+            {
+                AppLogger.Debug($"Suppressing duplicate button event: {button} isDown={isDown} within {now - _lastDedupTimeMs}ms", "MainViewModel");
+                return;
+            }
+            _lastDedupButton = button;
+            _lastDedupIsDown = isDown;
+            _lastDedupTimeMs = now;
+        }
+
         if (ActiveOnboardingVm != null)
         {
             StopRepeatTimer();

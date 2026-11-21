@@ -14,7 +14,6 @@ Write-Host "=== Remote Buddy Windows Build Script ===" -ForegroundColor Cyan
 $dotnetCmd = Get-Command "dotnet" -ErrorAction SilentlyContinue
 if (-not $dotnetCmd) {
     $candidates = @(
-        "C:\Users\Zhengfa Dang\Documents\Codex\2026-11-02\https-github-com-zfdang-voice-input\work\dotnet\dotnet.exe",
         "C:\Program Files\dotnet\dotnet.exe",
         "C:\Program Files (x86)\dotnet\dotnet.exe",
         "$env:LOCALAPPDATA\Microsoft\dotnet\dotnet.exe",

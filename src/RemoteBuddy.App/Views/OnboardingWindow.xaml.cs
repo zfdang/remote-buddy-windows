@@ -63,6 +63,22 @@ public partial class OnboardingWindow : Window
     {
         if (DataContext is OnboardingViewModel vm && vm.CurrentWizardStep == WizardStep.ButtonTest)
         {
+            // Do not swallow Escape so dialog cancellation always works.
+            if (e.Key == Key.Escape)
+            {
+                base.OnPreviewKeyDown(e);
+                return;
+            }
+
+            // Do not intercept navigation/activation keys if focused on interactive controls
+            var focused = Keyboard.FocusedElement;
+            bool isControlFocused = focused is System.Windows.Controls.Primitives.ButtonBase || focused is System.Windows.Controls.TextBox;
+            if (isControlFocused && (e.Key == Key.Return || e.Key == Key.Tab))
+            {
+                base.OnPreviewKeyDown(e);
+                return;
+            }
+
             var button = e.Key switch
             {
                 Key.Up => RemoteButton.Up,
@@ -70,7 +86,7 @@ public partial class OnboardingWindow : Window
                 Key.Left => RemoteButton.Left,
                 Key.Right => RemoteButton.Right,
                 Key.Return => RemoteButton.Ok,
-                Key.Back or Key.Escape => RemoteButton.Back,
+                Key.Back => RemoteButton.Back,
                 _ => RemoteButton.None
             };
 

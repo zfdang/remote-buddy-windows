@@ -331,13 +331,13 @@ public sealed class RawInputReceiver : IDisposable
 
         if (targetContainerId.HasValue)
         {
-            if (deviceContainerId.HasValue && deviceContainerId.Value == targetContainerId.Value)
+            if (deviceContainerId.HasValue)
             {
-                return true;
+                // Container ID is known for both target and incoming device: require exact container match.
+                return deviceContainerId.Value == targetContainerId.Value;
             }
 
-            // Target remote is known, but incoming device interface may report a different container ID
-            // (e.g. AEP container ID vs PnP devnode container ID on BLE), or no container ID.
+            // Target remote is known, but incoming devnode does not report a container ID property.
             // Require verified remote identity (VID / device path); unverified devices (standard keyboards) must be rejected.
             return IsKnownRemoteDevice(hDevice, devicePath);
         }
@@ -552,7 +552,6 @@ public sealed class RawInputReceiver : IDisposable
                 for (int i = 0; i < (int)dwCount; i++)
                 {
                     var slice = rawBytes.AsSpan(i * reportSize, reportSize);
-                    AppLogger.Debug($"Remote HID button report: {Convert.ToHexString(slice)}", "RawInputReceiver");
                     bool recognized = false;
                     List<RemoteButton> currentButtons = new();
 

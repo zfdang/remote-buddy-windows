@@ -176,14 +176,13 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
             bool shouldDisconnect = false;
             lock (_stateLock)
             {
-                if (_gattService != null)
-                {
-                    try { _gattService.Dispose(); } catch { }
-                    _gattService = null;
-                }
-
                 if (targetConnGen == _connectionGeneration)
                 {
+                    if (_gattService != null)
+                    {
+                        try { _gattService.Dispose(); } catch { }
+                        _gattService = null;
+                    }
                     shouldDisconnect = true;
                 }
             }
@@ -334,6 +333,12 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 AppLogger.Debug($"DIS model query exception: {ex.Message}", "BluetoothManager");
             }
 
+            // Prepare capabilities waiter and attach listeners prior to CCCD activation
+            // to avoid missing initial notifications or 0x0B capabilities packet.
+            _capabilitiesTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            audio.ValueChanged += OnAudioValueChanged;
+            control.ValueChanged += OnControlValueChanged;
+
             // Subscribe notifications
             var audioStatus = await audio.WriteClientCharacteristicConfigurationDescriptorAsync(
                 GattClientCharacteristicConfigurationDescriptorValue.Notify);
@@ -341,6 +346,8 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
             {
                 if (targetConnGen != _connectionGeneration)
                 {
+                    try { audio.ValueChanged -= OnAudioValueChanged; } catch { }
+                    try { control.ValueChanged -= OnControlValueChanged; } catch { }
                     device.Dispose();
                     return false;
                 }
@@ -348,12 +355,13 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 if (audioStatus != GattCommunicationStatus.Success)
                 {
                     AppLogger.Error($"Failed to subscribe to Audio notifications: Status={audioStatus}", component: "BluetoothManager");
+                    try { audio.ValueChanged -= OnAudioValueChanged; } catch { }
+                    try { control.ValueChanged -= OnControlValueChanged; } catch { }
                     CleanupAttempt(device);
                     ConnectionStatusChanged?.Invoke(false, "订阅音频通知失败");
                     return false;
                 }
             }
-            audio.ValueChanged += OnAudioValueChanged;
 
             var controlStatus = await control.WriteClientCharacteristicConfigurationDescriptorAsync(
                 GattClientCharacteristicConfigurationDescriptorValue.Notify);
@@ -361,6 +369,8 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
             {
                 if (targetConnGen != _connectionGeneration)
                 {
+                    try { audio.ValueChanged -= OnAudioValueChanged; } catch { }
+                    try { control.ValueChanged -= OnControlValueChanged; } catch { }
                     device.Dispose();
                     return false;
                 }
@@ -368,15 +378,15 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 if (controlStatus != GattCommunicationStatus.Success)
                 {
                     AppLogger.Error($"Failed to subscribe to Control notifications: Status={controlStatus}", component: "BluetoothManager");
+                    try { audio.ValueChanged -= OnAudioValueChanged; } catch { }
+                    try { control.ValueChanged -= OnControlValueChanged; } catch { }
                     CleanupAttempt(device);
                     ConnectionStatusChanged?.Invoke(false, "订阅控制通知失败");
                     return false;
                 }
             }
-            control.ValueChanged += OnControlValueChanged;
 
             // Negotiate capabilities before declaring ready
-            _capabilitiesTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             byte[] getCaps = ATVVProtocol.BuildGetCapabilities();
             var buffer = CryptographicBuffer.CreateFromByteArray(getCaps);
             var writeStatus = await tx.WriteValueAsync(buffer, GattWriteOption.WriteWithoutResponse);
@@ -736,7 +746,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
         _keepaliveTimer = null;
     }
 
-    private bool IsSmartToggleEligible()
+    internal bool IsSmartToggleEligible()
     {
         return G9N9NProtocol.IsCandidate(ConnectedDeviceName) && VoiceButtonMode == G9N9NVoiceButtonMode.SmartToggle;
     }
@@ -764,11 +774,18 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
         CancelSmartToggleReopenTimer();
         _smartToggleReopenTimer = new System.Threading.Timer(_ =>
         {
-            if (_smartToggle.IsAwaitingReopen && _smartToggle.Generation == generation)
+            try
             {
-                AppLogger.Warn("G9N9N smart-toggle reopen timed out", "BluetoothManager");
-                _smartToggle.Reset();
-                _ = StopVoiceSessionAsync();
+                if (_smartToggle.IsAwaitingReopen && _smartToggle.Generation == generation)
+                {
+                    AppLogger.Warn("G9N9N smart-toggle reopen timed out", "BluetoothManager");
+                    _smartToggle.Reset();
+                    _ = StopVoiceSessionAsync();
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("Error in smart-toggle reopen timer", ex, "BluetoothManager");
             }
         }, null, (int)G9N9NSmartToggleSession.ReopenTimeoutMs, Timeout.Infinite);
     }
@@ -778,12 +795,19 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
         CancelSmartToggleDeadlineTimer();
         _smartToggleDeadlineTimer = new System.Threading.Timer(_ =>
         {
-            if (_smartToggle.IsHandsFreeActive && _smartToggle.Generation == generation)
+            try
             {
-                AppLogger.Info("G9N9N smart-toggle maximum hands-free duration reached (5 min safety limit); stopping", "BluetoothManager");
-                _smartToggle.EnterClosing();
-                CancelSmartToggleTimers();
-                _ = StopVoiceSessionAsync();
+                if (_smartToggle.IsHandsFreeActive && _smartToggle.Generation == generation)
+                {
+                    AppLogger.Info("G9N9N smart-toggle maximum hands-free duration reached (5 min safety limit); stopping", "BluetoothManager");
+                    _smartToggle.EnterClosing();
+                    CancelSmartToggleTimers();
+                    _ = StopVoiceSessionAsync();
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("Error in smart-toggle deadline timer", ex, "BluetoothManager");
             }
         }, null, (int)G9N9NSmartToggleSession.MaximumHandsFreeDurationMs, Timeout.Infinite);
     }
@@ -972,7 +996,6 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                     lock (_stateLock)
                     {
                         if (capturedConnGen != _connectionGeneration) return;
-                        _currentSessionId = sessionId;
                         bool isStaleDuplicateSession = _lastEndedSessionId.HasValue &&
                             _lastEndedSessionId.Value == sessionId &&
                             (Environment.TickCount64 - _lastEndedSessionTimeMs) < 500;
@@ -993,6 +1016,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                             }
                             else
                             {
+                                _currentSessionId = sessionId;
                                 _lastEndedSessionId = null;
                                 _audioStopReceived = false;
                                 _sessionState = BluetoothSessionState.Opening;
@@ -1000,6 +1024,10 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                                 _activeOpeningOperationId++;
                                 remoteInitiated = true;
                             }
+                        }
+                        else if (_sessionState == BluetoothSessionState.Opening)
+                        {
+                            _currentSessionId = sessionId;
                         }
                     }
 
@@ -1043,6 +1071,8 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 {
                     if (capturedConnGen != _connectionGeneration) return;
                     _activeOpeningOperationId++;
+                    _smartToggle.Reset();
+                    CancelSmartToggleTimers();
                     if (_sessionState == BluetoothSessionState.Opening || _sessionState == BluetoothSessionState.Streaming)
                     {
                         StopKeepaliveTimer();
@@ -1104,7 +1134,11 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 lock (_stateLock)
                 {
                     if (capturedConnGen != _connectionGeneration) return;
-                    if (_sessionState == BluetoothSessionState.Idle) _cancelOpenPending = false;
+                    if (_sessionState == BluetoothSessionState.Idle)
+                    {
+                        _cancelOpenPending = false;
+                        return;
+                    }
                     _audioStopReceived = true;
                 }
                 _audioStopTcs?.TrySetResult(true);

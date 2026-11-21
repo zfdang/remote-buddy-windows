@@ -55,7 +55,7 @@
             <StackPanel x:Name="Step3Panel" Visibility="Collapsed">
                 <DockPanel Margin="0,0,0,10">
                     <TextBlock Text="选择并连接您的遥控器" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" VerticalAlignment="Center"/>
-                    <Button Content="🔍 扫描设备" HorizontalAlignment="Right" Padding="10,4" Background="#007ACC" Command="{Binding ToggleScanCommand}"/>
+                    <Button Content="{Binding IsScanning, Converter={StaticResource BoolToScanTextConverter}, FallbackValue='🔍 扫描设备'}" HorizontalAlignment="Right" Padding="10,4" Background="#007ACC" Command="{Binding ToggleScanCommand}"/>
                 </DockPanel>
                 <TextBlock Text="点击“扫描设备”查找已配对及正在广播的遥控器，再点击“连接”建立语音服务。已在 Windows 蓝牙设置中连接的遥控器无需重新配对。" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,14"/>
 

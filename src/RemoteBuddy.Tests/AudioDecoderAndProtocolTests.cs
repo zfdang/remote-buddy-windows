@@ -577,6 +577,28 @@ public class AudioDecoderAndProtocolTests
     }
 
     [Fact]
+    public void PcmPostprocessor_NegativeSamples_SymmetricAndFreeOfNegativeShiftBias()
+    {
+        var postprocessor = new PcmPostprocessor();
+        short[] samples = [-1000, -2000, -3000];
+
+        postprocessor.Process(samples, 1.0f);
+
+        // sample 0: (-1000 - 2000 - 1000) / 4 = -1000
+        Assert.Equal(-1000, samples[0]);
+        // sample 1: (-1000 - 2000 - 2000) / 4 = -1250
+        Assert.Equal(-1250, samples[1]);
+        // sample 2: (-1000 - 4000 - 3000) / 4 = -2000
+        Assert.Equal(-2000, samples[2]);
+
+        // Near-zero symmetry: sum = -4 / 4 = -1; sum = -1 / 4 = 0, verifying no arithmetic shift bias to -1
+        postprocessor.Reset();
+        short[] smallNegative = [-1, -1, -1];
+        postprocessor.Process(smallNegative, 1.0f);
+        Assert.Equal(0, smallNegative[0]);
+    }
+
+    [Fact]
     public void G9N9NProtocol_Report2_NonZeroUnmapped_ReturnsFalse()
     {
         // Report ID 2 with non-zero usage 0x9999 that is unmapped in G9N9N ConsumerButtons
