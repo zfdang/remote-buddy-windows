@@ -7,6 +7,7 @@ using RemoteBuddy.App.ViewModels;
 using RemoteBuddy.Core.Bluetooth;
 using RemoteBuddy.Core.Config;
 using RemoteBuddy.Core.Models;
+using RemoteBuddy.Platform.Windows.Audio;
 using Xunit;
 
 namespace RemoteBuddy.Tests;

@@ -88,7 +88,7 @@ public class AudioRingBufferTests
     }
 
     [Fact]
-    public void RingBuffer_ConcurrentReadWrite_ThreadSafeWithoutExceptions()
+    public async Task RingBuffer_ConcurrentReadWrite_ThreadSafeWithoutExceptions()
     {
         var ring = new AudioRingBuffer(capacity: 1024);
         var exceptions = new System.Collections.Concurrent.ConcurrentBag<Exception>();
@@ -127,7 +127,7 @@ public class AudioRingBufferTests
             }
         });
 
-        Task.WaitAll(writeTask, readTask);
+        await Task.WhenAll(writeTask, readTask);
         Assert.Empty(exceptions);
     }
 }
