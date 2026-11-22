@@ -7,6 +7,7 @@ using RemoteBuddy.App.Views;
 using RemoteBuddy.Core.Config;
 using RemoteBuddy.Core.Diagnostics;
 using RemoteBuddy.Platform.Windows.Bluetooth;
+using RemoteBuddy.Platform.Windows.Input;
 
 namespace RemoteBuddy.App;
 
@@ -21,6 +22,17 @@ public partial class App : Application
         AppLogger.Initialize();
         AppLogger.Info($"=== Application Starting (PID: {Environment.ProcessId}) ===", "App");
         AppLogger.Info($"OS: {Environment.OSVersion}, .NET Runtime: {Environment.Version}, Args: [{string.Join(", ", e.Args)}]", "App");
+
+        for (int i = 0; i < e.Args.Length; i++)
+        {
+            if (string.Equals(e.Args[i], "--chromecast-worker", StringComparison.OrdinalIgnoreCase) && i + 1 < e.Args.Length)
+            {
+                string pipeName = e.Args[i + 1];
+                ChromecastWorkerHost.RunWorker(pipeName);
+                Shutdown(0);
+                return;
+            }
+        }
 
         // Global unhandled exception handlers for diagnostic logging
         AppDomain.CurrentDomain.UnhandledException += (s, args) =>

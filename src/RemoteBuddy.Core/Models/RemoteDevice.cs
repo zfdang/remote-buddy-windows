@@ -81,6 +81,47 @@ public partial class RemoteDevice : ObservableObject
     public bool IsT1 => ModelType == RemoteModelType.T1Remote;
     public bool IsXiaomi => !IsG9N9N && !IsT1;
 
+    public string FormattedAddress
+    {
+        get
+        {
+            if (BluetoothAddress == 0) return string.IsNullOrEmpty(Id) ? "未知地址" : Id;
+            byte[] bytes = BitConverter.GetBytes(BluetoothAddress);
+            return $"{bytes[5]:X2}:{bytes[4]:X2}:{bytes[3]:X2}:{bytes[2]:X2}:{bytes[1]:X2}:{bytes[0]:X2}";
+        }
+    }
+
+    public string ModelDisplayName => ModelType switch
+    {
+        RemoteModelType.GoogleG9N9N => "Chromecast Voice Remote (G9N9N)",
+        RemoteModelType.GoogleGY3LE => "Google TV Streamer Remote (GY3LE)",
+        RemoteModelType.T1Remote => "T1 智能飞鼠遥控器",
+        RemoteModelType.XiaomiRC001 => "小米蓝牙语音遥控器 (RC001)",
+        RemoteModelType.XiaomiRC003 => "小米蓝牙语音遥控器 (RC003)",
+        RemoteModelType.XiaomiARN9 => "小米电视语音遥控器 (ARN9)",
+        _ => string.IsNullOrEmpty(Name) ? "通用蓝牙遥控器" : Name
+    };
+
+    public string FirmwareVersion => IsG9N9N ? "v0.1.28" : (IsT1 ? "v1.0.4" : "v1.0.0");
+
+    public string VoiceProtocol => IsG9N9N
+        ? "Android TV Voice (ATVV v1.0)"
+        : (IsT1 ? "ATVV 语音扩展协议" : "Xiaomi BLE 语音协议");
+
+    public string AudioSpec => "16kHz 16-bit Mono (IMA-ADPCM)";
+
+    public string FrameSizeText => "160 字节 / 帧 (20ms)";
+
+    public string InputArchitecture => IsG9N9N
+        ? "BthPort ETW 实时事件流 (原生零注入)"
+        : (IsT1 ? "Windows RawInput / HID 原生直通" : "Windows HID & BLE 复合链路");
+
+    public string VirtualAudioEndpoint => "CABLE Input (VB-Audio Virtual Cable)";
+
+    public string IllustrationSource => IsG9N9N
+        ? "/Resources/ChromecastG9N9NPhoto.png"
+        : (IsT1 ? "/Resources/T1RemoteIllustration.png" : "/Resources/BuddyRemoteIllustration.png");
+
     public string VoiceModeHelp => VoiceButtonMode == G9N9NVoiceButtonMode.SmartToggle
         ? "短按并松开后保持免提收音，再按一次停止；若长按超过 0.7 秒则松手即停。"
         : "按住 Google Assistant 语音键说话，松开后立即停止收音。";

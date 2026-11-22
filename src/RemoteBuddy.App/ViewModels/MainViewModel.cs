@@ -21,6 +21,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly IBluetoothManager _bluetoothManager;
     private readonly RawInputReceiver _rawInputReceiver = new();
     private readonly HidDeviceReader _hidDeviceReader = new();
+    private readonly ChromecastButtonReceiver _chromecastButtonReceiver = new();
     private readonly RemoteVoiceKeyGuard _voiceKeyGuard;
     private readonly Dictionary<IntPtr, (Guid? Target, bool Accepted)> _deviceAdmissionLog = new();
     private ActiveVoiceSession? _activeVoiceSession;
@@ -66,6 +67,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             _activeOnboardingVm = value;
             StopRepeatTimer();
+            if (value != null && IsConnected)
+            {
+                bool isChromecast = G9N9NProtocol.IsCandidate(ConnectedDeviceName) ||
+                    (value.SelectedDevice != null && value.SelectedDevice.IsG9N9N);
+                if (isChromecast && !_chromecastButtonReceiver.IsRunning)
+                {
+                    AppLogger.Info("Activating Chromecast ETW receiver for active onboarding session", "MainViewModel");
+                    _chromecastButtonReceiver.SetKnownGattHandles(_bluetoothManager.AttvAttributeHandles);
+                    _chromecastButtonReceiver.Start();
+                    _ = _bluetoothManager.TriggerAttvSyncAsync();
+                }
+            }
         }
     }
 
@@ -104,6 +117,37 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _bluetoothManager.VoiceButtonPressed += OnVoiceButtonPressed;
         _rawInputReceiver.ButtonEvent += OnRawButtonEvent;
         _hidDeviceReader.ButtonEvent += OnHidButtonEvent;
+        _chromecastButtonReceiver.ButtonEvent += OnChromecastButtonEvent;
+        _chromecastButtonReceiver.TruncatedPacketDetected += OnChromecastTruncatedPacketDetected;
+    }
+
+    private void OnChromecastTruncatedPacketDetected()
+    {
+        AppLogger.Warn("MainViewModel: Chromecast truncated packet detected (restart required)", "MainViewModel");
+        if (System.Windows.Application.Current?.Dispatcher != null && !System.Windows.Application.Current.Dispatcher.CheckAccess())
+        {
+            System.Windows.Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+            {
+                ActiveOnboardingVm?.NotifyTruncatedPacketDetected();
+            }));
+        }
+        else
+        {
+            ActiveOnboardingVm?.NotifyTruncatedPacketDetected();
+        }
+    }
+
+    private void OnChromecastButtonEvent(RemoteButton button, bool isDown)
+    {
+        AppLogger.Info($"MainViewModel: OnChromecastButtonEvent: button={button}, isDown={isDown}", "MainViewModel");
+        if (System.Windows.Application.Current?.Dispatcher != null && !System.Windows.Application.Current.Dispatcher.CheckAccess())
+        {
+            System.Windows.Application.Current.Dispatcher.BeginInvoke(new Action(() => OnRawButtonEvent(IntPtr.Zero, button, isDown)));
+        }
+        else
+        {
+            OnRawButtonEvent(IntPtr.Zero, button, isDown);
+        }
     }
 
     private void OnHidButtonEvent(RemoteButton button, bool isDown)
@@ -133,6 +177,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 StopRepeatTimer();
                 _rawInputReceiver.ResetDeviceState();
                 _hidDeviceReader.Stop();
+                _chromecastButtonReceiver.Stop();
+                _chromecastButtonReceiver.ResetConnectionBinding();
             }
             else
             {
@@ -148,6 +194,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (dev != null)
                 {
                     _bluetoothManager.VoiceButtonMode = dev.VoiceButtonMode;
+                }
+
+                bool isChromecast = G9N9NProtocol.IsCandidate(name) ||
+                    (dev != null && dev.IsG9N9N) ||
+                    (ActiveOnboardingVm?.SelectedDevice != null && ActiveOnboardingVm.SelectedDevice.IsG9N9N);
+                if (isChromecast)
+                {
+                    AppLogger.Info($"Activating Chromecast ETW receiver for device '{name}'", "MainViewModel");
+                    _chromecastButtonReceiver.SetKnownGattHandles(_bluetoothManager.AttvAttributeHandles);
+                    _chromecastButtonReceiver.Start();
+                    _ = _bluetoothManager.TriggerAttvSyncAsync();
                 }
 
                 if (addr != 0)
@@ -569,6 +626,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _rawInputReceiver.PhysicalVoiceKeyPressed -= _voiceKeyGuard.Arm;
         _hidDeviceReader.ButtonEvent -= OnHidButtonEvent;
         _hidDeviceReader.Dispose();
+        _chromecastButtonReceiver.ButtonEvent -= OnChromecastButtonEvent;
+        _chromecastButtonReceiver.TruncatedPacketDetected -= OnChromecastTruncatedPacketDetected;
+        _chromecastButtonReceiver.Dispose();
 
         ReleaseHeldVoiceShortcut();
         _voiceKeyGuard.Dispose();

@@ -70,6 +70,45 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
     public ulong ConnectedDeviceAddress => _connectedDevice?.BluetoothAddress ?? 0;
     public Guid? ConnectedDeviceContainerId { get; private set; }
 
+    public IReadOnlyList<ushort> AttvAttributeHandles
+    {
+        get
+        {
+            lock (_stateLock)
+            {
+                var handles = new List<ushort>();
+                if (_txCharacteristic != null) handles.Add(_txCharacteristic.AttributeHandle);
+                if (_audioCharacteristic != null) handles.Add(_audioCharacteristic.AttributeHandle);
+                if (_controlCharacteristic != null) handles.Add(_controlCharacteristic.AttributeHandle);
+                return handles;
+            }
+        }
+    }
+
+    public async Task TriggerAttvSyncAsync()
+    {
+        try
+        {
+            GattCharacteristic? control;
+            lock (_stateLock)
+            {
+                control = _controlCharacteristic;
+            }
+
+            if (control != null)
+            {
+                // Reading the control characteristic triggers an ATT Read transaction on its attribute handle,
+                // causing bthport.sys to emit an ACL event containing the connection handle for binding.
+                var res = await control.ReadValueAsync(BluetoothCacheMode.Uncached);
+                AppLogger.Debug($"TriggerAttvSyncAsync executed: status={res.Status}", "BluetoothManager");
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Debug($"TriggerAttvSyncAsync benign exception: {ex.Message}", "BluetoothManager");
+        }
+    }
+
     public void StartScan() => StartScanning();
     public void StopScan() => StopScanning();
 
@@ -1175,6 +1214,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
     {
         AppLogger.Info("Disconnect initiated: cleaning up Bluetooth connection and audio resources", "BluetoothManager");
         bool emitEnded = false;
+        bool hadConnection = false;
         BluetoothLEDevice? devToDispose = null;
         lock (_stateLock)
         {
@@ -1195,6 +1235,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
 
             if (_connectedDevice != null)
             {
+                hadConnection = true;
                 devToDispose = _connectedDevice;
                 _connectedDevice.ConnectionStatusChanged -= OnDeviceConnectionStatusChanged;
                 _connectedDevice = null;
@@ -1239,6 +1280,11 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
         if (emitEnded)
         {
             VoiceSessionEnded?.Invoke();
+        }
+
+        if (hadConnection)
+        {
+            ConnectionStatusChanged?.Invoke(false, string.Empty);
         }
 
         devToDispose?.Dispose();

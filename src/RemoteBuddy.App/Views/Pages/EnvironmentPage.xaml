@@ -79,6 +79,28 @@
                     </Grid>
                 </StackPanel>
             </Border>
+
+            <!-- Card 3: Windows Administrator Privileges -->
+            <Border Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="8" Padding="20" Margin="0,18,0,0">
+                <StackPanel>
+                    <DockPanel LastChildFill="False" Margin="0,0,0,12">
+                        <TextBlock Text="Windows 管理员运行权限 (Administrator)" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" DockPanel.Dock="Left"/>
+                        <Border Background="{Binding AdminStatusBadgeBgColor}" BorderBrush="{Binding AdminStatusBadgeBorderColor}" BorderThickness="1" CornerRadius="10" Padding="10,3" DockPanel.Dock="Right">
+                            <TextBlock Text="{Binding AdminStatusBadgeText}" Foreground="{Binding AdminStatusBadgeColor}" FontSize="12" FontWeight="Medium"/>
+                        </Border>
+                    </DockPanel>
+
+                    <TextBlock Text="{Binding AdminStatusDescription}" Foreground="{StaticResource SecondaryTextBrush}" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,14"/>
+
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="🛡️ 以管理员身份重启本程序" Padding="16,8" Background="#007ACC" Foreground="White" FontWeight="Bold"
+                                Command="{Binding RestartAsAdministratorCommand}"
+                                Visibility="{Binding IsAdministrator, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Inverse}"/>
+                        <TextBlock Text="✅ 当前已具有管理员特权，内核 ETW 事件流捕获已处于最优工作状态" Foreground="#00CC66" FontSize="13" VerticalAlignment="Center"
+                                   Visibility="{Binding IsAdministrator, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
         </StackPanel>
     </ScrollViewer>
 </UserControl>

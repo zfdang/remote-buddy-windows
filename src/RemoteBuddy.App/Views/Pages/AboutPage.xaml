@@ -12,7 +12,7 @@
             <!-- Hero Card -->
             <Border Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="8" Padding="20" Margin="0,0,0,18">
                 <DockPanel LastChildFill="True">
-                    <Image Source="/Resources/app.ico" Width="48" Height="48" Margin="0,0,18,0" DockPanel.Dock="Left" VerticalAlignment="Center"/>
+                    <Image Source="/Resources/app.png" Width="52" Height="52" Margin="0,0,18,0" DockPanel.Dock="Left" VerticalAlignment="Center"/>
                     <StackPanel VerticalAlignment="Center">
                         <TextBlock Text="Remote Buddy (Windows)" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,4"/>
                         <TextBlock Text="遥控搭子 · 让闲置的蓝牙电视遥控器化身桌面语音输入神器" FontSize="13" Foreground="{StaticResource SecondaryTextBrush}"/>
@@ -66,7 +66,7 @@
             </Border>
 
             <!-- Card 3: Open Source & Links -->
-            <Border Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="8" Padding="20">
+            <Border Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="8" Padding="20" Margin="0,0,0,18">
                 <DockPanel LastChildFill="False">
                     <StackPanel DockPanel.Dock="Left">
                         <TextBlock Text="开源许可与项目链接" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,6"/>

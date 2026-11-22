@@ -39,6 +39,28 @@ public partial class OnboardingWindow : Window
                 vm.ProcessRawInput(lParam);
             }
         }
+        else if (msg == 0x0319 /* WM_APPCOMMAND */)
+        {
+            if (DataContext is OnboardingViewModel onboardingVm && onboardingVm.CurrentWizardStep == WizardStep.ButtonTest)
+            {
+                int cmd = ((int)lParam >> 16) & ~0xF000;
+                var appBtn = cmd switch
+                {
+                    1 => RemoteButton.Back,        // APPCOMMAND_BROWSER_BACK
+                    8 => RemoteButton.Mute,        // APPCOMMAND_VOLUME_MUTE
+                    9 => RemoteButton.VolumeDown,  // APPCOMMAND_VOLUME_DOWN
+                    10 => RemoteButton.VolumeUp,   // APPCOMMAND_VOLUME_UP
+                    14 => RemoteButton.PlayPause,  // APPCOMMAND_MEDIA_PLAY_PAUSE
+                    _ => RemoteButton.None
+                };
+                if (appBtn != RemoteButton.None)
+                {
+                    onboardingVm.NotifyButtonPressed(appBtn);
+                    handled = true;
+                    return (IntPtr)1;
+                }
+            }
+        }
         return IntPtr.Zero;
     }
 
@@ -63,17 +85,8 @@ public partial class OnboardingWindow : Window
     {
         if (DataContext is OnboardingViewModel vm && vm.CurrentWizardStep == WizardStep.ButtonTest)
         {
-            // Do not swallow Escape so dialog cancellation always works.
-            if (e.Key == Key.Escape)
-            {
-                base.OnPreviewKeyDown(e);
-                return;
-            }
-
-            // Do not intercept navigation/activation keys if focused on interactive controls
-            var focused = Keyboard.FocusedElement;
-            bool isControlFocused = focused is System.Windows.Controls.Primitives.ButtonBase || focused is System.Windows.Controls.TextBox;
-            if (isControlFocused && (e.Key == Key.Return || e.Key == Key.Tab))
+            // Do not swallow Escape or Tab so dialog cancellation and navigation still work.
+            if (e.Key == Key.Escape || e.Key == Key.Tab)
             {
                 base.OnPreviewKeyDown(e);
                 return;
@@ -85,8 +98,13 @@ public partial class OnboardingWindow : Window
                 Key.Down => RemoteButton.Down,
                 Key.Left => RemoteButton.Left,
                 Key.Right => RemoteButton.Right,
-                Key.Return => RemoteButton.Ok,
-                Key.Back => RemoteButton.Back,
+                Key.Return or Key.Enter or Key.Select or Key.Execute => RemoteButton.Ok,
+                Key.Back or Key.BrowserBack => RemoteButton.Back,
+                Key.Home or Key.BrowserHome => RemoteButton.Home,
+                Key.VolumeUp => RemoteButton.VolumeUp,
+                Key.VolumeDown => RemoteButton.VolumeDown,
+                Key.VolumeMute => RemoteButton.Mute,
+                Key.MediaPlayPause => RemoteButton.PlayPause,
                 _ => RemoteButton.None
             };
 

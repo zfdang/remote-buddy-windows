@@ -16,6 +16,7 @@
         <converters:GainToDbTextConverter x:Key="GainToDbTextConverter"/>
         <converters:BatteryVisibilityConverter x:Key="BatteryVisibilityConverter"/>
         <converters:EnumToDisplayNameConverter x:Key="EnumToDisplayNameConverter"/>
+        <converters:BoolToConnectionTextConverter x:Key="BoolToConnectionTextConverter"/>
 
         <!-- Fluent Dark/Light Theme Colors -->
         <SolidColorBrush x:Key="PrimaryBackgroundBrush" Color="#1E1E1E"/>

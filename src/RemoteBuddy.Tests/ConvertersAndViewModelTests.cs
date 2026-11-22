@@ -147,6 +147,7 @@ public class ConvertersAndViewModelTests
         config.Current.SelectedDeviceId = dev1.Id;
 
         var dummyBt = new DummyBluetoothManager();
+        DevicesViewModel.ConfirmDeviceRemovalHandler = _ => true;
         var vm = new DevicesViewModel(config, dummyBt);
 
         Assert.Equal(2, vm.DiscoveredDevices.Count);

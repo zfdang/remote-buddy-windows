@@ -97,6 +97,29 @@
                 <Border Background="{StaticResource CardBackgroundBrush}" Padding="20" CornerRadius="6" HorizontalAlignment="Left" Width="300">
                     <TextBlock Text="{Binding LastPressedButtonName}" FontSize="18" FontWeight="Bold" Foreground="#00CC66" HorizontalAlignment="Center"/>
                 </Border>
+                <Border Visibility="{Binding TruncationWarningVisibility}" Background="#2B1D00" BorderBrush="#FF9900" BorderThickness="1" CornerRadius="6" Padding="14,12" Margin="0,12,0,0">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <DockPanel Grid.Row="0" LastChildFill="True">
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Margin="12,0,0,0">
+                                <Button Content="⚡ 重启蓝牙适配器"
+                                        Command="{Binding RestartBluetoothAdapterCommand}"
+                                        IsEnabled="{Binding CanRestartBluetooth}"
+                                        Padding="14,6" Margin="0,0,8,0" Background="#E67E22" Foreground="White" FontWeight="Bold" Cursor="Hand"/>
+                                <Button Content="打开设备管理器"
+                                        Command="{Binding OpenDeviceManagerCommand}"
+                                        Padding="10,6" Background="#3E3E42" Foreground="#CCC" Cursor="Hand"
+                                        ToolTip="打开 Windows 设备管理器，可手动对 Bluetooth 适配器右键禁用再启用"/>
+                            </StackPanel>
+                            <TextBlock Text="{Binding TruncationWarningMessage}" Foreground="#FFCC66" TextWrapping="Wrap" FontSize="13" LineHeight="18" VerticalAlignment="Center"/>
+                        </DockPanel>
+                        <TextBlock Grid.Row="1" Text="{Binding RestartBluetoothStatusText}" Foreground="#00E676" FontSize="12" Margin="0,8,0,0"
+                                   Visibility="{Binding RestartBluetoothStatusVisibility}" TextWrapping="Wrap"/>
+                    </Grid>
+                </Border>
             </StackPanel>
 
             <!-- Step 5: Voice & VU Meter Test -->
