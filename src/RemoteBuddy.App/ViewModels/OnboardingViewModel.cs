@@ -177,6 +177,9 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
         }
     }
 
+    [RelayCommand]
+    public void OpenDeviceManager() => BluetoothAdapterHelper.OpenDeviceManager();
+
     [ObservableProperty]
     private float _liveAudioLevel = 0f;
 

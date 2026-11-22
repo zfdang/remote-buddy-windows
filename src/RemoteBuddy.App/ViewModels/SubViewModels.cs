@@ -35,9 +35,6 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
     private bool _isScanning;
 
     [ObservableProperty]
-    private bool _isRestartingBluetooth;
-
-    [ObservableProperty]
     private float _deviceGain = 1.0f;
 
     public string ConnectedDeviceName => _bt.IsConnected ? _bt.ConnectedDeviceName : "未连接设备";
@@ -350,26 +347,6 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         if (device == null) return;
         _bt.CurrentGain = device.Gain;
         _config.Save();
-    }
-
-    [RelayCommand]
-    public async Task RestartBluetoothAsync()
-    {
-        if (IsRestartingBluetooth) return;
-        IsRestartingBluetooth = true;
-        try
-        {
-            var (success, msg) = await BluetoothAdapterHelper.RestartBluetoothAdapterAsync();
-            if (!DevicesViewModel.IsRunningInTestHost())
-            {
-                System.Windows.MessageBox.Show(msg, "蓝牙适配器", System.Windows.MessageBoxButton.OK,
-                    success ? System.Windows.MessageBoxImage.Information : System.Windows.MessageBoxImage.Warning);
-            }
-        }
-        finally
-        {
-            IsRestartingBluetooth = false;
-        }
     }
 
     partial void OnSelectedDeviceChanged(RemoteDevice? value)
@@ -902,13 +879,22 @@ public partial class EnvironmentViewModel : ObservableObject
         _ => "初始化失败"
     };
 
-    public string BthPortStatusBadgeText => BthPortRegistryHelper.IsConfigured() ? "驱动参数已配置" : "需配置驱动参数";
+    public bool IsAdministrator => BluetoothAdapterHelper.IsAdministrator();
+
+    public string AdminStatusBadgeText => IsAdministrator ? "已就绪" : "未获取 (建议提权)";
+
+    public string AdminStatusBadgeColor => IsAdministrator ? "#44FF88" : "#FFB347";
+
+    public string AdminStatusBadgeBgColor => IsAdministrator ? "#1C3827" : "#3D2E18";
+
+    public string AdminStatusBadgeBorderColor => IsAdministrator ? "#2D6A42" : "#8A5A1A";
+
+    public string AdminStatusDescription => IsAdministrator
+        ? "程序当前已获得 Windows 管理员权限，内核 ETW 驱动参数与底层硬件事件实时捕获均处于最佳状态。"
+        : "当前以普通用户权限运行。我们建议以管理员身份运行本程序；请在下次启动时右键选择“以管理员身份运行”，或点击下方按钮立即以管理员权限重启。";
 
     [ObservableProperty]
     private string _statusDescription = string.Empty;
-
-    [ObservableProperty]
-    private bool _isRestartingBluetooth;
 
     public EnvironmentViewModel()
     {
@@ -916,24 +902,9 @@ public partial class EnvironmentViewModel : ObservableObject
     }
 
     [RelayCommand]
-    public async Task RestartBluetoothAsync()
+    public void RestartAsAdministrator()
     {
-        if (IsRestartingBluetooth) return;
-        IsRestartingBluetooth = true;
-        try
-        {
-            var (success, msg) = await BluetoothAdapterHelper.RestartBluetoothAdapterAsync();
-            RefreshStatus();
-            if (!DevicesViewModel.IsRunningInTestHost())
-            {
-                System.Windows.MessageBox.Show(msg, "蓝牙适配器", System.Windows.MessageBoxButton.OK,
-                    success ? System.Windows.MessageBoxImage.Information : System.Windows.MessageBoxImage.Warning);
-            }
-        }
-        finally
-        {
-            IsRestartingBluetooth = false;
-        }
+        BluetoothAdapterHelper.RestartAppAsAdministrator();
     }
 
     [RelayCommand]
@@ -947,6 +918,12 @@ public partial class EnvironmentViewModel : ObservableObject
             DriverReadinessStatus.RebootRequired => "检测到虚拟声卡安装未完全生效，请重启电脑完成系统音频服务初始化。",
             _ => "虚拟麦克风初始化失败，请在设备管理器中检查设备状态。"
         };
+        OnPropertyChanged(nameof(IsAdministrator));
+        OnPropertyChanged(nameof(AdminStatusBadgeText));
+        OnPropertyChanged(nameof(AdminStatusBadgeColor));
+        OnPropertyChanged(nameof(AdminStatusBadgeBgColor));
+        OnPropertyChanged(nameof(AdminStatusBadgeBorderColor));
+        OnPropertyChanged(nameof(AdminStatusDescription));
     }
 }
 

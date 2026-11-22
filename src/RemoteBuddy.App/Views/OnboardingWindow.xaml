@@ -104,10 +104,16 @@
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <DockPanel Grid.Row="0" LastChildFill="True">
-                            <Button DockPanel.Dock="Right" Content="⚡ 重启蓝牙适配器"
-                                    Command="{Binding RestartBluetoothAdapterCommand}"
-                                    IsEnabled="{Binding CanRestartBluetooth}"
-                                    Padding="14,6" Margin="12,0,0,0" Background="#E67E22" Foreground="White" FontWeight="Bold" Cursor="Hand"/>
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Margin="12,0,0,0">
+                                <Button Content="⚡ 重启蓝牙适配器"
+                                        Command="{Binding RestartBluetoothAdapterCommand}"
+                                        IsEnabled="{Binding CanRestartBluetooth}"
+                                        Padding="14,6" Margin="0,0,8,0" Background="#E67E22" Foreground="White" FontWeight="Bold" Cursor="Hand"/>
+                                <Button Content="打开设备管理器"
+                                        Command="{Binding OpenDeviceManagerCommand}"
+                                        Padding="10,6" Background="#3E3E42" Foreground="#CCC" Cursor="Hand"
+                                        ToolTip="打开 Windows 设备管理器，可手动对 Bluetooth 适配器右键禁用再启用"/>
+                            </StackPanel>
                             <TextBlock Text="{Binding TruncationWarningMessage}" Foreground="#FFCC66" TextWrapping="Wrap" FontSize="13" LineHeight="18" VerticalAlignment="Center"/>
                         </DockPanel>
                         <TextBlock Grid.Row="1" Text="{Binding RestartBluetoothStatusText}" Foreground="#00E676" FontSize="12" Margin="0,8,0,0"
