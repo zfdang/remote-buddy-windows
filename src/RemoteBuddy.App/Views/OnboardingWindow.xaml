@@ -97,6 +97,9 @@
                 <Border Background="{StaticResource CardBackgroundBrush}" Padding="20" CornerRadius="6" HorizontalAlignment="Left" Width="300">
                     <TextBlock Text="{Binding LastPressedButtonName}" FontSize="18" FontWeight="Bold" Foreground="#00CC66" HorizontalAlignment="Center"/>
                 </Border>
+                <Border Visibility="{Binding TruncationWarningVisibility}" Background="#2B1D00" BorderBrush="#FF9900" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,12,0,0">
+                    <TextBlock Text="{Binding TruncationWarningMessage}" Foreground="#FFCC66" TextWrapping="Wrap" FontSize="13"/>
+                </Border>
             </StackPanel>
 
             <!-- Step 5: Voice & VU Meter Test -->

@@ -74,7 +74,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (isChromecast && !_chromecastButtonReceiver.IsRunning)
                 {
                     AppLogger.Info("Activating Chromecast ETW receiver for active onboarding session", "MainViewModel");
+                    _chromecastButtonReceiver.SetKnownGattHandles(_bluetoothManager.AttvAttributeHandles);
                     _chromecastButtonReceiver.Start();
+                    _ = _bluetoothManager.TriggerAttvSyncAsync();
                 }
             }
         }
@@ -116,6 +118,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _rawInputReceiver.ButtonEvent += OnRawButtonEvent;
         _hidDeviceReader.ButtonEvent += OnHidButtonEvent;
         _chromecastButtonReceiver.ButtonEvent += OnChromecastButtonEvent;
+        _chromecastButtonReceiver.TruncatedPacketDetected += OnChromecastTruncatedPacketDetected;
+    }
+
+    private void OnChromecastTruncatedPacketDetected()
+    {
+        AppLogger.Warn("MainViewModel: Chromecast truncated packet detected (restart required)", "MainViewModel");
+        if (System.Windows.Application.Current?.Dispatcher != null && !System.Windows.Application.Current.Dispatcher.CheckAccess())
+        {
+            System.Windows.Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+            {
+                ActiveOnboardingVm?.NotifyTruncatedPacketDetected();
+            }));
+        }
+        else
+        {
+            ActiveOnboardingVm?.NotifyTruncatedPacketDetected();
+        }
     }
 
     private void OnChromecastButtonEvent(RemoteButton button, bool isDown)
@@ -159,6 +178,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 _rawInputReceiver.ResetDeviceState();
                 _hidDeviceReader.Stop();
                 _chromecastButtonReceiver.Stop();
+                _chromecastButtonReceiver.ResetConnectionBinding();
             }
             else
             {
@@ -182,7 +202,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (isChromecast)
                 {
                     AppLogger.Info($"Activating Chromecast ETW receiver for device '{name}'", "MainViewModel");
+                    _chromecastButtonReceiver.SetKnownGattHandles(_bluetoothManager.AttvAttributeHandles);
                     _chromecastButtonReceiver.Start();
+                    _ = _bluetoothManager.TriggerAttvSyncAsync();
                 }
 
                 if (addr != 0)
@@ -605,6 +627,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _hidDeviceReader.ButtonEvent -= OnHidButtonEvent;
         _hidDeviceReader.Dispose();
         _chromecastButtonReceiver.ButtonEvent -= OnChromecastButtonEvent;
+        _chromecastButtonReceiver.TruncatedPacketDetected -= OnChromecastTruncatedPacketDetected;
         _chromecastButtonReceiver.Dispose();
 
         ReleaseHeldVoiceShortcut();

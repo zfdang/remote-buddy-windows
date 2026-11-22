@@ -85,6 +85,17 @@ if ($Publish) {
         Start-Sleep -Milliseconds 500
     }
 
+    $targetExePath = Join-Path $OutputDir "RemoteBuddy.App.exe"
+    if (Test-Path $targetExePath) {
+        try {
+            Remove-Item $targetExePath -Force -ErrorAction Stop
+        } catch {
+            # In Windows, a running or locked exe cannot be deleted, but can be renamed out of the way
+            $oldExe = Join-Path $OutputDir ("RemoteBuddy.App.old." + [Guid]::NewGuid().ToString("N").Substring(0, 8) + ".exe")
+            Move-Item $targetExePath $oldExe -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     & dotnet publish src/RemoteBuddy.App/RemoteBuddy.App.csproj `
         -c Release `
         -r win-x64 `

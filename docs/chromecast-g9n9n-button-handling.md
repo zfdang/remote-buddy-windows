@@ -123,14 +123,12 @@ if (aclData == null || aclData.Length == 0)
 }
 ```
 
-### 3. 截断报文自愈兼容机制
-如果用户在首次安装使用时尚未重启过电脑或蓝牙，Windows `bthport.sys` 可能会对 ACL 数据包进行脱敏截断（保留 7 字节报头，剥除 8 字节载荷）。
-此时，Remote Buddy 依然可以精确识别到：
-- L2CAP CID == 4（ATT 协议）
-- ATT Opcode == 0x1B（Handle Value Notification）
-- Attribute Handle == 0x0029（G9N9N HID Input Report 专用句柄）
-
-当检测到此特征时，说明**遥控器按键链路已完全连通**，Remote Buddy 会自动分发按键响应，确保用户在“添加遥控器向导”中的按键测试顺利通过，不卡死流程，并在日志中输出友好指引。当用户在日常使用中重启过一次蓝牙或系统后，`EtwLogSensitiveData=1` 生效，即可自动解锁全按键 100% 精确区分（如单独识别 YouTube、Netflix、返回键等）。
+### 3. 截断报文丢弃与向导重启提示机制
+在首次配置注册表参数 `EtwLogSensitiveData=1` 之后、重启电脑或蓝牙适配器之前，Windows `bthport.sys` 可能会对 ACL 数据包进行脱敏截断（保留 7 字节报头，剥除 HID 载荷）。
+缺少载荷时既无法判断按键种类，也无法区分按下和松开状态。Remote Buddy 坚持严格正确性原则：
+- **安全丢弃截断报文**：绝不随意生成伪按键（如误判为 OK 键），避免向导误判测试通过或在运行时误触 Enter 映射；
+- **向导友好引导**：捕获到截断特征（L2CAP CID == 4, ATT Handle == 0x0029 但无载荷）后，在向导界面高亮提示用户“在 Windows 设置中关闭并重新打开一次蓝牙（或重启电脑）使驱动参数生效”；
+- **连接句柄绑定隔离**：通过设备握手与 ATVV 专属 GATT 通讯（TX/Audio/Control）自动捕获并绑定当前遥控器的 ACL 连接句柄（ConnectionHandle），严格过滤其他蓝牙外设的同类 ATT 句柄报文，彻底杜绝跨设备误触。
 
 ### 4. 首次向导多级消息协同
 在 `OnboardingWindow.xaml.cs` 中，除了后台 ETW 监听外，还注入了：

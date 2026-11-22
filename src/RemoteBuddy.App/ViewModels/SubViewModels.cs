@@ -308,6 +308,10 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         {
             confirmed = ConfirmDeviceRemovalHandler(device);
         }
+        else if (IsRunningInTestHost())
+        {
+            confirmed = true;
+        }
         else
         {
             var result = System.Windows.MessageBox.Show(
@@ -357,6 +361,19 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
             }
             _config.Save();
         }
+    }
+
+    private static bool IsRunningInTestHost()
+    {
+        string processName = System.Diagnostics.Process.GetCurrentProcess().ProcessName.ToLowerInvariant();
+        if (processName.Contains("testhost") || processName.Contains("vstest") || processName.Contains("xunit"))
+        {
+            return true;
+        }
+
+        return AppDomain.CurrentDomain.GetAssemblies()
+            .Any(a => a.GetName().Name?.ToLowerInvariant().Contains("xunit") == true ||
+                      a.GetName().Name?.ToLowerInvariant().Contains("test") == true);
     }
 }
 

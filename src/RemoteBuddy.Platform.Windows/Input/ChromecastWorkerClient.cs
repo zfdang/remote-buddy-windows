@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.Security.AccessControl;
@@ -17,6 +18,9 @@ namespace RemoteBuddy.Platform.Windows.Input;
 public sealed class ChromecastWorkerClient : IDisposable
 {
     public event Action<RemoteButton, bool>? ButtonEvent;
+    public event Action? TruncatedPacketDetected;
+    public event Action<ushort>? ConnectionHandleBound;
+    public event Action? Disconnected;
 
     private readonly object _lock = new();
     private NamedPipeServerStream? _pipeServer;
@@ -97,10 +101,32 @@ public sealed class ChromecastWorkerClient : IDisposable
                     return false;
                 }
 
+                // Wait for worker process to connect and verify that ETW is ready (up to 12 seconds)
+                using var timeoutCts = new CancellationTokenSource(12000);
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, timeoutCts.Token);
+
+                _pipeServer.WaitForConnectionAsync(linkedCts.Token).GetAwaiter().GetResult();
+
+                byte[] readyBuf = new byte[1];
+                int read = _pipeServer.Read(readyBuf, 0, 1);
+                if (read == 0 || readyBuf[0] != 0x01)
+                {
+                    AppLogger.Warn($"Chromecast worker reported startup failure (byte={(read > 0 ? readyBuf[0] : -1)})", "ChromecastWorkerClient");
+                    Cleanup();
+                    return false;
+                }
+
+                AppLogger.Info("ChromecastWorkerClient: Received ready confirmation (0x01) from worker", "ChromecastWorkerClient");
                 _isRunning = true;
                 var ct = _cts.Token;
                 _readTask = Task.Run(() => ListenToPipeAsync(_pipeServer, ct), ct);
                 return true;
+            }
+            catch (OperationCanceledException)
+            {
+                AppLogger.Warn("Timeout or cancellation waiting for Chromecast worker connection/handshake", "ChromecastWorkerClient");
+                Cleanup();
+                return false;
             }
             catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 1223 /* ERROR_CANCELLED (UAC declined) */)
             {
@@ -117,34 +143,82 @@ public sealed class ChromecastWorkerClient : IDisposable
         }
     }
 
+    public void SendKnownGattHandles(IEnumerable<ushort> handles)
+    {
+        lock (_lock)
+        {
+            if (!_isRunning || _pipeServer == null || !_pipeServer.IsConnected) return;
+            try
+            {
+                var list = handles.Where(h => h != 0).Take(255).ToList();
+                byte[] buffer = new byte[2 + list.Count * 2];
+                buffer[0] = ChromecastWorkerHost.CmdSetKnownGattHandles;
+                buffer[1] = (byte)list.Count;
+                for (int i = 0; i < list.Count; i++)
+                {
+                    BinaryPrimitives.WriteUInt16LittleEndian(buffer.AsSpan(2 + i * 2, 2), list[i]);
+                }
+                _pipeServer.Write(buffer, 0, buffer.Length);
+                _pipeServer.Flush();
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Debug($"SendKnownGattHandles pipe error: {ex.Message}", "ChromecastWorkerClient");
+            }
+        }
+    }
+
+    public void SendResetBinding()
+    {
+        lock (_lock)
+        {
+            if (!_isRunning || _pipeServer == null || !_pipeServer.IsConnected) return;
+            try
+            {
+                byte[] buffer = [ChromecastWorkerHost.CmdResetBinding];
+                _pipeServer.Write(buffer, 0, 1);
+                _pipeServer.Flush();
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Debug($"SendResetBinding pipe error: {ex.Message}", "ChromecastWorkerClient");
+            }
+        }
+    }
+
     private async Task ListenToPipeAsync(NamedPipeServerStream server, CancellationToken ct)
     {
         try
         {
-            using var timeoutCts = new CancellationTokenSource(15000);
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
-            await server.WaitForConnectionAsync(linked.Token);
-
-            AppLogger.Info("ChromecastWorkerClient established connection with worker process", "ChromecastWorkerClient");
-
-            byte[] buffer = new byte[2];
+            byte[] typeBuf = new byte[1];
             while (!ct.IsCancellationRequested && server.IsConnected)
             {
-                int totalRead = 0;
-                while (totalRead < 2)
+                int read = await server.ReadAsync(typeBuf.AsMemory(0, 1), ct);
+                if (read == 0) break; // Pipe disconnected / EOF
+
+                byte msgType = typeBuf[0];
+                if (msgType == ChromecastWorkerHost.MsgTypeButtonEvent)
                 {
-                    int bytesRead = await server.ReadAsync(buffer.AsMemory(totalRead, 2 - totalRead), ct);
-                    if (bytesRead == 0) break; // Pipe disconnected
-                    totalRead += bytesRead;
+                    byte[] payload = new byte[2];
+                    await ReadExactAsync(server, payload, ct);
+                    var button = (RemoteButton)payload[0];
+                    bool isDown = payload[1] != 0;
+                    AppLogger.Info($"ChromecastWorkerClient: Received button {button}, isDown={isDown} from worker pipe", "ChromecastWorkerClient");
+                    ButtonEvent?.Invoke(button, isDown);
                 }
-
-                if (totalRead < 2) break;
-
-                var button = (RemoteButton)buffer[0];
-                bool isDown = buffer[1] != 0;
-                AppLogger.Info($"ChromecastWorkerClient: Received button {button}, isDown={isDown} from worker pipe", "ChromecastWorkerClient");
-
-                ButtonEvent?.Invoke(button, isDown);
+                else if (msgType == ChromecastWorkerHost.MsgTypeTruncatedDetected)
+                {
+                    AppLogger.Warn("ChromecastWorkerClient: Received truncated packet notification from worker pipe", "ChromecastWorkerClient");
+                    TruncatedPacketDetected?.Invoke();
+                }
+                else if (msgType == ChromecastWorkerHost.MsgTypeConnectionHandleBound)
+                {
+                    byte[] payload = new byte[2];
+                    await ReadExactAsync(server, payload, ct);
+                    ushort handle = BinaryPrimitives.ReadUInt16LittleEndian(payload);
+                    AppLogger.Info($"ChromecastWorkerClient: Received bound ConnectionHandle 0x{handle:X4} from worker pipe", "ChromecastWorkerClient");
+                    ConnectionHandleBound?.Invoke(handle);
+                }
             }
         }
         catch (OperationCanceledException) { }
@@ -161,13 +235,31 @@ public sealed class ChromecastWorkerClient : IDisposable
         }
     }
 
+    private static async Task ReadExactAsync(Stream stream, byte[] buffer, CancellationToken ct)
+    {
+        int total = 0;
+        while (total < buffer.Length)
+        {
+            int r = await stream.ReadAsync(buffer.AsMemory(total, buffer.Length - total), ct);
+            if (r == 0) throw new EndOfStreamException();
+            total += r;
+        }
+    }
+
     public void Stop()
     {
+        bool wasRunning;
         lock (_lock)
         {
+            wasRunning = _isRunning;
             if (!_isRunning) return;
             _isRunning = false;
             Cleanup();
+        }
+
+        if (wasRunning)
+        {
+            Disconnected?.Invoke();
         }
     }
 

@@ -156,6 +156,35 @@ public class ChromecastEtwTests
     }
 
     [Fact]
+    public void TryParseAclPacket_EmptyPayloadHeaderOnly_ReturnsFalseAndNeverReportsOk()
+    {
+        // 7-byte L2CAP header with 0-byte payload (typical BthPort truncated packet)
+        byte[] packet = CreateAclPacket(0x1B, 0x0029, []);
+
+        bool success = ChromecastEtwReceiver.TryParseAclPacket(packet, out var button, out bool isDown, out bool isTruncated);
+
+        Assert.False(success);
+        Assert.True(isTruncated);
+        Assert.Equal(RemoteButton.None, button);
+        Assert.False(isDown);
+    }
+
+    [Fact]
+    public void ChromecastEtwReceiver_ConnectionBinding_CanSetAndReset()
+    {
+        using var receiver = new ChromecastEtwReceiver();
+        Assert.Null(receiver.BoundConnectionHandle);
+
+        receiver.BoundConnectionHandle = 0x0042;
+        Assert.Equal((ushort)0x0042, receiver.BoundConnectionHandle);
+
+        receiver.SetKnownGattHandles([0x001A, 0x001B]);
+
+        receiver.ResetConnectionBinding();
+        Assert.Null(receiver.BoundConnectionHandle);
+    }
+
+    [Fact]
     public void ChromecastButtonReceiver_CanInstantiateAndDispose()
     {
         using var receiver = new ChromecastButtonReceiver();

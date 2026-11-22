@@ -126,6 +126,20 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     private bool _hasButtonTested = false;
 
     [ObservableProperty]
+    private string _truncationWarningMessage = string.Empty;
+
+    public Visibility TruncationWarningVisibility => string.IsNullOrEmpty(TruncationWarningMessage) ? Visibility.Collapsed : Visibility.Visible;
+
+    public void NotifyTruncatedPacketDetected()
+    {
+        if (CurrentWizardStep == WizardStep.ButtonTest)
+        {
+            TruncationWarningMessage = "检测到遥控器按键报文被系统隐私机制脱敏截断（缺少载荷数据）。请在 Windows 设置中关闭并重新打开一次蓝牙（或重启电脑）使驱动参数生效。";
+            OnPropertyChanged(nameof(TruncationWarningVisibility));
+        }
+    }
+
+    [ObservableProperty]
     private float _liveAudioLevel = 0f;
 
     [ObservableProperty]
@@ -422,6 +436,8 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
         if (CurrentWizardStep != WizardStep.ButtonTest || button == RemoteButton.None) return;
         LastPressedButtonName = $"已按下: {GetButtonFriendlyName(button)}";
         HasButtonTested = true;
+        TruncationWarningMessage = string.Empty;
+        OnPropertyChanged(nameof(TruncationWarningVisibility));
     }
 
     private static string GetButtonFriendlyName(RemoteButton button) => button switch
@@ -452,6 +468,8 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
         {
             HasButtonTested = false;
             LastPressedButtonName = "尚未检测到按键";
+            TruncationWarningMessage = string.Empty;
+            OnPropertyChanged(nameof(TruncationWarningVisibility));
         }
         if (CurrentWizardStep == WizardStep.AudioTest)
         {
