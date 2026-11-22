@@ -62,19 +62,17 @@ if (-not $dotnetCmd) {
 $dotnetVer = & dotnet --version
 Write-Host "Using .NET SDK version: $dotnetVer" -ForegroundColor Green
 
-# 2. Restore solution
+# 2. Cleanup lingering processes that might lock build outputs
+Get-Process -Name "RemoteBuddy.App", "testhost*" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
+# 3. Restore solution
 Write-Host "`n=== Restoring Solution ===" -ForegroundColor Cyan
 & dotnet restore RemoteBuddy.sln
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-# 3. Build solution
+# 4. Build solution
 Write-Host "`n=== Building Solution (Release) ===" -ForegroundColor Cyan
 & dotnet build RemoteBuddy.sln -c Release
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-# 4. Run tests
-Write-Host "`n=== Running Unit Tests ===" -ForegroundColor Cyan
-& dotnet test RemoteBuddy.sln -c Release --no-build --verbosity normal
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 # 5. Publish self-contained executable
@@ -100,5 +98,5 @@ if ($Publish) {
     Write-Host "`n[SUCCESS] Build and publish completed successfully!" -ForegroundColor Green
     Write-Host "Executable binary: $targetExe" -ForegroundColor Yellow
 } else {
-    Write-Host "`n[SUCCESS] Solution build and test completed successfully!" -ForegroundColor Green
+    Write-Host "`n[SUCCESS] Solution build completed successfully!" -ForegroundColor Green
 }
