@@ -46,11 +46,22 @@ Windows RC003 实机测试中，方向、OK、Home、Menu、TV、电源和语音
 
 相关技术细节与规范已在 `docs/` 目录下完成详细归档：
 
+- 🕹️ [Google Chromecast (G9N9N) 按键处理方案技术规范](docs/chromecast-g9n9n-button-handling.md)：详细阐述 G9N9N/GY3LE 遥控器在 Windows 上的隔离痛点、多种技术路线对比（Frida 注入 vs ETW 实时流 vs 消息栈）以及 Remote Buddy 采用的原生零注入多轨协同架构；
 - 🏛️ [软件架构设计 (Architecture)](docs/architecture.md)：技术栈选型（.NET 10 LTS + WPF 自包含发布）、分层设计与线程并发模型；
 - 📡 [遥控器与 ATVV 协议规范 (Device Protocols)](docs/device-protocols.md)：支持设备列表、完整 ATVV 控制报文（`0x08`, `0x04`, `0x0A`, `0x0D` 等）、动态 `SessionID` 处理、`AUDIO_SYNC` 解码同步与 HID Usage 码表；
 - 🎙️ [虚拟音频与驱动集成方案 (Virtual Audio & Driver)](docs/virtual-audio-and-driver.md)：Windows 驱动签名限制应对策略、VB-CABLE 独立安装合规决策、重启状态处理与 WASAPI 低延迟推流引擎；
 - ⌨️ [按键监听与快捷键注入规范 (Input & Hotkeys)](docs/input-and-hotkeys.md)：Raw Input 监听限制（区分监听、附加映射与屏蔽）、`SendInput` 64 位结构对齐（40 字节）、UIPI 权限与首尾音时序防护；
 - 🗺️ [开发路线图与里程碑 (Development Roadmap)](docs/development-roadmap.md)：设立严格的第一阶段真机验收门槛（Phase 1 Acceptance Gate），明确从 CLI 验证到实际转写成功的路线。
+
+---
+
+## 🤝 参考项目与致谢 (Attribution & References)
+
+本项目在 Windows 平台实现蓝牙电视遥控器低延迟语音输入与按键捕获的过程中，参考并汲取了以下开源项目的宝贵经验与设计灵感：
+
+1. **[remote-buddy (macOS 原生版)](https://github.com/zfdang/remote-buddy)**：Remote Buddy 原创 macOS 项目，提供了完整的 ATVV 协议状态机、时序防吞字、虚拟声卡路由架构及优秀的产品设计；
+2. **[MoteDeck](https://github.com/HZDavy/MoteDeck)**：启发了在 Windows 下对蓝牙遥控器系统消息交互与原生按键直通映射的探索；
+3. **[windows-remote-mic-app](https://github.com/BenjmSek/windows-remote-mic-app)**：为 Windows 平台下 BthPort ETW Event 402 内核事件捕获、驱动脱敏机制及 HID GATT 协议分析提供了宝贵的数据支撑。
 
 ---
 
