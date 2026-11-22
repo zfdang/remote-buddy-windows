@@ -80,25 +80,6 @@
                     </StackPanel>
                 </DockPanel>
             </Border>
-
-            <!-- Card 4: Reference Projects & Attribution -->
-            <Border Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="8" Padding="20">
-                <StackPanel>
-                    <TextBlock Text="开源参考项目 (Attribution &amp; References)" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,6"/>
-                    <TextBlock Text="感谢以下开源项目为本项目的架构设计、驱动分析与协议逆向提供的宝贵参考与实践经验：" FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,14"/>
-                    <WrapPanel>
-                        <Button Content="🍎 remote-buddy (macOS)" Margin="0,0,10,8" Padding="12,7"
-                                ToolTip="https://github.com/zfdang/remote-buddy"
-                                Command="{Binding OpenUrlCommand}" CommandParameter="https://github.com/zfdang/remote-buddy"/>
-                        <Button Content="🎮 MoteDeck (HZDavy)" Margin="0,0,10,8" Padding="12,7"
-                                ToolTip="https://github.com/HZDavy/MoteDeck"
-                                Command="{Binding OpenUrlCommand}" CommandParameter="https://github.com/HZDavy/MoteDeck"/>
-                        <Button Content="🎙️ windows-remote-mic-app (BenjmSek)" Margin="0,0,10,8" Padding="12,7"
-                                ToolTip="https://github.com/BenjmSek/windows-remote-mic-app"
-                                Command="{Binding OpenUrlCommand}" CommandParameter="https://github.com/BenjmSek/windows-remote-mic-app"/>
-                    </WrapPanel>
-                </StackPanel>
-            </Border>
         </StackPanel>
     </ScrollViewer>
 </UserControl>

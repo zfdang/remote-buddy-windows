@@ -35,6 +35,9 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
     private bool _isScanning;
 
     [ObservableProperty]
+    private bool _isRestartingBluetooth;
+
+    [ObservableProperty]
     private float _deviceGain = 1.0f;
 
     public string ConnectedDeviceName => _bt.IsConnected ? _bt.ConnectedDeviceName : "未连接设备";
@@ -349,6 +352,26 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         _config.Save();
     }
 
+    [RelayCommand]
+    public async Task RestartBluetoothAsync()
+    {
+        if (IsRestartingBluetooth) return;
+        IsRestartingBluetooth = true;
+        try
+        {
+            var (success, msg) = await BluetoothAdapterHelper.RestartBluetoothAdapterAsync();
+            if (!DevicesViewModel.IsRunningInTestHost())
+            {
+                System.Windows.MessageBox.Show(msg, "蓝牙适配器", System.Windows.MessageBoxButton.OK,
+                    success ? System.Windows.MessageBoxImage.Information : System.Windows.MessageBoxImage.Warning);
+            }
+        }
+        finally
+        {
+            IsRestartingBluetooth = false;
+        }
+    }
+
     partial void OnSelectedDeviceChanged(RemoteDevice? value)
     {
         if (value != null)
@@ -363,7 +386,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         }
     }
 
-    private static bool IsRunningInTestHost()
+    internal static bool IsRunningInTestHost()
     {
         string processName = System.Diagnostics.Process.GetCurrentProcess().ProcessName.ToLowerInvariant();
         if (processName.Contains("testhost") || processName.Contains("vstest") || processName.Contains("xunit"))
@@ -879,12 +902,38 @@ public partial class EnvironmentViewModel : ObservableObject
         _ => "初始化失败"
     };
 
+    public string BthPortStatusBadgeText => BthPortRegistryHelper.IsConfigured() ? "驱动参数已配置" : "需配置驱动参数";
+
     [ObservableProperty]
     private string _statusDescription = string.Empty;
+
+    [ObservableProperty]
+    private bool _isRestartingBluetooth;
 
     public EnvironmentViewModel()
     {
         RefreshStatus();
+    }
+
+    [RelayCommand]
+    public async Task RestartBluetoothAsync()
+    {
+        if (IsRestartingBluetooth) return;
+        IsRestartingBluetooth = true;
+        try
+        {
+            var (success, msg) = await BluetoothAdapterHelper.RestartBluetoothAdapterAsync();
+            RefreshStatus();
+            if (!DevicesViewModel.IsRunningInTestHost())
+            {
+                System.Windows.MessageBox.Show(msg, "蓝牙适配器", System.Windows.MessageBoxButton.OK,
+                    success ? System.Windows.MessageBoxImage.Information : System.Windows.MessageBoxImage.Warning);
+            }
+        }
+        finally
+        {
+            IsRestartingBluetooth = false;
+        }
     }
 
     [RelayCommand]

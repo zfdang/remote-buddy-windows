@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 using RemoteBuddy.Core.Models;
+using RemoteBuddy.Platform.Windows.Bluetooth;
 using RemoteBuddy.Platform.Windows.Input;
 using Xunit;
 
@@ -191,5 +192,21 @@ public class ChromecastEtwTests
         Assert.False(receiver.IsRunning);
         receiver.Stop();
         Assert.False(receiver.IsRunning);
+    }
+
+    [Fact]
+    public async Task BluetoothAdapterHelper_Restart_CustomHandler_ReturnsExpectedResult()
+    {
+        BluetoothAdapterHelper.CustomRestartHandler = () => Task.FromResult((true, "Test success"));
+        try
+        {
+            var (success, msg) = await BluetoothAdapterHelper.RestartBluetoothAdapterAsync();
+            Assert.True(success);
+            Assert.Equal("Test success", msg);
+        }
+        finally
+        {
+            BluetoothAdapterHelper.CustomRestartHandler = null;
+        }
     }
 }

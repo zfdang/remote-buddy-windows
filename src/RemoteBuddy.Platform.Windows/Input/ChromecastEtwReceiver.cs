@@ -262,7 +262,11 @@ public sealed class ChromecastEtwReceiver : IDisposable
 
         // Check if this packet is an ATT transaction on one of our known ATVV characteristic handles
         ReadOnlySpan<byte> l2cap;
-        if (aclData.Length >= 8)
+        if (aclData.Length >= 8 && BinaryPrimitives.ReadUInt16LittleEndian(aclData.Slice(6, 2)) == 4)
+        {
+            l2cap = aclData.Slice(4);
+        }
+        else if (aclData.Length >= 8)
         {
             ushort declaredLen = BinaryPrimitives.ReadUInt16LittleEndian(aclData.Slice(2, 2));
             if (declaredLen > 0 && declaredLen <= aclData.Length - 4)
@@ -321,7 +325,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
         }
         else if (isTruncated)
         {
-            AppLogger.Warn($"[ETW BthPort] Detected truncated packet without payload from ConnectionHandle=0x{connectionHandle:X4}. Discarding event.", "ChromecastEtwReceiver");
+            AppLogger.Warn($"[ETW BthPort] Detected truncated packet (Len={aclData.Length}, Hex={Convert.ToHexString(aclData.ToArray())}) from ConnectionHandle=0x{connectionHandle:X4}. Discarding event.", "ChromecastEtwReceiver");
             TruncatedPacketDetected?.Invoke();
         }
     }
@@ -360,7 +364,17 @@ public sealed class ChromecastEtwReceiver : IDisposable
         if (aclPacket.Length < 7) return false;
 
         ReadOnlySpan<byte> l2capPacket;
-        if (aclPacket.Length >= 8)
+        if (aclPacket.Length >= 8 && BinaryPrimitives.ReadUInt16LittleEndian(aclPacket.Slice(6, 2)) == 4)
+        {
+            // Standard HCI ACL packet with 4-byte HCI header and L2CAP starting at offset 4 (CID at offset 6 is 4)
+            l2capPacket = aclPacket.Slice(4);
+        }
+        else if (aclPacket.Length >= 4 && BinaryPrimitives.ReadUInt16LittleEndian(aclPacket.Slice(2, 2)) == 4)
+        {
+            // Already L2CAP-sliced buffer starting at offset 0 (CID at offset 2 is 4)
+            l2capPacket = aclPacket;
+        }
+        else if (aclPacket.Length >= 8)
         {
             ushort declaredLen = BinaryPrimitives.ReadUInt16LittleEndian(aclPacket.Slice(2, 2));
             if (declaredLen > 0 && declaredLen <= aclPacket.Length - 4)

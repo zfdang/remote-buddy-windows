@@ -79,6 +79,25 @@
                     </Grid>
                 </StackPanel>
             </Border>
+
+            <!-- Card 3: Bluetooth Adapter & Driver Configuration -->
+            <Border Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="8" Padding="20" Margin="0,18,0,0">
+                <StackPanel>
+                    <DockPanel LastChildFill="False" Margin="0,0,0,12">
+                        <TextBlock Text="蓝牙硬件适配器与 ETW 驱动参数" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" DockPanel.Dock="Left"/>
+                        <Border Background="#1C3827" BorderBrush="#2D6A42" BorderThickness="1" CornerRadius="10" Padding="10,3" DockPanel.Dock="Right">
+                            <TextBlock Text="{Binding BthPortStatusBadgeText}" Foreground="#44FF88" FontSize="12" FontWeight="Medium"/>
+                        </Border>
+                    </DockPanel>
+
+                    <TextBlock Text="Chromecast 等遥控器通过 BthPort ETW 实时事件流捕获实体按键。Windows 系统要求设置驱动脱敏参数后重启蓝牙硬件适配器以生效。" Foreground="{StaticResource SecondaryTextBrush}" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,14"/>
+
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="⚡ 一键重启蓝牙适配器" Padding="16,8" Background="#E67E22" Foreground="White" FontWeight="Bold"
+                                Command="{Binding RestartBluetoothCommand}" Margin="0,0,10,0"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
         </StackPanel>
     </ScrollViewer>
 </UserControl>

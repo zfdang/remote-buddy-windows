@@ -11,6 +11,7 @@ using RemoteBuddy.Core.Config;
 using RemoteBuddy.Core.Diagnostics;
 using RemoteBuddy.Core.Models;
 using RemoteBuddy.Platform.Windows.Audio;
+using RemoteBuddy.Platform.Windows.Bluetooth;
 using RemoteBuddy.Platform.Windows.Input;
 
 namespace RemoteBuddy.App.ViewModels;
@@ -130,12 +131,49 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
 
     public Visibility TruncationWarningVisibility => string.IsNullOrEmpty(TruncationWarningMessage) ? Visibility.Collapsed : Visibility.Visible;
 
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanRestartBluetooth))]
+    private bool _isRestartingBluetooth = false;
+
+    public bool CanRestartBluetooth => !IsRestartingBluetooth;
+
+    [ObservableProperty]
+    private string _restartBluetoothStatusText = string.Empty;
+
+    public Visibility RestartBluetoothStatusVisibility => string.IsNullOrEmpty(RestartBluetoothStatusText) ? Visibility.Collapsed : Visibility.Visible;
+
     public void NotifyTruncatedPacketDetected()
     {
         if (CurrentWizardStep == WizardStep.ButtonTest)
         {
-            TruncationWarningMessage = "检测到遥控器按键报文被系统隐私机制脱敏截断（缺少载荷数据）。请在 Windows 设置中关闭并重新打开一次蓝牙（或重启电脑）使驱动参数生效。";
+            TruncationWarningMessage = "检测到遥控器按键报文被系统隐私机制脱敏截断（缺少载荷数据）。请点击右侧“重启蓝牙适配器”（或以管理员身份运行本程序），使驱动脱敏规则生效。";
             OnPropertyChanged(nameof(TruncationWarningVisibility));
+        }
+    }
+
+    [RelayCommand]
+    public async Task RestartBluetoothAdapterAsync()
+    {
+        if (IsRestartingBluetooth) return;
+
+        IsRestartingBluetooth = true;
+        RestartBluetoothStatusText = "正在重启系统蓝牙适配器，请稍候...";
+        OnPropertyChanged(nameof(RestartBluetoothStatusVisibility));
+
+        try
+        {
+            var (success, msg) = await BluetoothAdapterHelper.RestartBluetoothAdapterAsync();
+            RestartBluetoothStatusText = msg;
+            OnPropertyChanged(nameof(RestartBluetoothStatusVisibility));
+        }
+        catch (Exception ex)
+        {
+            RestartBluetoothStatusText = $"重启发生异常: {ex.Message}";
+            OnPropertyChanged(nameof(RestartBluetoothStatusVisibility));
+        }
+        finally
+        {
+            IsRestartingBluetooth = false;
         }
     }
 
@@ -437,7 +475,9 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
         LastPressedButtonName = $"已按下: {GetButtonFriendlyName(button)}";
         HasButtonTested = true;
         TruncationWarningMessage = string.Empty;
+        RestartBluetoothStatusText = string.Empty;
         OnPropertyChanged(nameof(TruncationWarningVisibility));
+        OnPropertyChanged(nameof(RestartBluetoothStatusVisibility));
     }
 
     private static string GetButtonFriendlyName(RemoteButton button) => button switch
@@ -469,7 +509,9 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             HasButtonTested = false;
             LastPressedButtonName = "尚未检测到按键";
             TruncationWarningMessage = string.Empty;
+            RestartBluetoothStatusText = string.Empty;
             OnPropertyChanged(nameof(TruncationWarningVisibility));
+            OnPropertyChanged(nameof(RestartBluetoothStatusVisibility));
         }
         if (CurrentWizardStep == WizardStep.AudioTest)
         {
