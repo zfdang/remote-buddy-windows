@@ -56,11 +56,8 @@ public sealed class ChromecastEtwReceiver : IDisposable
             int propSize = Marshal.SizeOf<EVENT_TRACE_PROPERTIES>() + 1024;
             _propertiesBuffer = Marshal.AllocHGlobal(propSize);
 
-            unsafe
-            {
-                byte* ptr = (byte*)_propertiesBuffer.ToPointer();
-                for (int i = 0; i < propSize; i++) ptr[i] = 0;
-            }
+            byte[] zero = new byte[propSize];
+            Marshal.Copy(zero, 0, _propertiesBuffer, propSize);
 
             var prop = new EVENT_TRACE_PROPERTIES
             {
