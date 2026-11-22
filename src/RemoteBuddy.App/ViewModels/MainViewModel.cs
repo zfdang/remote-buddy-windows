@@ -120,6 +120,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnChromecastButtonEvent(RemoteButton button, bool isDown)
     {
+        AppLogger.Info($"MainViewModel: OnChromecastButtonEvent: button={button}, isDown={isDown}", "MainViewModel");
         if (System.Windows.Application.Current?.Dispatcher != null && !System.Windows.Application.Current.Dispatcher.CheckAccess())
         {
             System.Windows.Application.Current.Dispatcher.BeginInvoke(new Action(() => OnRawButtonEvent(IntPtr.Zero, button, isDown)));

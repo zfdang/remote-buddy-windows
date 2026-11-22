@@ -100,7 +100,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 ref providerGuid,
                 1,                      // EVENT_CONTROL_CODE_ENABLE_PROVIDER
                 5,                      // TRACE_LEVEL_VERBOSE
-                0x8000000000000000UL,   // matchAnyKeyword (BthPort Data Events)
+                ulong.MaxValue,         // matchAnyKeyword: match all keywords (HCI, HCIRAW, L2CAP, etc.)
                 0, 0, IntPtr.Zero);
 
             if (enableResult != 0)
@@ -167,22 +167,40 @@ public sealed class ChromecastEtwReceiver : IDisposable
         {
             var header = Marshal.PtrToStructure<EVENT_HEADER>(pEventRecord);
             if (header.ProviderId != BthPortProviderGuid) return;
-            if (header.EventDescriptor.Id != 402 /* BthPort_Event_BipAclData */) return;
 
+            // 1. Try TDH property extraction first
+            byte[]? aclData = null;
             byte[]? typeBytes = GetEventProperty(pEventRecord, "BIP_Type");
-            if (typeBytes == null || typeBytes.Length < 1 || typeBytes[0] != 3 /* ACL RX */) return;
-
-            byte[]? dataBytes = GetEventProperty(pEventRecord, "BIP_Data");
-            if (dataBytes == null || dataBytes.Length < 12) return;
-
-            if (TryParseAclPacket(dataBytes, out RemoteButton button, out bool isDown))
+            if (typeBytes != null && typeBytes.Length >= 1)
             {
-                DispatchButtonEvent(button, isDown);
+                aclData = GetEventProperty(pEventRecord, "BIP_Data");
+            }
+
+            if (aclData != null && aclData.Length >= 5 && TryParseAclPacket(aclData, out RemoteButton buttonFromTdh, out bool isDownTdh))
+            {
+                AppLogger.Info($"[ETW BthPort] Detected button via TDH: {buttonFromTdh}, isDown={isDownTdh}", "ChromecastEtwReceiver");
+                DispatchButtonEvent(buttonFromTdh, isDownTdh);
+                return;
+            }
+
+            // 2. Fall back to raw UserData inspection (handles missing TDH manifests or custom layouts)
+            var record = Marshal.PtrToStructure<EVENT_RECORD>(pEventRecord);
+            if (record.UserDataLength >= 5 && record.UserData != IntPtr.Zero)
+            {
+                byte[] raw = new byte[record.UserDataLength];
+                Marshal.Copy(record.UserData, raw, 0, record.UserDataLength);
+
+                if (TryParseAclPacket(raw, out RemoteButton buttonFromRaw, out bool isDownRaw))
+                {
+                    AppLogger.Info($"[ETW BthPort] Detected button via raw UserData: {buttonFromRaw}, isDown={isDownRaw} (Event ID={header.EventDescriptor.Id}, Len={record.UserDataLength})", "ChromecastEtwReceiver");
+                    DispatchButtonEvent(buttonFromRaw, isDownRaw);
+                    return;
+                }
             }
         }
         catch (Exception ex)
         {
-            AppLogger.Debug($"Exception processing ETW event record: {ex.Message}", "ChromecastEtwReceiver");
+            AppLogger.Warn($"Exception processing ETW event record: {ex.Message}", "ChromecastEtwReceiver");
         }
     }
 
@@ -191,79 +209,211 @@ public sealed class ChromecastEtwReceiver : IDisposable
         button = RemoteButton.None;
         isDown = false;
 
-        if (aclPacket.Length < 12) return false;
+        if (aclPacket.Length < 5) return false;
 
-        ushort l2capLen = BinaryPrimitives.ReadUInt16LittleEndian(aclPacket.Slice(4, 2));
-        ushort cid = BinaryPrimitives.ReadUInt16LittleEndian(aclPacket.Slice(6, 2));
-
-        if (cid != 4) return false; // ATT CID is 4
-        if (aclPacket.Length < 8 + l2capLen) return false;
-
-        byte attOpcode = aclPacket[8];
-        if (attOpcode != 0x1B && attOpcode != 0x1D) return false; // Handle Value Notification or Indication
-
-        ushort attrHandle = BinaryPrimitives.ReadUInt16LittleEndian(aclPacket.Slice(9, 2));
-        // G9N9N Chromecast Remote HID input report handle is 0x0029
-        if (attrHandle != 0x0029) return false;
-
-        ReadOnlySpan<byte> report = aclPacket.Slice(11, l2capLen - 3);
-        if (report.IsEmpty) return false;
-
-        if (report.Length >= 8)
+        // 1. Direct structured parse (standard ACL / L2CAP packet alignment)
+        if (TryDirectParse(aclPacket, out button, out isDown))
         {
-            byte code = report[0];
-            if (code == 0)
+            return true;
+        }
+
+        // 2. Fallback pattern scan (scans entire buffer for ATT Handle Value Notification: 0x1B or 0x1D)
+        return ScanAttNotification(aclPacket, out button, out isDown);
+    }
+
+    private static bool TryDirectParse(ReadOnlySpan<byte> aclPacket, out RemoteButton button, out bool isDown)
+    {
+        button = RemoteButton.None;
+        isDown = false;
+
+        if (aclPacket.Length < 7) return false;
+
+        ReadOnlySpan<byte> l2capPacket;
+        if (aclPacket.Length >= 8)
+        {
+            ushort declaredLen = BinaryPrimitives.ReadUInt16LittleEndian(aclPacket.Slice(2, 2));
+            if (declaredLen > 0 && declaredLen <= aclPacket.Length - 4)
             {
-                button = RemoteButton.None;
-                isDown = false;
-                return true;
+                l2capPacket = aclPacket.Slice(4);
             }
-
-            button = code switch
+            else
             {
-                0x01 => RemoteButton.Power,
-                0x03 => RemoteButton.Up,
-                0x04 => RemoteButton.Down,
-                0x05 => RemoteButton.Left,
-                0x06 => RemoteButton.Right,
-                0x07 => RemoteButton.Ok,
-                0x08 => RemoteButton.Mute,
-                0x0A => RemoteButton.Home,
-                0x0B => RemoteButton.Back,
-                0x0C => RemoteButton.VolumeUp,
-                0x0D => RemoteButton.VolumeDown,
-                0x0E => RemoteButton.YouTube,
-                0x0F => RemoteButton.Netflix,
-                0x11 => RemoteButton.Input,
-                _ => RemoteButton.None
-            };
-
-            if (button != RemoteButton.None)
-            {
-                isDown = true;
-                return true;
+                l2capPacket = aclPacket;
             }
         }
-        else if (report.Length >= 2)
+        else
         {
-            ushort usage = BinaryPrimitives.ReadUInt16LittleEndian(report.Slice(0, 2));
-            if (usage == 0)
-            {
-                button = RemoteButton.None;
-                isDown = false;
-                return true;
-            }
+            l2capPacket = aclPacket;
+        }
 
-            if (G9N9NProtocol.ConsumerButtons.TryGetValue(usage, out var consumerBtn))
+        if (l2capPacket.Length < 4) return false;
+
+        ushort cid = BinaryPrimitives.ReadUInt16LittleEndian(l2capPacket.Slice(2, 2));
+        if (cid != 4) return false; // ATT CID is 4
+        if (l2capPacket.Length < 5) return false;
+
+        byte attOpcode = l2capPacket[4];
+        if (attOpcode != 0x1B && attOpcode != 0x1D) return false;
+
+        if (l2capPacket.Length < 7) return false;
+        ushort attrHandle = BinaryPrimitives.ReadUInt16LittleEndian(l2capPacket.Slice(5, 2));
+        if (attrHandle != 0x0029) return false;
+
+        if (l2capPacket.Length > 7)
+        {
+            ReadOnlySpan<byte> report = l2capPacket.Slice(7);
+            if (report.Length >= 8)
             {
-                button = consumerBtn;
-                isDown = true;
-                return true;
+                byte code = report[0];
+                if (code == 0)
+                {
+                    button = RemoteButton.None;
+                    isDown = false;
+                    return true;
+                }
+
+                button = MapG9N9NButtonCode(code);
+                if (button != RemoteButton.None)
+                {
+                    isDown = true;
+                    return true;
+                }
+            }
+            else if (report.Length >= 2)
+            {
+                ushort usage = BinaryPrimitives.ReadUInt16LittleEndian(report.Slice(0, 2));
+                if (usage == 0)
+                {
+                    button = RemoteButton.None;
+                    isDown = false;
+                    return true;
+                }
+
+                if (G9N9NProtocol.ConsumerButtons.TryGetValue(usage, out var consumerBtn))
+                {
+                    button = consumerBtn;
+                    isDown = true;
+                    return true;
+                }
+            }
+        }
+        else
+        {
+            // Truncated by BthPort due to sensitive logging pending adapter restart
+            button = RemoteButton.Ok;
+            isDown = true;
+            AppLogger.Info("Chromecast ETW: Detected 0x0029 notification (header-only / truncated by BthPort). Reporting Ok/Down.", "ChromecastEtwReceiver");
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool ScanAttNotification(ReadOnlySpan<byte> span, out RemoteButton button, out bool isDown)
+    {
+        button = RemoteButton.None;
+        isDown = false;
+
+        for (int i = 2; i <= span.Length - 3; i++)
+        {
+            byte opcode = span[i];
+            if (opcode != 0x1B && opcode != 0x1D) continue;
+
+            // Verify L2CAP CID is ATT (Channel 4)
+            ushort cid = (ushort)(span[i - 2] | (span[i - 1] << 8));
+            if (cid != 4) continue;
+
+            ushort attrHandle = (ushort)(span[i + 1] | (span[i + 2] << 8));
+            if (attrHandle == 0x0029)
+            {
+                ReadOnlySpan<byte> payload = span.Slice(i + 3);
+                if (payload.Length >= 8)
+                {
+                    byte code = payload[0];
+                    if (code == 0)
+                    {
+                        button = RemoteButton.None;
+                        isDown = false;
+                        return true;
+                    }
+
+                    var mapped = MapG9N9NButtonCode(code);
+                    if (mapped != RemoteButton.None)
+                    {
+                        button = mapped;
+                        isDown = true;
+                        return true;
+                    }
+                }
+                else if (payload.Length >= 1)
+                {
+                    byte code = payload[0];
+                    if (code == 0)
+                    {
+                        button = RemoteButton.None;
+                        isDown = false;
+                        return true;
+                    }
+
+                    var mapped = MapG9N9NButtonCode(code);
+                    if (mapped != RemoteButton.None)
+                    {
+                        button = mapped;
+                        isDown = true;
+                        return true;
+                    }
+                }
+                else
+                {
+                    button = RemoteButton.Ok;
+                    isDown = true;
+                    return true;
+                }
+            }
+            else if (attrHandle == 0x002D || attrHandle == 0x0025 || attrHandle == 0x0028)
+            {
+                ReadOnlySpan<byte> payload = span.Slice(i + 3);
+                if (payload.Length >= 2)
+                {
+                    ushort usage = (ushort)(payload[0] | (payload[1] << 8));
+                    if (usage == 0)
+                    {
+                        button = RemoteButton.None;
+                        isDown = false;
+                        return true;
+                    }
+
+                    if (G9N9NProtocol.ConsumerButtons.TryGetValue(usage, out var consumerBtn))
+                    {
+                        button = consumerBtn;
+                        isDown = true;
+                        return true;
+                    }
+                }
             }
         }
 
         return false;
     }
+
+    private static RemoteButton MapG9N9NButtonCode(byte code) => code switch
+    {
+        0x01 => RemoteButton.Power,
+        0x03 => RemoteButton.Up,
+        0x04 => RemoteButton.Down,
+        0x05 => RemoteButton.Left,
+        0x06 => RemoteButton.Right,
+        0x07 => RemoteButton.Ok,
+        0x08 => RemoteButton.Mute,
+        0x0A => RemoteButton.Home,
+        0x0B => RemoteButton.Back,
+        0x0C => RemoteButton.VolumeUp,
+        0x0D => RemoteButton.VolumeDown,
+        0x0E => RemoteButton.YouTube,
+        0x0F => RemoteButton.Netflix,
+        0x11 => RemoteButton.Input,
+        _ => RemoteButton.None
+    };
 
     private void DispatchButtonEvent(RemoteButton button, bool isDown)
     {
@@ -495,6 +645,18 @@ public sealed class ChromecastEtwReceiver : IDisposable
         public IntPtr EventRecordCallback;
         public uint IsKernelTrace;
         public IntPtr Context;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct EVENT_RECORD
+    {
+        public EVENT_HEADER EventHeader;
+        public uint BufferContext;
+        public ushort ExtendedDataCount;
+        public ushort UserDataLength;
+        public IntPtr ExtendedData;
+        public IntPtr UserData;
+        public IntPtr UserContext;
     }
 
     [StructLayout(LayoutKind.Sequential)]

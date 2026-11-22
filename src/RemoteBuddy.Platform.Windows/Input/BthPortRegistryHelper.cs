@@ -17,6 +17,8 @@ public static class BthPortRegistryHelper
     private const string MaxEtwBytes = "MaxEtwBytes";
     private const string EtwDropLargeEvents = "EtwDropLargeEvents";
 
+    public static bool JustConfigured { get; private set; }
+
     public static bool IsConfigured()
     {
         try
@@ -54,8 +56,9 @@ public static class BthPortRegistryHelper
             key.SetValue(MaxEtwBytes, 1024, RegistryValueKind.DWord);
             key.SetValue(EtwDropLargeEvents, 0, RegistryValueKind.DWord);
             key.Flush();
+            JustConfigured = true;
 
-            AppLogger.Info("Successfully configured BthPort ETW registry parameters", "BthPortRegistryHelper");
+            AppLogger.Info("Successfully configured BthPort ETW registry parameters. Note: BthPort.sys driver applies sensitive logging upon Bluetooth adapter cycle or reboot.", "BthPortRegistryHelper");
             return true;
         }
         catch (UnauthorizedAccessException)

@@ -142,6 +142,7 @@ public sealed class ChromecastWorkerClient : IDisposable
 
                 var button = (RemoteButton)buffer[0];
                 bool isDown = buffer[1] != 0;
+                AppLogger.Info($"ChromecastWorkerClient: Received button {button}, isDown={isDown} from worker pipe", "ChromecastWorkerClient");
 
                 ButtonEvent?.Invoke(button, isDown);
             }

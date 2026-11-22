@@ -30,6 +30,7 @@ public static class ChromecastWorkerHost
             {
                 try
                 {
+                    AppLogger.Info($"ChromecastWorkerHost: Dispatched button {button}, isDown={isDown} to pipe", "ChromecastWorkerHost");
                     byte[] msg = [(byte)button, (byte)(isDown ? 1 : 0)];
                     lock (pipe)
                     {

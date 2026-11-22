@@ -418,6 +418,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
 
     public void NotifyButtonPressed(RemoteButton button)
     {
+        AppLogger.Info($"OnboardingViewModel: NotifyButtonPressed: button={button}, step={CurrentWizardStep}", "OnboardingViewModel");
         if (CurrentWizardStep != WizardStep.ButtonTest || button == RemoteButton.None) return;
         LastPressedButtonName = $"已按下: {GetButtonFriendlyName(button)}";
         HasButtonTested = true;

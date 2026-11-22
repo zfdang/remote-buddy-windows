@@ -1175,6 +1175,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
     {
         AppLogger.Info("Disconnect initiated: cleaning up Bluetooth connection and audio resources", "BluetoothManager");
         bool emitEnded = false;
+        bool hadConnection = false;
         BluetoothLEDevice? devToDispose = null;
         lock (_stateLock)
         {
@@ -1195,6 +1196,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
 
             if (_connectedDevice != null)
             {
+                hadConnection = true;
                 devToDispose = _connectedDevice;
                 _connectedDevice.ConnectionStatusChanged -= OnDeviceConnectionStatusChanged;
                 _connectedDevice = null;
@@ -1239,6 +1241,11 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
         if (emitEnded)
         {
             VoiceSessionEnded?.Invoke();
+        }
+
+        if (hadConnection)
+        {
+            ConnectionStatusChanged?.Invoke(false, string.Empty);
         }
 
         devToDispose?.Dispose();
