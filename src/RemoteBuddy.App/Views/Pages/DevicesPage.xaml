@@ -65,49 +65,60 @@
                                 </Grid.ColumnDefinitions>
 
                                 <!-- Left Column: Device Identity & Action Buttons -->
-                                <StackPanel Grid.Column="0" Margin="0,0,20,0">
+                                <StackPanel Grid.Column="0" Margin="0,0,20,0" Width="220">
                                     <!-- Device Header Box -->
-                                    <Border Background="#252A30" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,14">
+                                    <Border Background="#252A30" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,12">
                                         <StackPanel>
-                                            <TextBlock Text="{Binding Name, FallbackValue='未知遥控器'}" FontWeight="SemiBold" FontSize="15" Foreground="{StaticResource PrimaryTextBrush}" TextWrapping="Wrap"/>
-                                            <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                                <TextBlock Text="{Binding ModelType, StringFormat='型号: {0}'}" FontSize="12" Foreground="{StaticResource SecondaryTextBrush}"/>
+                                            <TextBlock Text="{Binding Name, FallbackValue='未知遥控器'}" FontWeight="SemiBold" FontSize="14" Foreground="{StaticResource PrimaryTextBrush}" TextWrapping="Wrap"/>
+                                            <TextBlock Text="{Binding ModelDisplayName}" FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,2,0,4" TextTrimming="CharacterEllipsis"/>
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                <Ellipse Width="8" Height="8" Margin="0,0,6,0"
+                                                         Fill="{Binding IsConnected, Converter={StaticResource BoolToBrushConverter}}"/>
+                                                <TextBlock Text="{Binding IsConnected, Converter={StaticResource BoolToConnectionTextConverter}}"
+                                                           FontSize="12" Foreground="{StaticResource SecondaryTextBrush}"/>
                                                 <TextBlock Text="{Binding BatteryLevel, StringFormat=' · 🔋 {0}%'}" FontSize="12" Foreground="#00CC66" Margin="4,0,0,0"
                                                            Visibility="{Binding BatteryLevel, Converter={StaticResource BatteryVisibilityConverter}}"/>
                                             </StackPanel>
                                         </StackPanel>
                                     </Border>
 
-                                    <!-- Visual Remote Silhouette Icon -->
-                                    <Border Background="#1E1E1E" CornerRadius="12" BorderBrush="#3A3A3C" BorderThickness="1" Width="72" Height="130" HorizontalAlignment="Center" Margin="0,0,0,14">
-                                        <Grid>
-                                            <Grid.RowDefinitions>
-                                                <RowDefinition Height="24"/>
-                                                <RowDefinition Height="*"/>
-                                                <RowDefinition Height="30"/>
-                                            </Grid.RowDefinitions>
-                                            <!-- Top indicator / Mic hole -->
-                                            <Ellipse Width="6" Height="6" Fill="#555" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                            <!-- Circular D-pad preview -->
-                                            <Ellipse Grid.Row="1" Width="36" Height="36" Stroke="#444" StrokeThickness="1" Fill="#282828" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                            <Ellipse Grid.Row="1" Width="14" Height="14" Fill="#383838" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                            <!-- Bottom volume buttons -->
-                                            <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                                                <Border Width="16" Height="8" Background="#333" CornerRadius="2" Margin="2,0"/>
-                                                <Border Width="16" Height="8" Background="#333" CornerRadius="2" Margin="2,0"/>
-                                            </StackPanel>
-                                        </Grid>
+                                    <!-- Visual Remote Illustration -->
+                                    <Border Background="#1A1D20" CornerRadius="10" BorderBrush="#333740" BorderThickness="1" Height="160" Margin="0,0,0,14" Padding="6">
+                                        <Image Source="{Binding IllustrationSource}" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Border>
 
-                                    <!-- Connect / Reconnect Button -->
-                                    <Button Content="连接设备" Margin="0,0,0,8" Padding="12,7" Background="#007ACC"
-                                            Command="{Binding DataContext.ConnectDeviceCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                            CommandParameter="{Binding}"/>
+                                    <!-- Action Buttons aligned with macOS -->
+                                    <!-- If Connected: Reconnect / Disconnect row, then Delete -->
+                                    <StackPanel Visibility="{Binding IsConnected, Converter={StaticResource BoolToVisibilityConverter}}">
+                                        <Grid Margin="0,0,0,8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="8"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <Button Grid.Column="0" Content="🔌 断开" Padding="6,6" Background="#333842" BorderBrush="#4A5260"
+                                                    ToolTip="断开当前蓝牙语音服务"
+                                                    Command="{Binding DataContext.DisconnectDeviceCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                    CommandParameter="{Binding}"/>
+                                            <Button Grid.Column="2" Content="🔄 重连" Padding="6,6" Background="#007ACC"
+                                                    ToolTip="重新建立蓝牙语音连接"
+                                                    Command="{Binding DataContext.ReconnectDeviceCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                    CommandParameter="{Binding}"/>
+                                        </Grid>
+                                        <Button Content="🗑️ 删除设备" Padding="12,6" Background="Transparent" BorderBrush="#663333" Foreground="#FF6666"
+                                                Command="{Binding DataContext.RemoveDeviceCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                CommandParameter="{Binding}"/>
+                                    </StackPanel>
 
-                                    <!-- Remove Device Button -->
-                                    <Button Content="🗑️ 删除设备" Padding="12,6" Background="Transparent" BorderBrush="#663333" Foreground="#FF6666"
-                                            Command="{Binding DataContext.RemoveDeviceCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                            CommandParameter="{Binding}"/>
+                                    <!-- If Disconnected: Connect, then Delete -->
+                                    <StackPanel Visibility="{Binding IsConnected, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Inverse}">
+                                        <Button Content="⚡ 连接设备" Margin="0,0,0,8" Padding="12,7" Background="#007ACC"
+                                                Command="{Binding DataContext.ConnectDeviceCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                CommandParameter="{Binding}"/>
+                                        <Button Content="🗑️ 删除设备" Padding="12,6" Background="Transparent" BorderBrush="#663333" Foreground="#FF6666"
+                                                Command="{Binding DataContext.RemoveDeviceCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                CommandParameter="{Binding}"/>
+                                    </StackPanel>
                                 </StackPanel>
 
                                 <!-- Divider -->
@@ -181,10 +192,11 @@
 
                                     <Border Height="1" Background="{StaticResource BorderColorBrush}" Margin="0,0,0,16"/>
 
-                                    <!-- Technical Device Info Grid -->
+                                    <!-- Technical Device Info Grid (3-Column Layout Aligned with macOS) -->
                                     <TextBlock Text="设备详细信息" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,12"/>
                                     <Grid>
                                         <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="*"/>
                                         </Grid.ColumnDefinitions>
@@ -192,49 +204,54 @@
                                             <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="Auto"/>
                                         </Grid.RowDefinitions>
 
-                                        <!-- MAC / ID -->
-                                        <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,14,12">
-                                            <TextBlock Text="设备标识 (ID / MAC)" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"/>
-                                            <TextBlock Text="{Binding Id, FallbackValue='未知'}" FontSize="13" Foreground="{StaticResource PrimaryTextBrush}" FontWeight="Medium" Margin="0,2,0,0"/>
+                                        <!-- Row 0: Model / MAC / Firmware -->
+                                        <StackPanel Grid.Row="0" Grid.Column="0" Margin="0,0,14,14">
+                                            <TextBlock Text="设备型号 (Model)" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"/>
+                                            <TextBlock Text="{Binding ModelDisplayName}" FontSize="12" Foreground="{StaticResource PrimaryTextBrush}" FontWeight="Medium" TextTrimming="CharacterEllipsis" Margin="0,3,0,0"/>
                                         </StackPanel>
 
-                                        <!-- Container ID -->
-                                        <StackPanel Grid.Row="0" Grid.Column="1" Margin="0,0,0,12">
-                                            <TextBlock Text="Windows 容器标识 (Container ID)" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"/>
-                                            <TextBlock Text="{Binding ContainerId, TargetNullValue='自动匹配中...'}" FontSize="13" Foreground="{StaticResource PrimaryTextBrush}" FontWeight="Medium" Margin="0,2,0,0"/>
+                                        <StackPanel Grid.Row="0" Grid.Column="1" Margin="0,0,14,14">
+                                            <TextBlock Text="蓝牙地址 (MAC)" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"/>
+                                            <TextBlock Text="{Binding FormattedAddress}" FontFamily="Consolas" FontSize="12" Foreground="{StaticResource PrimaryTextBrush}" FontWeight="Medium" Margin="0,3,0,0"/>
                                         </StackPanel>
 
-                                        <!-- Audio Spec -->
-                                        <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,14,12">
-                                            <TextBlock Text="音频传输规格" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"/>
-                                            <TextBlock Text="16kHz 16-bit Mono (IMA-ADPCM)" FontSize="13" Foreground="{StaticResource PrimaryTextBrush}" FontWeight="Medium" Margin="0,2,0,0"/>
+                                        <StackPanel Grid.Row="0" Grid.Column="2" Margin="0,0,0,14">
+                                            <TextBlock Text="固件版本 (Firmware)" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"/>
+                                            <TextBlock Text="{Binding FirmwareVersion}" FontSize="12" Foreground="{StaticResource PrimaryTextBrush}" FontWeight="Medium" Margin="0,3,0,0"/>
                                         </StackPanel>
 
-                                        <!-- Voice Protocol -->
-                                        <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,0,0,12">
+                                        <!-- Row 1: Voice Protocol / Audio Spec / Frame Size -->
+                                        <StackPanel Grid.Row="1" Grid.Column="0" Margin="0,0,14,14">
                                             <TextBlock Text="语音通信协议" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"/>
-                                            <TextBlock Text="Android TV Voice (ATVV GATT)" FontSize="13" Foreground="{StaticResource PrimaryTextBrush}" FontWeight="Medium" Margin="0,2,0,0"/>
+                                            <TextBlock Text="{Binding VoiceProtocol}" FontSize="12" Foreground="{StaticResource PrimaryTextBrush}" FontWeight="Medium" TextTrimming="CharacterEllipsis" Margin="0,3,0,0"/>
                                         </StackPanel>
 
-                                        <!-- HID Spec Summary -->
-                                        <StackPanel Grid.Row="2" Grid.Column="0" Margin="0,0,14,12">
-                                            <TextBlock Text="HID 集合与报告规格" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"/>
-                                            <TextBlock Text="{Binding HidSpecSummary}" FontSize="13" Foreground="{StaticResource PrimaryTextBrush}" FontWeight="Medium" Margin="0,2,0,0"/>
+                                        <StackPanel Grid.Row="1" Grid.Column="1" Margin="0,0,14,14">
+                                            <TextBlock Text="音频编码规格" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"/>
+                                            <TextBlock Text="{Binding AudioSpec}" FontSize="12" Foreground="{StaticResource PrimaryTextBrush}" FontWeight="Medium" Margin="0,3,0,0"/>
                                         </StackPanel>
 
-                                        <!-- HID Capture Status -->
-                                        <StackPanel Grid.Row="2" Grid.Column="1" Margin="0,0,0,12">
-                                            <TextBlock Text="HID 采集链路状态" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"/>
-                                            <TextBlock Text="{Binding HidCaptureStatus, TargetNullValue='已就绪'}" FontSize="13" Foreground="#00CC66" FontWeight="Medium" Margin="0,2,0,0"/>
+                                        <StackPanel Grid.Row="1" Grid.Column="2" Margin="0,0,0,14">
+                                            <TextBlock Text="传输帧长 (Frame)" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"/>
+                                            <TextBlock Text="{Binding FrameSizeText}" FontSize="12" Foreground="{StaticResource PrimaryTextBrush}" FontWeight="Medium" Margin="0,3,0,0"/>
                                         </StackPanel>
 
-                                        <!-- HID Device Path -->
-                                        <StackPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2">
-                                            <TextBlock Text="HID 硬件接口路径" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"/>
-                                            <TextBlock Text="{Binding HidDevicePath, TargetNullValue='未检测到匹配 HID 路径'}" FontSize="11" FontFamily="Consolas" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,2,0,0"/>
+                                        <!-- Row 2: Input Architecture / Virtual Audio / Container ID -->
+                                        <StackPanel Grid.Row="2" Grid.Column="0" Margin="0,0,14,0">
+                                            <TextBlock Text="输入链路机制" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"/>
+                                            <TextBlock Text="{Binding InputArchitecture}" FontSize="12" Foreground="#00CC66" FontWeight="Medium" TextTrimming="CharacterEllipsis" Margin="0,3,0,0"/>
+                                        </StackPanel>
+
+                                        <StackPanel Grid.Row="2" Grid.Column="1" Margin="0,0,14,0">
+                                            <TextBlock Text="虚拟麦克风端点" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"/>
+                                            <TextBlock Text="{Binding VirtualAudioEndpoint}" FontSize="12" Foreground="{StaticResource PrimaryTextBrush}" FontWeight="Medium" TextTrimming="CharacterEllipsis" Margin="0,3,0,0"/>
+                                        </StackPanel>
+
+                                        <StackPanel Grid.Row="2" Grid.Column="2" Margin="0,0,0,0">
+                                            <TextBlock Text="Windows 容器标识" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"/>
+                                            <TextBlock Text="{Binding ContainerId, TargetNullValue='自动匹配中...'}" FontFamily="Consolas" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" TextTrimming="CharacterEllipsis" Margin="0,3,0,0"/>
                                         </StackPanel>
                                     </Grid>
                                 </StackPanel>

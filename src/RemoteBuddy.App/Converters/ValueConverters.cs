@@ -205,3 +205,17 @@ public sealed class GainToDbTextConverter : IValueConverter
         throw new NotSupportedException();
     }
 }
+
+public sealed class BoolToConnectionTextConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        bool isConnected = value is bool b && b;
+        return isConnected ? "已连接" : "未连接";
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        throw new NotSupportedException();
+    }
+}

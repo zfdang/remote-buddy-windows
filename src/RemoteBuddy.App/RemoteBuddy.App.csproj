@@ -10,6 +10,10 @@
 
   <ItemGroup>
     <Resource Include="Resources\app.ico" />
+    <Resource Include="Resources\app.png" />
+    <Resource Include="Resources\BuddyRemoteIllustration.png" />
+    <Resource Include="Resources\ChromecastG9N9NPhoto.png" />
+    <Resource Include="Resources\T1RemoteIllustration.png" />
     <ProjectReference Include="..\RemoteBuddy.Core\RemoteBuddy.Core.csproj" />
     <ProjectReference Include="..\RemoteBuddy.Platform.Windows\RemoteBuddy.Platform.Windows.csproj" />
   </ItemGroup>

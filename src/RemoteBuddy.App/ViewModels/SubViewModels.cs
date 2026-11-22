@@ -272,9 +272,13 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    public void DisconnectDevice()
+    public void DisconnectDevice(RemoteDevice? device = null)
     {
         _bt.Disconnect();
+        if (device != null)
+        {
+            device.IsConnected = false;
+        }
         if (SelectedDevice != null)
         {
             SelectedDevice.IsConnected = false;
@@ -284,10 +288,39 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
+    public async Task ReconnectDeviceAsync(RemoteDevice? device)
+    {
+        if (device == null) return;
+        _bt.Disconnect();
+        await Task.Delay(250);
+        await ConnectDeviceAsync(device);
+    }
+
+    public static Func<RemoteDevice, bool>? ConfirmDeviceRemovalHandler { get; set; }
+
+    [RelayCommand]
     public void RemoveDevice(RemoteDevice? device)
     {
         if (device == null) return;
-        if (device.BluetoothAddress == SelectedDevice?.BluetoothAddress)
+
+        bool confirmed;
+        if (ConfirmDeviceRemovalHandler != null)
+        {
+            confirmed = ConfirmDeviceRemovalHandler(device);
+        }
+        else
+        {
+            var result = System.Windows.MessageBox.Show(
+                $"确定要删除设备 “{device.Name}” 吗？\n\n将删除该设备及其在遥控搭子中的按键设置和音量增益，并停止自动连接。\n此操作不会删除 Windows 蓝牙配对；使用“添加设备”时，之前删除的设备仍可再次被发现并添加。",
+                "删除此设备？",
+                System.Windows.MessageBoxButton.YesNo,
+                System.Windows.MessageBoxImage.Question);
+            confirmed = result == System.Windows.MessageBoxResult.Yes;
+        }
+
+        if (!confirmed) return;
+
+        if (device.BluetoothAddress == SelectedDevice?.BluetoothAddress || device.IsConnected)
         {
             _bt.Disconnect();
             SelectedDevice = null;
@@ -1232,6 +1265,17 @@ public partial class AboutViewModel : ObservableObject
         try
         {
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("https://github.com/zfdang/remote-buddy-windows") { UseShellExecute = true });
+        }
+        catch { }
+    }
+
+    [RelayCommand]
+    public void OpenUrl(string? url)
+    {
+        if (string.IsNullOrEmpty(url)) return;
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
         }
         catch { }
     }
