@@ -11,6 +11,13 @@ Set-Location $RepoRoot
 Write-Host "=== Remote Buddy Windows Build Script ===" -ForegroundColor Cyan
 
 # 1. Locate dotnet.exe automatically
+# Refresh PATH from registry in case dotnet was installed in another session
+$machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if ($machinePath -or $userPath) {
+    $env:PATH = "$userPath;$machinePath;$env:PATH"
+}
+
 $dotnetCmd = Get-Command "dotnet" -ErrorAction SilentlyContinue
 if (-not $dotnetCmd) {
     $candidates = @(
@@ -27,6 +34,23 @@ if (-not $dotnetCmd) {
             break
         }
     }
+}
+
+$dotnetCmd = Get-Command "dotnet" -ErrorAction SilentlyContinue
+$hasSdk = $false
+if ($dotnetCmd) {
+    $sdks = & dotnet --list-sdks 2>$null
+    if ($sdks) { $hasSdk = $true }
+}
+
+if (-not $hasSdk) {
+    Write-Host "No .NET SDK found. Attempting automatic installation of .NET 10 SDK..." -ForegroundColor Yellow
+    $installScript = "$env:TEMP\dotnet-install.ps1"
+    if (-not (Test-Path $installScript)) {
+        Invoke-WebRequest -Uri "https://dot.net/v1/dotnet-install.ps1" -OutFile $installScript
+    }
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installScript -Channel 10.0 -InstallDir "$env:USERPROFILE\.dotnet"
+    $env:PATH = "$env:USERPROFILE\.dotnet;$env:PATH"
 }
 
 $dotnetCmd = Get-Command "dotnet" -ErrorAction SilentlyContinue

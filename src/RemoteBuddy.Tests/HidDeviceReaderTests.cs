@@ -120,17 +120,26 @@ public class HidDeviceReaderTests
         vmFull.NextStep(); // Step 2: DriverCheck
         Assert.Equal(WizardStep.DriverCheck, vmFull.CurrentWizardStep);
 
-        // Verification gate: if driver is NotInstalled, NextStep() blocks
-        vmFull.DriverStatus = DriverReadinessStatus.NotInstalled;
-        vmFull.NextStep();
-        Assert.Equal(WizardStep.DriverCheck, vmFull.CurrentWizardStep);
-        Assert.False(string.IsNullOrEmpty(vmFull.ValidationError));
+        try
+        {
+            // Verification gate: if driver is NotInstalled, NextStep() blocks
+            VirtualAudioAuditor.StatusOverride = DriverReadinessStatus.NotInstalled;
+            vmFull.DriverStatus = DriverReadinessStatus.NotInstalled;
+            vmFull.NextStep();
+            Assert.Equal(WizardStep.DriverCheck, vmFull.CurrentWizardStep);
+            Assert.False(string.IsNullOrEmpty(vmFull.ValidationError));
 
-        // When driver becomes ready, NextStep() advances to Step 3 (DeviceConnect)
-        vmFull.DriverStatus = DriverReadinessStatus.Ready;
-        vmFull.NextStep(); // Step 3: DeviceConnect
-        Assert.Equal(WizardStep.DeviceConnect, vmFull.CurrentWizardStep);
-        Assert.Empty(vmFull.ValidationError);
+            // When driver becomes ready, NextStep() advances to Step 3 (DeviceConnect)
+            VirtualAudioAuditor.StatusOverride = DriverReadinessStatus.Ready;
+            vmFull.DriverStatus = DriverReadinessStatus.Ready;
+            vmFull.NextStep(); // Step 3: DeviceConnect
+            Assert.Equal(WizardStep.DeviceConnect, vmFull.CurrentWizardStep);
+            Assert.Empty(vmFull.ValidationError);
+        }
+        finally
+        {
+            VirtualAudioAuditor.StatusOverride = null;
+        }
 
         vmFull.SelectedDevice = new RemoteDevice { Id = "TEST2", Name = "Test Remote 2" };
         mockBt.RaiseConnectionStatusChanged(true, "Test Remote 2");
