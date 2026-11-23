@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 using System.Globalization;
+using System.Windows.Input;
 using RemoteBuddy.App.Converters;
 using RemoteBuddy.App.ViewModels;
 using RemoteBuddy.Core.Bluetooth;
@@ -579,5 +580,98 @@ public class ConvertersAndViewModelTests
             VirtualAudioAuditor.StatusOverride = previousOverride;
             if (File.Exists(path)) File.Delete(path);
         }
+    }
+
+    [Fact]
+    public void OnboardingViewModel_ApplyPresetDoubaoInput_SetsRightAltAndAllowsSwitchingOrCustomCapture()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-onb-shortcut-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            using var vm = new OnboardingViewModel(config, new DummyBluetoothManager(), WizardMode.Integration);
+
+            vm.ApplyPreset("DoubaoInput");
+            Assert.Equal(TargetInputTool.DoubaoInput, vm.SelectedTool);
+            Assert.Equal("RAlt", vm.ShortcutText);
+            Assert.Equal(VoiceTriggerMode.HoldToTalk, vm.TriggerMode);
+            Assert.NotNull(vm.SelectedShortcutOption);
+            Assert.Equal("RAlt", vm.SelectedShortcutOption!.Value);
+            Assert.False(vm.IsCustomShortcutSelected);
+
+            // Selecting another preset updates ShortcutText while keeping SelectedTool
+            var ctrlWinOption = OnboardingViewModel.VoiceShortcutOptions.Single(o => !o.IsCustom && o.Value == "Ctrl+Win");
+            vm.SelectedShortcutOption = ctrlWinOption;
+            Assert.Equal(TargetInputTool.DoubaoInput, vm.SelectedTool);
+            Assert.Equal("Ctrl+Win", vm.ShortcutText);
+            Assert.False(vm.IsCustomShortcutSelected);
+
+            // Selecting Custom reveals the custom recorder without wiping existing ShortcutText
+            var customOption = OnboardingViewModel.VoiceShortcutOptions.Single(o => o.IsCustom);
+            vm.SelectedShortcutOption = customOption;
+            Assert.True(vm.IsCustomShortcutSelected);
+            Assert.Equal("Ctrl+Win", vm.ShortcutText);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void OnboardingViewModel_UnlistedSavedShortcut_SelectsCustomOptionAutomatically()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-onb-custom-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            config.Current.InputTool.Tool = TargetInputTool.Custom;
+            config.Current.InputTool.Shortcut = "Ctrl+Shift+F9";
+            using var vm = new OnboardingViewModel(config, new DummyBluetoothManager(), WizardMode.Integration);
+
+            Assert.True(vm.IsCustomShortcutSelected);
+            Assert.Equal("Ctrl+Shift+F9", vm.ShortcutText);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void VoiceShortcutRecorder_CapturesStandaloneModifiersCombosAndCancelEscape()
+    {
+        var recorder = new VoiceShortcutRecorder();
+
+        // 1. Standalone Right Alt (arrives as Key.System + SystemKey=Key.RightAlt in WPF)
+        Assert.True(recorder.OnKeyDown(Key.System, Key.RightAlt, ModifierKeys.Alt, out var captured, out bool cancelled));
+        Assert.Null(captured);
+        Assert.False(cancelled);
+        Assert.True(recorder.OnKeyUp(Key.System, Key.RightAlt, out captured));
+        Assert.Equal("RAlt", captured);
+
+        // 2. Standalone Right Ctrl
+        Assert.True(recorder.OnKeyDown(Key.RightCtrl, Key.None, ModifierKeys.Control, out captured, out cancelled));
+        Assert.Null(captured);
+        Assert.True(recorder.OnKeyUp(Key.RightCtrl, Key.None, out captured));
+        Assert.Equal("RCtrl", captured);
+
+        // 3. Regular modifier + main key completes on KeyDown immediately
+        Assert.True(recorder.OnKeyDown(Key.LeftCtrl, Key.None, ModifierKeys.Control, out captured, out cancelled));
+        Assert.Null(captured);
+        Assert.True(recorder.OnKeyDown(Key.F5, Key.None, ModifierKeys.Control, out captured, out cancelled));
+        Assert.Equal("Ctrl+F5", captured);
+        Assert.False(cancelled);
+
+        // 4. Multi-modifier-only combo (Ctrl + Win) captures on modifier release
+        Assert.True(recorder.OnKeyDown(Key.LeftCtrl, Key.None, ModifierKeys.Control, out _, out _));
+        Assert.True(recorder.OnKeyDown(Key.LWin, Key.None, ModifierKeys.Control | ModifierKeys.Windows, out _, out _));
+        Assert.True(recorder.OnKeyUp(Key.LWin, Key.None, out captured));
+        Assert.Equal("Ctrl+Win", captured);
+
+        // 5. Standalone Escape cancels recording
+        Assert.True(recorder.OnKeyDown(Key.Escape, Key.None, ModifierKeys.None, out captured, out cancelled));
+        Assert.Null(captured);
+        Assert.True(cancelled);
     }
 }

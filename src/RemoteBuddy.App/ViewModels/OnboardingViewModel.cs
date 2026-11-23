@@ -36,8 +36,27 @@ public enum WizardStep
     Complete
 }
 
+public sealed record VoiceShortcutOption(string Label, string Value, bool IsCustom = false);
+
 public partial class OnboardingViewModel : ObservableObject, IDisposable
 {
+    public static IReadOnlyList<VoiceShortcutOption> VoiceShortcutOptions { get; } =
+    [
+        new("右 Alt (RAlt) — 豆包输入法默认", "RAlt"),
+        new("Ctrl+F5 — 微信输入法默认", "Ctrl+F5"),
+        new("Win+H — Windows 语音听写", "Win+H"),
+        new("Ctrl+Alt+V — Typeless 默认", "Ctrl+Alt+V"),
+        new("Ctrl+Win — 常见输入法快捷键", "Ctrl+Win"),
+        new("右 Ctrl (RCtrl)", "RCtrl"),
+        new("右 Shift (RShift)", "RShift"),
+        new("左 Alt (LAlt)", "LAlt"),
+        new("F1", "F1"),
+        new("F2", "F2"),
+        new("Alt+Space", "Alt+Space"),
+        new("Ctrl+Shift+V", "Ctrl+Shift+V"),
+        new("自定义快捷键...", string.Empty, true)
+    ];
+
     private readonly ConfigService _config;
     private readonly IBluetoothManager _bt;
 
@@ -76,8 +95,17 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
         WizardMode.DeviceOnly => SelectedDevice != null
             ? $"遥控器「{SelectedDevice.Name}」已成功连接并完成测试。点击“完成”即可保存至您的遥控器列表并开始使用。"
             : "遥控器已成功连接并完成测试。点击“完成”即可保存至您的遥控器列表并开始使用。",
-        WizardMode.Integration => $"已成功配置「{SelectedTool}」语音输入法（快捷键 {ShortcutText}）。语音键已设为{(IsHoldToTalk ? "按住说话" : "单击切换")}。",
+        WizardMode.Integration => $"已成功配置「{GetToolDisplayName(SelectedTool)}」语音输入法（快捷键 {ShortcutText}）。语音键已设为{(IsHoldToTalk ? "按住说话" : "单击切换")}。",
         _ => "所有音频链路与输入法快捷键已就绪。在任意应用程序或文档中，拿起遥控器按住说话即可畅享语音输入。"
+    };
+
+    private static string GetToolDisplayName(TargetInputTool tool) => tool switch
+    {
+        TargetInputTool.WeChatInput => "微信输入法",
+        TargetInputTool.DoubaoInput => "豆包输入法 / 客户端",
+        TargetInputTool.WindowsDictation => "Windows 语音听写",
+        TargetInputTool.Typeless => "Typeless 智能转写",
+        _ => "自定义工具"
     };
 
     [ObservableProperty]
@@ -218,6 +246,54 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     private string _shortcutText = string.Empty;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsCustomShortcutSelected))]
+    private VoiceShortcutOption? _selectedShortcutOption;
+
+    public bool IsCustomShortcutSelected => SelectedShortcutOption?.IsCustom == true;
+
+    private bool _syncingShortcutSelection;
+
+    partial void OnSelectedShortcutOptionChanged(VoiceShortcutOption? value)
+    {
+        if (_syncingShortcutSelection) return;
+
+        if (value is { IsCustom: false })
+        {
+            _syncingShortcutSelection = true;
+            try
+            {
+                ShortcutText = value.Value;
+                ValidationError = string.Empty;
+            }
+            finally
+            {
+                _syncingShortcutSelection = false;
+            }
+        }
+        else
+        {
+            ValidationError = string.Empty;
+        }
+    }
+
+    private void SyncShortcutOptionFromText(string? shortcut)
+    {
+        _syncingShortcutSelection = true;
+        try
+        {
+            string normalized = shortcut?.Trim() ?? string.Empty;
+            var match = VoiceShortcutOptions.FirstOrDefault(opt =>
+                !opt.IsCustom &&
+                string.Equals(opt.Value, normalized, StringComparison.OrdinalIgnoreCase));
+            SelectedShortcutOption = match ?? VoiceShortcutOptions.First(opt => opt.IsCustom);
+        }
+        finally
+        {
+            _syncingShortcutSelection = false;
+        }
+    }
+
+    [ObservableProperty]
     private string _transcriptionTestText = string.Empty;
 
     [ObservableProperty]
@@ -258,6 +334,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             SelectedTool = _config.Current.InputTool.Tool;
             TriggerMode = _config.Current.InputTool.TriggerMode;
             ShortcutText = _config.Current.InputTool.Shortcut;
+            SyncShortcutOptionFromText(ShortcutText);
         }
         else
         {
@@ -275,6 +352,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             SelectedTool = _config.Current.InputTool.Tool;
             TriggerMode = _config.Current.InputTool.TriggerMode;
             ShortcutText = _config.Current.InputTool.Shortcut;
+            SyncShortcutOptionFromText(ShortcutText);
             IsDeviceConnected = _bt.IsReady;
             SelectedDevice = _config.Current.Devices.FirstOrDefault(d => d.Id == _config.Current.SelectedDeviceId);
             foreach (var device in _config.Current.Devices)
@@ -569,11 +647,12 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             ShortcutText = tool switch
             {
                 TargetInputTool.WeChatInput => InputToolConfig.DefaultWeChatShortcut,
-                TargetInputTool.DoubaoInput => "F1",
+                TargetInputTool.DoubaoInput => "RAlt",
                 TargetInputTool.WindowsDictation => "Win+H",
                 TargetInputTool.Typeless => "Ctrl+Alt+V",
                 _ => "Ctrl+Shift+V"
             };
+            SyncShortcutOptionFromText(ShortcutText);
             TriggerMode = (tool == TargetInputTool.WindowsDictation)
                 ? VoiceTriggerMode.ClickToToggle
                 : VoiceTriggerMode.HoldToTalk;
@@ -585,7 +664,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     {
         if (!NativeInputSender.TryParseShortcut(ShortcutText, out _, out _))
         {
-            ValidationError = "请输入有效的语音快捷键，例如 Ctrl+Win；快捷键不能为空。";
+            ValidationError = "请输入或录制有效的语音快捷键（如 RAlt、Ctrl+F5、Win+H）；快捷键不能为空。";
             return false;
         }
         ValidationError = string.Empty;
