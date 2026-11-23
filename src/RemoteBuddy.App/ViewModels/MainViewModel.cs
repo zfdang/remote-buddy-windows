@@ -138,13 +138,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 ? EtwProtocolKind.T1Remote
                 : EtwProtocolKind.GoogleG9N9N);
 
+        var marker = Guid.NewGuid();
         if (_chromecastButtonReceiver.IsRunning)
         {
-            _chromecastButtonReceiver.SetProtocol(protocolKind);
+            _chromecastButtonReceiver.ResetBinding(marker, protocolKind);
+            _ = _bluetoothManager.ProbeButtonSourceAsync(marker);
             return;
         }
 
-        var marker = Guid.NewGuid();
         if (_chromecastButtonReceiver.Start(marker, protocolKind))
             _ = _bluetoothManager.ProbeButtonSourceAsync(marker);
     }
@@ -427,35 +428,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return match;
         }
 
-        // 2. Normal operation: Check currently connected BluetoothManager device
+        // 2. Normal operation: when a remote is actively connected, ONLY admit that connected remote
         Guid? connectedContainerId = _bluetoothManager.ConnectedDeviceContainerId;
         ulong connectedAddress = _bluetoothManager.ConnectedDeviceAddress;
-        if (connectedContainerId.HasValue || connectedAddress != 0)
+        if (_bluetoothManager.IsConnected && (connectedContainerId.HasValue || connectedAddress != 0))
         {
-            if (RawInputReceiver.EvaluateDeviceMatch(connectedContainerId, hDevice, devicePath, connectedAddress))
-            {
-                LogAdmission(hDevice, connectedContainerId, connectedAddress, true, devicePath);
-                return true;
-            }
+            bool match = RawInputReceiver.EvaluateDeviceMatch(connectedContainerId, hDevice, devicePath, connectedAddress);
+            LogAdmission(hDevice, connectedContainerId, connectedAddress, match, devicePath);
+            return match;
         }
 
-        // 3. Check any configured device in user configuration
-        foreach (var dev in _configService.Current.Devices)
+        // 3. Fallback: only if no remote is actively connected, check the user's selected remote
+        var selectedDev = _configService.Current.Devices.FirstOrDefault(d => d.Id == _configService.Current.SelectedDeviceId);
+        if (selectedDev != null && (selectedDev.ContainerId.HasValue || selectedDev.BluetoothAddress != 0))
         {
-            if (dev.ContainerId.HasValue || dev.BluetoothAddress != 0)
-            {
-                if (RawInputReceiver.EvaluateDeviceMatch(dev.ContainerId, hDevice, devicePath, dev.BluetoothAddress))
-                {
-                    LogAdmission(hDevice, dev.ContainerId, dev.BluetoothAddress, true, devicePath);
-                    return true;
-                }
-            }
+            bool match = RawInputReceiver.EvaluateDeviceMatch(selectedDev.ContainerId, hDevice, devicePath, selectedDev.BluetoothAddress);
+            LogAdmission(hDevice, selectedDev.ContainerId, selectedDev.BluetoothAddress, match, devicePath);
+            return match;
         }
 
-        // 4. Fallback: if no specific device matched, check if it's a known remote device
-        bool fallbackAccepted = RawInputReceiver.EvaluateDeviceMatch(null, hDevice, devicePath, 0);
-        LogAdmission(hDevice, null, 0, fallbackAccepted, devicePath);
-        return fallbackAccepted;
+        return false;
     }
 
     private void LogAdmission(IntPtr hDevice, Guid? targetContainerId, ulong targetAddress, bool accepted, string devicePath)
@@ -534,20 +526,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 return;
         }
 
-        // 3. Mapping page visual feedback (isolated to the remote currently viewed in Mapping UI)
+        // 3. Absolute device isolation: when a remote is actively connected, completely drop buttons from any other remote
+        ulong activeAddress = _bluetoothManager.ConnectedDeviceAddress;
+        if (_bluetoothManager.IsConnected && activeAddress != 0 && sourceDevice != null &&
+            sourceDevice.BluetoothAddress != 0 && sourceDevice.BluetoothAddress != activeAddress)
+        {
+            AppLogger.Debug($"Ignoring button {button} from inactive device '{sourceDevice.Name}' (0x{sourceDevice.BluetoothAddress:X}). Active device is 0x{activeAddress:X}", "MainViewModel");
+            return;
+        }
+
+        // 4. Mapping page visual feedback (isolated to the remote currently viewed in Mapping UI)
         if (isDown && ActiveOnboardingVm == null)
             ShowMappingPress(button, sourceDevice);
 
-        // 4. Voice key isolation: strictly verify that sourceDevice matches the active BLE voice remote
+        // 5. Voice key handling
         if (button == RemoteButton.Voice)
         {
-            ulong activeVoiceAddr = _bluetoothManager.ConnectedDeviceAddress;
-            if (activeVoiceAddr != 0 && sourceDevice != null && sourceDevice.BluetoothAddress != 0 &&
-                sourceDevice.BluetoothAddress != activeVoiceAddr)
-            {
-                AppLogger.Warn($"Ignoring voice button press from inactive remote '{sourceDevice.Name}' (0x{sourceDevice.BluetoothAddress:X}). Active voice remote is 0x{activeVoiceAddr:X}", "MainViewModel");
-                return;
-            }
 
             var currentMode = _configService.Current.InputTool.TriggerMode;
             if (currentMode == VoiceTriggerMode.HoldToTalk)

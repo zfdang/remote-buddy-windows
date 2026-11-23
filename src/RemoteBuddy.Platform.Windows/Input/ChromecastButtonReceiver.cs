@@ -103,6 +103,14 @@ public sealed class ChromecastButtonReceiver : IDisposable
         }
     }
 
+    public void ResetBinding(Guid marker, EtwProtocolKind protocolKind)
+    {
+        lock (_lock)
+        {
+            _etwReceiver.ResetBinding(marker, protocolKind);
+        }
+    }
+
     public void Stop()
     {
         lock (_lock)

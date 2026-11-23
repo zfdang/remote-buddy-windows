@@ -17,19 +17,19 @@ public class ConvertersAndViewModelTests
     private sealed class DummyBluetoothManager : IBluetoothManager
     {
         public bool IsScanning { get; private set; }
-        public bool IsConnected => false;
+        public bool IsConnected { get; set; } = false;
         public bool IsReady => false;
         public bool IsStreaming => false;
         public float CurrentGain { get; set; } = RemoteDevice.DefaultMicrophoneGain;
         public BluetoothSessionState SessionState => BluetoothSessionState.Idle;
-        public string ConnectedDeviceName => string.Empty;
-        public ulong ConnectedDeviceAddress => 0;
-        public Guid? ConnectedDeviceContainerId => null;
+        public string ConnectedDeviceName { get; set; } = string.Empty;
+        public ulong ConnectedDeviceAddress { get; set; } = 0;
+        public Guid? ConnectedDeviceContainerId { get; set; } = null;
         public RemoteDeviceInformation? ConnectedDeviceInformation { get; private set; }
         public G9N9NVoiceButtonMode VoiceButtonMode { get; set; } = G9N9NVoiceButtonMode.SmartToggle;
 
         public event Action<RemoteDevice>? DeviceDiscovered;
-        public event Action<bool, string>? ConnectionStatusChanged { add { } remove { } }
+        public event Action<bool, string>? ConnectionStatusChanged;
         public event Action? ConnectedDeviceInformationChanged;
         public event Action<float>? AudioLevelChanged { add { } remove { } }
         public event Action? VoiceButtonPressed { add { } remove { } }
@@ -37,6 +37,7 @@ public class ConvertersAndViewModelTests
         public event Action? VoiceSessionEnded;
 
         public void RaiseDeviceDiscovered(RemoteDevice dev) => DeviceDiscovered?.Invoke(dev);
+        public void RaiseConnectionStatusChanged(bool connected, string name) => ConnectionStatusChanged?.Invoke(connected, name);
         public void SetConnectedDeviceInformation(RemoteDeviceInformation? information)
         {
             ConnectedDeviceInformation = information;
@@ -49,8 +50,17 @@ public class ConvertersAndViewModelTests
         public Task DiscoverPairedRemotesAsync() => Task.CompletedTask;
         public void StartScan() => StartScanning();
         public void StopScan() => StopScanning();
-        public Task<bool> ConnectAsync(ulong bluetoothAddress) => Task.FromResult(true);
-        public void Disconnect() { }
+        public Task<bool> ConnectAsync(ulong bluetoothAddress)
+        {
+            IsConnected = true;
+            ConnectedDeviceAddress = bluetoothAddress;
+            return Task.FromResult(true);
+        }
+        public void Disconnect()
+        {
+            IsConnected = false;
+            ConnectedDeviceAddress = 0;
+        }
         public Task<bool> StartVoiceSessionAsync() => Task.FromResult(true);
         public Task<bool> StopVoiceSessionAsync() => Task.FromResult(true);
         public void Dispose() { }
@@ -362,5 +372,46 @@ public class ConvertersAndViewModelTests
 
         vm.DriverStatus = DriverReadinessStatus.InitializationFailed;
         Assert.Equal("初始化失败", vm.DriverStatusBadgeText);
+    }
+
+    [Fact]
+    public async Task DevicesViewModel_OnlyConnectedDeviceIsActive_WhenMultipleDevicesConfigured()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-dev-iso-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var g9n9n = new RemoteDevice { Id = "dev-g9n9n", BluetoothAddress = 0x4754514C6FCC, Name = "Chromecast Remote" };
+            var xiaomi = new RemoteDevice { Id = "dev-xiaomi", BluetoothAddress = 0xA4C138123456, Name = "Xiaomi Remote" };
+            config.Current.Devices.AddRange([g9n9n, xiaomi]);
+            config.Current.SelectedDeviceId = g9n9n.Id;
+
+            var dummyBt = new DummyBluetoothManager
+            {
+                IsConnected = true,
+                ConnectedDeviceAddress = g9n9n.BluetoothAddress,
+                ConnectedDeviceName = g9n9n.Name
+            };
+
+            using var vm = new DevicesViewModel(config, dummyBt);
+
+            // Initially G9N9N is active, Xiaomi is inactive
+            var dev1 = vm.DiscoveredDevices.First(d => d.Id == g9n9n.Id);
+            var dev2 = vm.DiscoveredDevices.First(d => d.Id == xiaomi.Id);
+            Assert.True(dev1.IsConnected);
+            Assert.False(dev2.IsConnected);
+
+            // Now connect Xiaomi
+            await vm.ConnectDeviceAsync(dev2);
+
+            // Only Xiaomi must be active; G9N9N must be disconnected
+            Assert.False(dev1.IsConnected);
+            Assert.True(dev2.IsConnected);
+            Assert.Equal(xiaomi.Id, config.Current.SelectedDeviceId);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
     }
 }

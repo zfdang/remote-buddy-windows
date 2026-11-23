@@ -48,7 +48,9 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         foreach (var dev in _config.Current.Devices)
         {
             dev.PropertyChanged += OnDevicePropertyChanged;
-            dev.IsConnected = _bt.IsConnected && (_bt.ConnectedDeviceName == dev.Name || dev.BluetoothAddress == _bt.ConnectedDeviceAddress || dev.BluetoothAddress.ToString("X") == _config.Current.SelectedDeviceId);
+            dev.IsConnected = _bt.IsConnected && (
+                (_bt.ConnectedDeviceAddress != 0 && dev.BluetoothAddress == _bt.ConnectedDeviceAddress) ||
+                (_bt.ConnectedDeviceContainerId.HasValue && dev.ContainerId == _bt.ConnectedDeviceContainerId));
 
             if (string.IsNullOrEmpty(dev.HidDevicePath) && dev.BluetoothAddress != 0)
             {
@@ -102,7 +104,9 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
             {
                 foreach (var dev in DiscoveredDevices)
                 {
-                    dev.IsConnected = connected && (dev.Name == name || dev.BluetoothAddress == _bt.ConnectedDeviceAddress || dev.BluetoothAddress.ToString("X") == _config.Current.SelectedDeviceId);
+                    dev.IsConnected = connected && _bt.IsConnected && (
+                        (_bt.ConnectedDeviceAddress != 0 && dev.BluetoothAddress == _bt.ConnectedDeviceAddress) ||
+                        (_bt.ConnectedDeviceContainerId.HasValue && dev.ContainerId == _bt.ConnectedDeviceContainerId));
                 }
                 RefreshHardwareDetails();
             }
@@ -136,7 +140,9 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         foreach (var dev in _config.Current.Devices)
         {
             dev.PropertyChanged += OnDevicePropertyChanged;
-            dev.IsConnected = _bt.IsConnected && (_bt.ConnectedDeviceName == dev.Name || dev.BluetoothAddress == _bt.ConnectedDeviceAddress || dev.BluetoothAddress.ToString("X") == _config.Current.SelectedDeviceId);
+            dev.IsConnected = _bt.IsConnected && (
+                (_bt.ConnectedDeviceAddress != 0 && dev.BluetoothAddress == _bt.ConnectedDeviceAddress) ||
+                (_bt.ConnectedDeviceContainerId.HasValue && dev.ContainerId == _bt.ConnectedDeviceContainerId));
 
             if (string.IsNullOrEmpty(dev.HidDevicePath) && dev.BluetoothAddress != 0)
             {
@@ -251,6 +257,18 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
     public async Task ConnectDeviceAsync(RemoteDevice? device)
     {
         if (device == null) return;
+
+        // If another device is currently connected, disconnect it first
+        if (_bt.IsConnected && _bt.ConnectedDeviceAddress != device.BluetoothAddress)
+        {
+            _bt.Disconnect();
+            foreach (var d in DiscoveredDevices)
+            {
+                d.IsConnected = false;
+            }
+            await Task.Delay(200);
+        }
+
         bool ok = await _bt.ConnectAsync(device.BluetoothAddress);
         if (ok)
         {
@@ -258,6 +276,13 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
             _bt.CurrentGain = device.Gain;
             device.IsConnected = true;
             device.ContainerId = _bt.ConnectedDeviceContainerId;
+            foreach (var d in DiscoveredDevices)
+            {
+                if (d.Id != device.Id)
+                {
+                    d.IsConnected = false;
+                }
+            }
             if (device.Mappings == null || device.Mappings.Count == 0)
             {
                 device.Mappings = RemoteDevice.CreateDefaultMappings(device.ModelType);
@@ -275,13 +300,9 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
     public void DisconnectDevice(RemoteDevice? device = null)
     {
         _bt.Disconnect();
-        if (device != null)
+        foreach (var d in DiscoveredDevices)
         {
-            device.IsConnected = false;
-        }
-        if (SelectedDevice != null)
-        {
-            SelectedDevice.IsConnected = false;
+            d.IsConnected = false;
         }
     }
 

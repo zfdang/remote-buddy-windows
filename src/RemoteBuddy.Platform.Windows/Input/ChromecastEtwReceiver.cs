@@ -205,6 +205,20 @@ public sealed class ChromecastEtwReceiver : IDisposable
         }
     }
 
+    public void ResetBinding(Guid marker, EtwProtocolKind protocolKind, IEnumerable<ushort>? verifiedAttributes = null)
+    {
+        lock (_lock)
+        {
+            _protocolKind = protocolKind;
+            _verifiedAttributes = verifiedAttributes != null ? new HashSet<ushort>(verifiedAttributes) : null;
+            _boundConnection = null;
+            _probeConnection = null;
+            _sawPacketEvent = _sawRedaction = false;
+            SetSourceProbe(marker);
+            AppLogger.Info($"ETW receiver reset binding for protocol {protocolKind}", "ChromecastEtwReceiver");
+        }
+    }
+
     private static async Task FlushBuffersAsync(ulong sessionHandle, string sessionName, Guid sessionGuid, CancellationToken cancellationToken)
     {
         // ETW's automatic real-time flush uses whole seconds. Flush this session
@@ -338,7 +352,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
         {
             _boundConnection = connection;
             _probeConnection = null;
-            AppLogger.Info("Chromecast ETW confirmed the selected Bluetooth connection", "ChromecastEtwReceiver");
+            AppLogger.Info($"Chromecast ETW confirmed selected Bluetooth connection 0x{connection:X4}", "ChromecastEtwReceiver");
             return;
         }
 
@@ -578,6 +592,8 @@ public sealed class ChromecastEtwReceiver : IDisposable
         lock (_lock)
         {
             _isRunning = false;
+            _boundConnection = null;
+            _probeConnection = null;
             _flushCancellation?.Cancel();
             _flushCancellation?.Dispose();
             _flushCancellation = null;
