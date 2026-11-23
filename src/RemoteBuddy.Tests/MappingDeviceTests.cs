@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
+using System.Collections.Specialized;
 using RemoteBuddy.App.ViewModels;
 using RemoteBuddy.Core.Bluetooth;
 using RemoteBuddy.Core.Config;
@@ -486,5 +487,83 @@ public class MappingDeviceTests
 
         var custom = Assert.Single(vm.CurrentMappings, m => m.Button == RemoteButton.Custom);
         Assert.Equal("自定义键 (★)", custom.ButtonName);
+    }
+
+    [Fact]
+    public void SyncDevicesCollection_DoesNotDuplicateWhenComboBoxClearsSelectionOnCollectionChange()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"vib-reentrant-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var g9 = new RemoteDevice { Id = "4754514C6FCC", Name = "Chromecast Remote", BluetoothAddress = 0x4754514C6FCC, ModelType = RemoteModelType.GoogleG9N9N };
+            var mi = new RemoteDevice { Id = "C05D39F86E0C", Name = "MI RC", BluetoothAddress = 0xC05D39F86E0C, ModelType = RemoteModelType.XiaomiRC003 };
+            config.UpsertDevice(g9);
+            config.UpsertDevice(mi);
+
+            using var devicesVm = new DevicesViewModel(config, new MinimalBluetoothManager());
+            var mappingVm = new MappingViewModel(config);
+
+            // Simulate WPF ComboBox synchronously clearing SelectedItem while Devices changes
+            ((INotifyCollectionChanged)mappingVm.Devices).CollectionChanged += (_, args) =>
+            {
+                if (args.Action is NotifyCollectionChangedAction.Reset or NotifyCollectionChangedAction.Remove)
+                {
+                    mappingVm.SelectedDevice = null;
+                }
+            };
+
+            mappingVm.LoadMappings();
+            mappingVm.SyncWithDevices();
+            Assert.Equal(2, mappingVm.Devices.Count);
+
+            // Delete one remote, re-add with a different Id for the same physical address, and re-sync multiple times
+            devicesVm.RemoveDevice(g9);
+            mappingVm.SyncWithDevices();
+            Assert.Single(mappingVm.Devices);
+
+            config.UpsertDevice(new RemoteDevice
+            {
+                Id = "bt_4754514C6FCC",
+                Name = "Chromecast Remote",
+                BluetoothAddress = 0x4754514C6FCC,
+                ModelType = RemoteModelType.GoogleG9N9N
+            });
+            mappingVm.SyncWithDevices();
+            mappingVm.LoadMappings();
+
+            Assert.Equal(2, mappingVm.Devices.Count);
+            Assert.Equal(2, mappingVm.Devices.Select(d => d.BluetoothAddress).Distinct().Count());
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void SyncWithDevices_DeduplicatesByPhysicalBluetoothAddress()
+    {
+        var config = new ConfigService(Path.Combine(Path.GetTempPath(), $"vib-dedup-map-{Guid.NewGuid():N}.json"));
+        config.Current.Devices.Add(new RemoteDevice
+        {
+            Id = "id-one",
+            Name = "Chromecast A",
+            BluetoothAddress = 0x4754514C6FCC,
+            ModelType = RemoteModelType.GoogleG9N9N
+        });
+        config.Current.Devices.Add(new RemoteDevice
+        {
+            Id = "id-two",
+            Name = "Chromecast B",
+            BluetoothAddress = 0x4754514C6FCC,
+            ModelType = RemoteModelType.GoogleG9N9N
+        });
+
+        var vm = new MappingViewModel(config);
+        vm.SyncWithDevices();
+
+        Assert.Single(vm.Devices);
+        Assert.Equal(0x4754514C6FCCUL, vm.Devices[0].BluetoothAddress);
     }
 }

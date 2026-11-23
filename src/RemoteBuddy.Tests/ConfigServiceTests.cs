@@ -192,4 +192,80 @@ public class ConfigServiceTests : IDisposable
         Assert.NotNull(reloaded.Current);
         Assert.NotEmpty(reloaded.Current.Devices);
     }
+
+    [Fact]
+    public void UpsertDevice_DeduplicatesByPhysicalBluetoothAddress_AndPreservesMappings()
+    {
+        string path = Path.Combine(_tempDir, "config.json");
+        var service = new ConfigService(path);
+
+        var customMappings = RemoteDevice.CreateDefaultMappings(RemoteModelType.GoogleG9N9N);
+        customMappings.Single(m => m.Button == RemoteButton.Home).ClickShortcut = "Ctrl+Alt+H";
+
+        var first = new RemoteDevice
+        {
+            Id = "4754514C6FCC",
+            Name = "Chromecast",
+            BluetoothAddress = 0x4754514C6FCC,
+            ModelType = RemoteModelType.GoogleG9N9N,
+            Mappings = customMappings
+        };
+        service.UpsertDevice(first);
+
+        var duplicateIdEntry = new RemoteDevice
+        {
+            Id = "bt_4754514C6FCC",
+            Name = "Chromecast Remote",
+            BluetoothAddress = 0x4754514C6FCC,
+            ModelType = RemoteModelType.GoogleG9N9N,
+            Mappings = []
+        };
+        var canonical = service.UpsertDevice(duplicateIdEntry);
+
+        Assert.Single(service.Current.Devices);
+        Assert.Equal("4754514C6FCC", canonical.Id);
+        Assert.Equal("Chromecast Remote", canonical.Name);
+        Assert.Equal("Ctrl+Alt+H", canonical.Mappings.Single(m => m.Button == RemoteButton.Home).ClickShortcut);
+
+        var reloaded = new ConfigService(path);
+        Assert.Single(reloaded.Current.Devices);
+        Assert.Equal("Ctrl+Alt+H", reloaded.Current.Devices[0].Mappings.Single(m => m.Button == RemoteButton.Home).ClickShortcut);
+    }
+
+    [Fact]
+    public void Load_DeduplicatesExistingDuplicatePhysicalAddressesInConfigJson()
+    {
+        string path = Path.Combine(_tempDir, "config.json");
+        File.WriteAllText(path, """
+        {
+          "Version": 1,
+          "SelectedDeviceId": "bt_4754514C6FCC",
+          "Devices": [
+            {
+              "Id": "4754514C6FCC",
+              "BluetoothAddress": 78427466788812,
+              "Name": "Chromecast Remote",
+              "ModelType": "GoogleG9N9N"
+            },
+            {
+              "Id": "bt_4754514C6FCC",
+              "BluetoothAddress": 78427466788812,
+              "Name": "Chromecast Remote",
+              "ModelType": "GoogleG9N9N"
+            },
+            {
+              "Id": "C05D39F86E0C",
+              "BluetoothAddress": 211506637073932,
+              "Name": "MI RC",
+              "ModelType": "XiaomiRC003"
+            }
+          ]
+        }
+        """);
+
+        var service = new ConfigService(path);
+        Assert.Equal(2, service.Current.Devices.Count);
+        Assert.Contains(service.Current.Devices, d => d.Id == "bt_4754514C6FCC");
+        Assert.Contains(service.Current.Devices, d => d.Id == "C05D39F86E0C");
+    }
 }

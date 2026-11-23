@@ -133,7 +133,7 @@ public class ConfigService
             if (parsed != null)
             {
                 parsed.InputTool ??= new();
-                parsed.Devices ??= new();
+                parsed.Devices = DeduplicateDevices(parsed.Devices ?? new(), parsed.SelectedDeviceId);
                 foreach (var dev in parsed.Devices)
                 {
                     dev.Mappings ??= RemoteDevice.CreateDefaultMappings(dev.ModelType);
@@ -149,6 +149,125 @@ public class ConfigService
 
         config = null!;
         return false;
+    }
+
+    public static List<RemoteDevice> DeduplicateDevices(IEnumerable<RemoteDevice> devices, string? preferredSelectedId = null)
+    {
+        var result = new List<RemoteDevice>();
+        var byAddress = new Dictionary<ulong, int>();
+        var byId = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var dev in devices)
+        {
+            if (dev == null) continue;
+
+            int existingIndex = -1;
+            if (dev.BluetoothAddress != 0 && byAddress.TryGetValue(dev.BluetoothAddress, out int addrIdx))
+            {
+                existingIndex = addrIdx;
+            }
+            else if (dev.BluetoothAddress == 0 && !string.IsNullOrEmpty(dev.Id) && byId.TryGetValue(dev.Id, out int idIdx))
+            {
+                existingIndex = idIdx;
+            }
+            else if (dev.BluetoothAddress == 0 && string.IsNullOrEmpty(dev.Id) && result.Contains(dev))
+            {
+                continue;
+            }
+
+            if (existingIndex < 0)
+            {
+                int idx = result.Count;
+                result.Add(dev);
+                if (dev.BluetoothAddress != 0) byAddress[dev.BluetoothAddress] = idx;
+                else if (!string.IsNullOrEmpty(dev.Id)) byId[dev.Id] = idx;
+                continue;
+            }
+
+            var existing = result[existingIndex];
+            bool preferIncoming = !string.IsNullOrEmpty(preferredSelectedId) &&
+                string.Equals(dev.Id, preferredSelectedId, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(existing.Id, preferredSelectedId, StringComparison.OrdinalIgnoreCase);
+
+            if (preferIncoming)
+            {
+                if ((dev.Mappings == null || dev.Mappings.Count == 0) && existing.Mappings is { Count: > 0 })
+                {
+                    dev.Mappings = existing.Mappings;
+                }
+                dev.ContainerId ??= existing.ContainerId;
+                result[existingIndex] = dev;
+            }
+            else
+            {
+                if ((existing.Mappings == null || existing.Mappings.Count == 0) && dev.Mappings is { Count: > 0 })
+                {
+                    existing.Mappings = dev.Mappings;
+                }
+                existing.ContainerId ??= dev.ContainerId;
+            }
+        }
+
+        return result;
+    }
+
+    public RemoteDevice UpsertDevice(RemoteDevice device, bool select = true, bool save = true)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+        lock (_lock)
+        {
+            if (string.IsNullOrEmpty(device.Id))
+            {
+                device.Id = device.BluetoothAddress != 0
+                    ? device.BluetoothAddress.ToString("X12")
+                    : Guid.NewGuid().ToString("N");
+            }
+
+            var existing = Current.Devices.FirstOrDefault(d => d.MatchesPhysicalDevice(device));
+            RemoteDevice canonical;
+            if (existing != null)
+            {
+                if (!string.IsNullOrWhiteSpace(device.Name)) existing.Name = device.Name;
+                if (device.ModelType != RemoteModelType.Unknown) existing.ModelType = device.ModelType;
+                if (device.ContainerId.HasValue) existing.ContainerId = device.ContainerId;
+                if (!string.IsNullOrEmpty(device.HidDevicePath))
+                {
+                    existing.HidDevicePath = device.HidDevicePath;
+                    existing.HidUsagePage = device.HidUsagePage;
+                    existing.HidUsage = device.HidUsage;
+                    existing.HidReportLength = device.HidReportLength;
+                    existing.HidCaptureStatus = device.HidCaptureStatus;
+                }
+                if (existing.Mappings == null || existing.Mappings.Count == 0)
+                {
+                    existing.Mappings = device.Mappings is { Count: > 0 }
+                        ? device.Mappings
+                        : RemoteDevice.CreateDefaultMappings(existing.ModelType);
+                }
+
+                Current.Devices.RemoveAll(d => !ReferenceEquals(d, existing) && d.MatchesPhysicalDevice(device));
+                canonical = existing;
+            }
+            else
+            {
+                if (device.Mappings == null || device.Mappings.Count == 0)
+                {
+                    device.Mappings = RemoteDevice.CreateDefaultMappings(device.ModelType);
+                }
+                Current.Devices.Add(device);
+                canonical = device;
+            }
+
+            if (select)
+            {
+                Current.SelectedDeviceId = canonical.Id;
+            }
+            if (save)
+            {
+                SaveLocked();
+            }
+            return canonical;
+        }
     }
 
     public void Update(Action<AppConfig> mutator, bool save = true)
@@ -250,7 +369,7 @@ public class ConfigService
             AppIntegrations = source.AppIntegrations != null
                 ? new Dictionary<string, bool>(source.AppIntegrations)
                 : new(),
-            Devices = (source.Devices ?? [])
+            Devices = DeduplicateDevices(source.Devices ?? [], source.SelectedDeviceId)
                 .Select(d => new RemoteDevice
                 {
                     Id = d.Id,

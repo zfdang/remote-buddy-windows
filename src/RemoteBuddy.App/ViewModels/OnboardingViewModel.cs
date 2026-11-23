@@ -751,14 +751,13 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
                 }
             }
 
-            if (!_config.Current.Devices.Any(d => d.Id == SelectedDevice.Id))
-            {
-                _config.Current.Devices.Add(SelectedDevice);
-            }
-            _config.Current.SelectedDeviceId = SelectedDevice.Id;
+            SelectedDevice = _config.UpsertDevice(SelectedDevice, select: true, save: true);
             AppLogger.Info($"Wizard completed: device '{SelectedDevice.Name}' (0x{SelectedDevice.BluetoothAddress:X12}) added to configuration", "OnboardingViewModel");
         }
-        _config.Save();
+        else
+        {
+            _config.Save();
+        }
         IsCompleted = true;
         AppLogger.Info($"Wizard completed (Mode={Mode}) and configuration saved", "OnboardingViewModel");
         RequestClose?.Invoke();

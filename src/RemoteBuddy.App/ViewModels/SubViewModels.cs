@@ -378,29 +378,21 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         {
             if (string.IsNullOrEmpty(device.Id))
             {
-                device.Id = device.BluetoothAddress != 0 ? $"bt_{device.BluetoothAddress:X12}" : Guid.NewGuid().ToString("N");
+                device.Id = device.BluetoothAddress != 0 ? device.BluetoothAddress.ToString("X12") : Guid.NewGuid().ToString("N");
             }
-            SelectedDevice = device;
-            _bt.SetDeviceVoiceSettings(device);
-            foreach (var connectedDevice in DiscoveredDevices)
-                connectedDevice.IsConnected = _bt.IsDeviceReady(connectedDevice.BluetoothAddress);
             device.ContainerId = _bt.GetDeviceContainerId(device.BluetoothAddress);
             if (device.Mappings == null || device.Mappings.Count == 0)
             {
                 device.Mappings = RemoteDevice.CreateDefaultMappings(device.ModelType);
             }
-            bool added = false;
-            _config.Update(cfg =>
-            {
-                cfg.SelectedDeviceId = device.Id;
-                if (!cfg.Devices.Any(d => d.Id == device.Id || (device.BluetoothAddress != 0 && d.BluetoothAddress == device.BluetoothAddress)))
-                {
-                    cfg.Devices.Add(device);
-                    added = true;
-                }
-            });
-            RemoveNearbyMatches(device.BluetoothAddress, device.Id);
-            if (added)
+            bool hadPhysicalMatch = _config.Current.Devices.Any(d => d.MatchesPhysicalDevice(device));
+            var canonical = _config.UpsertDevice(device, select: true, save: true);
+            SelectedDevice = canonical;
+            _bt.SetDeviceVoiceSettings(canonical);
+            foreach (var connectedDevice in DiscoveredDevices)
+                connectedDevice.IsConnected = _bt.IsDeviceReady(connectedDevice.BluetoothAddress);
+            RemoveNearbyMatches(canonical.BluetoothAddress, canonical.Id);
+            if (!hadPhysicalMatch || !DiscoveredDevices.Contains(canonical))
             {
                 Reload();
                 DevicesChanged?.Invoke();
@@ -462,12 +454,21 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         {
             _bt.DisconnectDevice(device.BluetoothAddress);
         }
-        if (SelectedDevice?.BluetoothAddress == device.BluetoothAddress) SelectedDevice = null;
-        DiscoveredDevices.Remove(device);
+        if (SelectedDevice?.MatchesPhysicalDevice(device) == true) SelectedDevice = null;
+        for (int i = DiscoveredDevices.Count - 1; i >= 0; i--)
+        {
+            var entry = DiscoveredDevices[i];
+            if (entry.MatchesPhysicalDevice(device) || entry.Id == device.Id)
+            {
+                entry.PropertyChanged -= OnDevicePropertyChanged;
+                DiscoveredDevices.RemoveAt(i);
+            }
+        }
         _config.Update(cfg =>
         {
-            cfg.Devices.RemoveAll(d => d.Id == device.Id);
-            if (cfg.SelectedDeviceId == device.Id)
+            cfg.Devices.RemoveAll(d => d.MatchesPhysicalDevice(device) || d.Id == device.Id);
+            if (!string.IsNullOrEmpty(cfg.SelectedDeviceId) &&
+                !cfg.Devices.Any(d => string.Equals(d.Id, cfg.SelectedDeviceId, StringComparison.OrdinalIgnoreCase)))
             {
                 cfg.SelectedDeviceId = null;
             }
@@ -843,6 +844,8 @@ public partial class MappingViewModel : ObservableObject
         LoadMappings();
     }
 
+    private bool _isSyncingDevices;
+
     [RelayCommand]
     public void AddDevice()
     {
@@ -857,7 +860,10 @@ public partial class MappingViewModel : ObservableObject
         OnPropertyChanged(nameof(IsGY3LELayout));
         OnPropertyChanged(nameof(IsT1));
         OnPropertyChanged(nameof(IsXiaomi));
-        LoadMappings();
+        if (!_isSyncingDevices)
+        {
+            LoadMappings();
+        }
     }
 
     [RelayCommand]
@@ -936,20 +942,48 @@ public partial class MappingViewModel : ObservableObject
 
     private void SyncDevicesCollection()
     {
-        var configured = _config.Current.Devices;
-        var configuredIds = configured.Select(d => d.Id).ToHashSet();
-
-        foreach (var staleId in _drafts.Keys.Where(id => !configuredIds.Contains(id)).ToArray())
+        if (_isSyncingDevices) return;
+        _isSyncingDevices = true;
+        try
         {
-            _drafts.Remove(staleId);
-        }
+            var desired = ConfigService.DeduplicateDevices(_config.Current.Devices, _config.Current.SelectedDeviceId);
+            var configuredIds = desired.Select(d => d.Id).ToHashSet();
 
-        Devices.Clear();
-        foreach (var dev in configured)
-        {
-            Devices.Add(dev);
+            foreach (var staleId in _drafts.Keys.Where(id => !configuredIds.Contains(id)).ToArray())
+            {
+                _drafts.Remove(staleId);
+            }
+
+            // Reconcile Devices in-place rather than Clear()+Add() so WPF ComboBox preserves
+            // selection and re-entrant CollectionChanged callbacks never duplicate entries.
+            for (int i = Devices.Count - 1; i >= 0; i--)
+            {
+                if (!desired.Contains(Devices[i]))
+                {
+                    Devices.RemoveAt(i);
+                }
+            }
+
+            for (int targetIndex = 0; targetIndex < desired.Count; targetIndex++)
+            {
+                var item = desired[targetIndex];
+                int currentIndex = Devices.IndexOf(item);
+                if (currentIndex < 0)
+                {
+                    Devices.Insert(targetIndex, item);
+                }
+                else if (currentIndex != targetIndex)
+                {
+                    Devices.Move(currentIndex, targetIndex);
+                }
+            }
+
+            OnPropertyChanged(nameof(HasDevices));
         }
-        OnPropertyChanged(nameof(HasDevices));
+        finally
+        {
+            _isSyncingDevices = false;
+        }
     }
 
     public void SyncWithDevices()

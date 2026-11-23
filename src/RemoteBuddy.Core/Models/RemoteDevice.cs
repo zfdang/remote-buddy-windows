@@ -106,6 +106,16 @@ public partial class RemoteDevice : ObservableObject
     [JsonIgnore]
     public bool IsXiaomi => !IsG9N9N && !IsT1;
 
+    public bool MatchesPhysicalDevice(RemoteDevice? other)
+    {
+        if (other == null) return false;
+        if (BluetoothAddress != 0 && other.BluetoothAddress != 0)
+        {
+            return BluetoothAddress == other.BluetoothAddress;
+        }
+        return !string.IsNullOrEmpty(Id) && string.Equals(Id, other.Id, StringComparison.OrdinalIgnoreCase);
+    }
+
     [JsonIgnore]
     public string FormattedAddress
     {
