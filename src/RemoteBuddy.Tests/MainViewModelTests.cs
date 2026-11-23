@@ -5,6 +5,7 @@ using RemoteBuddy.App.ViewModels;
 using RemoteBuddy.Core.Bluetooth;
 using RemoteBuddy.Core.Config;
 using RemoteBuddy.Core.Models;
+using RemoteBuddy.Platform.Windows.Input;
 using Xunit;
 
 namespace RemoteBuddy.Tests;
@@ -51,6 +52,7 @@ public class MainViewModelTests
         public event Action<ulong>? VoiceButtonPressed;
         public event Action<ulong>? VoiceSessionStarted;
         public event Action<ulong>? VoiceSessionEnded;
+        public event Action<ulong, string>? AudioOutputFailed;
 
         public int StartVoiceSessionCount { get; private set; }
         public int StopVoiceSessionCount { get; private set; }
@@ -68,6 +70,7 @@ public class MainViewModelTests
             if (VoiceDeviceAddress == address) VoiceDeviceAddress = 0;
             VoiceSessionEnded?.Invoke(address);
         }
+        public void RaiseAudioOutputFailed(ulong address, string reason) => AudioOutputFailed?.Invoke(address, reason);
 
         public void StartScanning() => IsScanning = true;
         public void StopScanning() => IsScanning = false;
@@ -945,6 +948,100 @@ public class MainViewModelTests
             vm.HandleDeviceButton(addr, RemoteButton.Home, false, MainViewModel.InputSource.Direct);
 
             Assert.Equal(["home-double"], executed);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void AudioOutputFailed_RaisesWarningBanner_AndVoiceSessionStartedClearsIt()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"banner-audio-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new TestBluetoothManager { IsConnected = true, IsReady = true, ConnectedDeviceAddress = 0x112233445566 };
+            bt.ReadyAddresses.Add(bt.ConnectedDeviceAddress);
+            using var vm = new MainViewModel(config, bt);
+
+            Assert.False(vm.HasWarningBanner);
+            bt.RaiseAudioOutputFailed(bt.ConnectedDeviceAddress, "CABLE Input unavailable");
+
+            Assert.True(vm.HasWarningBanner);
+            Assert.Contains("CABLE Input unavailable", vm.WarningBannerMessage);
+            Assert.Equal("查看驱动", vm.WarningBannerActionText);
+
+            bt.RaiseVoiceSessionStarted(bt.ConnectedDeviceAddress);
+            Assert.False(vm.HasWarningBanner);
+            Assert.Equal(string.Empty, vm.WarningBannerMessage);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void EtwStatusChanges_UpdateSidebarEnvironmentAndWarningBanner_AndRunningClearsBanner()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"banner-etw-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new TestBluetoothManager();
+            using var vm = new MainViewModel(config, bt);
+
+            Assert.False(vm.HasWarningBanner);
+            Assert.Equal(EtwCaptureStatus.Idle, vm.EtwCaptureStatus);
+
+            vm.SimulateEtwStatusForTest(EtwCaptureStatus.ElevationDeclined);
+            Assert.True(vm.HasWarningBanner);
+            Assert.Equal("重新提权", vm.WarningBannerActionText);
+            Assert.Equal(EtwCaptureStatus.ElevationDeclined, vm.EnvironmentVm.EtwStatus);
+            Assert.True(vm.EnvironmentVm.CanRetryEtwCapture);
+
+            vm.SimulateEtwStatusForTest(EtwCaptureStatus.Disconnected);
+            Assert.True(vm.HasWarningBanner);
+            Assert.Equal("重新启动", vm.WarningBannerActionText);
+
+            vm.SimulateEtwStatusForTest(EtwCaptureStatus.Failed);
+            Assert.True(vm.HasWarningBanner);
+            Assert.Equal("重试启动", vm.WarningBannerActionText);
+
+            vm.SimulateEtwStatusForTest(EtwCaptureStatus.RunningElevatedWorker);
+            Assert.False(vm.HasWarningBanner);
+            Assert.Equal(EtwCaptureStatus.RunningElevatedWorker, vm.EtwCaptureStatus);
+            Assert.False(vm.EnvironmentVm.CanRetryEtwCapture);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void DevicesVmRemoveDevice_SynchronizesMappingViewModelViaDevicesChanged()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"sync-rm-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var dev1 = new RemoteDevice { Id = "dev1", Name = "First", BluetoothAddress = 0x1111, ModelType = RemoteModelType.XiaomiRC003 };
+            var dev2 = new RemoteDevice { Id = "dev2", Name = "Second", BluetoothAddress = 0x2222, ModelType = RemoteModelType.GoogleG9N9N };
+            config.Current.Devices.AddRange([dev1, dev2]);
+            config.Current.SelectedDeviceId = dev1.Id;
+
+            var bt = new TestBluetoothManager();
+            using var vm = new MainViewModel(config, bt);
+            Assert.Equal(2, vm.MappingVm.Devices.Count);
+            Assert.Equal("dev1", vm.MappingVm.SelectedDevice?.Id);
+
+            vm.DevicesVm.RemoveDevice(dev1);
+
+            Assert.Single(vm.MappingVm.Devices);
+            Assert.Equal("dev2", vm.MappingVm.SelectedDevice?.Id);
         }
         finally
         {

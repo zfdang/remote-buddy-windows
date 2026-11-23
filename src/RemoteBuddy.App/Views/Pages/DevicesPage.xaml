@@ -180,10 +180,21 @@
                                     <!-- Hardware Usage Guide Section -->
                                     <!-- 1. G9N9N Guide -->
                                     <Border Background="#1F2328" BorderBrush="#333740" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,16"
-                                            Visibility="{Binding IsG9N9N, Converter={StaticResource BoolToVisibilityConverter}}">
+                                            Visibility="{Binding IsG9N9NLayout, Converter={StaticResource BoolToVisibilityConverter}}">
                                         <StackPanel>
                                             <TextBlock Text="💡 硬件使用提示 (G9N9N)" FontSize="12" FontWeight="SemiBold" Foreground="#88CCFF" Margin="0,0,0,6"/>
                                             <TextBlock Text="• 底部白色指示灯常亮表示正在传输语音，停止后自动熄灭。" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,4"/>
+                                            <TextBlock Text="• 智能切换与按住说话均支持连续保活，最长 5 分钟安全停麦以防耗电。" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,4"/>
+                                            <TextBlock Text="• 智能切换免提收音期间，若按其他实体键会结束收音。" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- 1b. GY3LE Guide -->
+                                    <Border Background="#1F2328" BorderBrush="#333740" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,16"
+                                            Visibility="{Binding IsGY3LELayout, Converter={StaticResource BoolToVisibilityConverter}}">
+                                        <StackPanel>
+                                            <TextBlock Text="💡 硬件使用提示 (Google TV Streamer · GY3LE)" FontSize="12" FontWeight="SemiBold" Foreground="#88CCFF" Margin="0,0,0,6"/>
+                                            <TextBlock Text="• 配有独立的自定义星标键 (★)，可在【按键映射】中自由配置快捷操作。" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,4"/>
                                             <TextBlock Text="• 智能切换与按住说话均支持连续保活，最长 5 分钟安全停麦以防耗电。" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,4"/>
                                             <TextBlock Text="• 智能切换免提收音期间，若按其他实体键会结束收音。" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap"/>
                                         </StackPanel>

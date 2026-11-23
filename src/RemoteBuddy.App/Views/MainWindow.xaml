@@ -36,6 +36,10 @@
                         </StackPanel>
                         <TextBlock Text="麦克风收音电平" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,4"/>
                         <ProgressBar Value="{Binding CurrentAudioLevel, Mode=OneWay}" Minimum="0" Maximum="1" Height="6" Background="#222" Foreground="#00CC66" BorderThickness="0"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0" VerticalAlignment="Center">
+                            <Ellipse Width="7" Height="7" Margin="0,0,7,0" Fill="{Binding EtwIndicatorColor}"/>
+                            <TextBlock Text="{Binding EtwIndicatorText}" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" TextTrimming="CharacterEllipsis" MaxWidth="155"/>
+                        </StackPanel>
                     </StackPanel>
                 </Border>
 
@@ -80,9 +84,26 @@
         </Border>
 
         <!-- Main Content Area -->
-        <Grid Grid.Column="1" Margin="26">
+        <DockPanel Grid.Column="1" Margin="26">
+            <Border DockPanel.Dock="Top" Background="#3D2E18" BorderBrush="#8A5A1A" BorderThickness="1" CornerRadius="8" Padding="14,10" Margin="0,0,0,16"
+                    Visibility="{Binding HasWarningBanner, Converter={StaticResource BoolToVisibilityConverter}}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="{Binding WarningBannerMessage}" Foreground="#FFD480" FontSize="13" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,12,0"/>
+                    <Button Grid.Column="1" Content="{Binding WarningBannerActionText}" Padding="10,4" Margin="0,0,8,0"
+                            Background="#8A5A1A" BorderBrush="#B87A28" Foreground="#FFFFFF" VerticalAlignment="Center"
+                            Command="{Binding ExecuteWarningBannerActionCommand}"
+                            Visibility="{Binding WarningBannerActionText, Converter={StaticResource StringToVisibilityConverter}}"/>
+                    <Button Grid.Column="2" Content="✕" Padding="8,4" Background="Transparent" BorderBrush="#8A5A1A" Foreground="#FFD480" VerticalAlignment="Center"
+                            Command="{Binding DismissWarningBannerCommand}"/>
+                </Grid>
+            </Border>
             <!-- Dynamic Page Swap Handled in Code-Behind -->
             <ContentControl x:Name="PageContentContainer"/>
-        </Grid>
+        </DockPanel>
     </Grid>
 </Window>

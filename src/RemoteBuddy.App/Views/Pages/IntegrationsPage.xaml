@@ -55,7 +55,7 @@
                         </StackPanel>
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="🔊 音频路由：" Foreground="{StaticResource SecondaryTextBrush}" FontSize="13"/>
-                            <TextBlock Text="{Binding VirtualCableStatusDescription}" Foreground="#00CC66" FontSize="12" TextWrapping="Wrap"/>
+                            <TextBlock Text="{Binding VirtualCableStatusDescription}" Foreground="{Binding VirtualCableStatusBrush}" FontSize="12" TextWrapping="Wrap"/>
                         </StackPanel>
                     </StackPanel>
                 </Border>

@@ -521,6 +521,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
 public partial class MappingItemViewModel : ObservableObject
 {
     public ButtonMapping Source { get; }
+    public string OwnerDeviceId { get; }
     public RemoteButton Button => Source.Button;
     public string ButtonName => Button switch
     {
@@ -532,6 +533,7 @@ public partial class MappingItemViewModel : ObservableObject
         RemoteButton.VolumeUp => "音量 +", RemoteButton.VolumeDown => "音量 −",
         RemoteButton.LiveTv => "TV 键", RemoteButton.Mute => "静音键",
         RemoteButton.PlayPause => "播放 / 暂停", RemoteButton.Input => "输入源",
+        RemoteButton.Custom => "自定义键 (★)",
         _ => Button.ToString()
     };
 
@@ -543,14 +545,16 @@ public partial class MappingItemViewModel : ObservableObject
     public string LongPressSummary => LongPress.DisplaySummary;
     public string DoubleClickSummary => DoubleClick.DisplaySummary;
 
-    public MappingItemViewModel(ButtonMapping source, Action? onModified = null)
+    public MappingItemViewModel(ButtonMapping source, Action? onModified = null, string ownerDeviceId = "")
     {
         Source = source;
+        OwnerDeviceId = ownerDeviceId;
         Action wrapModified = () =>
         {
             OnPropertyChanged(nameof(SingleClickSummary));
             OnPropertyChanged(nameof(LongPressSummary));
             OnPropertyChanged(nameof(DoubleClickSummary));
+            LongPress?.NotifyRepeatDependencyChanged();
             onModified?.Invoke();
         };
         SingleClick = new MappingGestureViewModel(source, ButtonTrigger.SingleClick, wrapModified);
@@ -566,6 +570,7 @@ public partial class MappingItemViewModel : ObservableObject
         OnPropertyChanged(nameof(SingleClickSummary));
         OnPropertyChanged(nameof(LongPressSummary));
         OnPropertyChanged(nameof(DoubleClickSummary));
+        LongPress.NotifyRepeatDependencyChanged();
     }
 }
 
@@ -585,6 +590,7 @@ public partial class MappingGestureViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(Help))]
     [NotifyPropertyChangedFor(nameof(DisplaySummary))]
     [NotifyPropertyChangedFor(nameof(IsConfigured))]
+    [NotifyPropertyChangedFor(nameof(ShowRepeatNeedsClickWarning))]
     private ButtonActionType _action;
 
     [ObservableProperty]
@@ -601,6 +607,26 @@ public partial class MappingGestureViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(DisplaySummary))]
     [NotifyPropertyChangedFor(nameof(IsConfigured))]
     private string _text;
+
+    private string _shortcutValidationError = string.Empty;
+    public string ShortcutValidationError
+    {
+        get => _shortcutValidationError;
+        private set
+        {
+            if (SetProperty(ref _shortcutValidationError, value))
+            {
+                OnPropertyChanged(nameof(HasShortcutError));
+            }
+        }
+    }
+
+    public bool HasShortcutError => !string.IsNullOrEmpty(ShortcutValidationError);
+
+    public bool ShowRepeatNeedsClickWarning =>
+        _trigger == ButtonTrigger.LongPress &&
+        Action == ButtonActionType.ContinuousRepeat &&
+        !HasConfiguredSingleClick();
 
     public bool IsConfigured => Action switch
     {
@@ -672,6 +698,16 @@ public partial class MappingGestureViewModel : ObservableObject
     partial void OnMediaChanged(MediaCommand value) => Apply();
     partial void OnTextChanged(string value) => Apply();
 
+    private bool HasConfiguredSingleClick() => _mapping.ClickAction switch
+    {
+        ButtonActionType.KeyboardShortcut => !string.IsNullOrWhiteSpace(_mapping.ClickShortcut),
+        ButtonActionType.MediaControl => _mapping.ClickMedia != MediaCommand.None,
+        ButtonActionType.TextSnippet => !string.IsNullOrWhiteSpace(_mapping.ClickText),
+        _ => false
+    };
+
+    internal void NotifyRepeatDependencyChanged() => OnPropertyChanged(nameof(ShowRepeatNeedsClickWarning));
+
     internal void Clear()
     {
         Action = ButtonActionType.None;
@@ -682,6 +718,21 @@ public partial class MappingGestureViewModel : ObservableObject
 
     private void Apply()
     {
+        if (Action == ButtonActionType.KeyboardShortcut && !string.IsNullOrWhiteSpace(Shortcut))
+        {
+            string trimmed = Shortcut.Trim();
+            if (!NativeInputSender.TryParseShortcut(trimmed, out _, out _))
+            {
+                ShortcutValidationError = $"无法识别快捷键“{trimmed}”，请使用如 Ctrl+C、Alt+Tab、F11 等格式";
+                return;
+            }
+            ShortcutValidationError = string.Empty;
+        }
+        else
+        {
+            ShortcutValidationError = string.Empty;
+        }
+
         var assignment = Action switch
         {
             ButtonActionType.KeyboardShortcut when !string.IsNullOrWhiteSpace(Shortcut) => new ButtonAssignment(Action, Shortcut.Trim()),
@@ -698,6 +749,7 @@ public partial class MappingGestureViewModel : ObservableObject
 public partial class MappingViewModel : ObservableObject
 {
     private readonly ConfigService _config;
+    private readonly Action<WizardMode>? _openWizard;
     private readonly Dictionary<string, List<MappingItemViewModel>> _drafts = new();
 
     public int MappingRevision { get; private set; }
@@ -705,7 +757,9 @@ public partial class MappingViewModel : ObservableObject
     [ObservableProperty]
     private ObservableCollection<MappingItemViewModel> _currentMappings = new();
 
-    public IReadOnlyList<RemoteDevice> Devices => _config.Current.Devices;
+    public ObservableCollection<RemoteDevice> Devices { get; } = new();
+
+    public bool HasDevices => Devices.Count > 0;
 
     [ObservableProperty]
     private RemoteDevice? _selectedDevice;
@@ -761,26 +815,46 @@ public partial class MappingViewModel : ObservableObject
     internal event Action<RemoteButton>? HardwareButtonPressed;
 
     public bool IsG9N9N => SelectedDevice?.ModelType is RemoteModelType.GoogleG9N9N or RemoteModelType.GoogleGY3LE;
+    public bool IsG9N9NLayout => SelectedDevice?.ModelType == RemoteModelType.GoogleG9N9N;
+    public bool IsGY3LELayout => SelectedDevice?.ModelType == RemoteModelType.GoogleGY3LE;
     public bool IsT1 => SelectedDevice?.ModelType == RemoteModelType.T1Remote;
-    public bool IsXiaomi => !IsG9N9N && !IsT1;
+    public bool IsXiaomi => SelectedDevice != null && !IsG9N9N && !IsT1;
 
-    public string DeviceNote => IsG9N9N
-        ? "选择 Chromecast 遥控器按键，设置单击、长按和双击动作。"
-        : IsT1
-            ? "T1 飞鼠遥控器：正面 7 颗按键（电源、返回、主页、菜单、音量、静音）支持自定义；确认、方向键、飞鼠与背面 QWERTY 全键盘保持系统默认输入。"
-            : "选择按键，设置单击、长按和双击动作。";
+    public string DeviceNote => SelectedDevice == null
+        ? "请先添加并连接遥控器后再配置自定义按键映射。"
+        : IsGY3LELayout
+            ? "Google TV Streamer (GY3LE) 遥控器：包含方向键、实体电源/静音、自定义星标键 (★) 与侧边音量键，支持单击、长按和双击映射。"
+            : IsG9N9NLayout
+                ? "选择 Chromecast (G9N9N) 遥控器按键，设置单击、长按和双击动作。"
+                : IsT1
+                    ? "T1 飞鼠遥控器：正面 7 颗按键（电源、返回、主页、菜单、音量、静音）支持自定义；确认、方向键、飞鼠与背面 QWERTY 全键盘保持系统默认输入。"
+                    : "选择按键，设置单击、长按和双击动作。";
 
-    public MappingViewModel(ConfigService config)
+    public MappingViewModel(ConfigService config) : this(config, null)
+    {
+    }
+
+    public MappingViewModel(ConfigService config, Action<WizardMode>? openWizard)
     {
         _config = config;
-        _selectedDevice = config.Current.Devices.FirstOrDefault(d => d.Id == config.Current.SelectedDeviceId);
+        _openWizard = openWizard;
+        SyncDevicesCollection();
+        _selectedDevice = Devices.FirstOrDefault(d => d.Id == _config.Current.SelectedDeviceId);
         LoadMappings();
+    }
+
+    [RelayCommand]
+    public void AddDevice()
+    {
+        _openWizard?.Invoke(WizardMode.DeviceOnly);
     }
 
     partial void OnSelectedDeviceChanged(RemoteDevice? value)
     {
         OnPropertyChanged(nameof(DeviceNote));
         OnPropertyChanged(nameof(IsG9N9N));
+        OnPropertyChanged(nameof(IsG9N9NLayout));
+        OnPropertyChanged(nameof(IsGY3LELayout));
         OnPropertyChanged(nameof(IsT1));
         OnPropertyChanged(nameof(IsXiaomi));
         LoadMappings();
@@ -818,21 +892,28 @@ public partial class MappingViewModel : ObservableObject
     public void ResetToDefaults()
     {
         var selectedDev = SelectedDevice;
-        if (selectedDev != null)
+        if (selectedDev != null && _config.Current.Devices.Contains(selectedDev))
         {
-            selectedDev.Mappings = RemoteDevice.CreateDefaultMappings(selectedDev.ModelType);
+            var defaults = RemoteDevice.CreateDefaultMappings(selectedDev.ModelType);
             _drafts.Remove(selectedDev.Id);
-            _config.Save();
+            _config.Update(cfg =>
+            {
+                if (cfg.Devices.Contains(selectedDev))
+                {
+                    selectedDev.Mappings = defaults;
+                }
+            });
             LoadMappings();
         }
     }
 
     public void SyncSelectedDeviceWithConfig()
     {
+        SyncDevicesCollection();
         var targetId = _config.Current.SelectedDeviceId;
         if (!string.IsNullOrEmpty(targetId))
         {
-            var match = _config.Current.Devices.FirstOrDefault(d => d.Id == targetId);
+            var match = Devices.FirstOrDefault(d => d.Id == targetId);
             if (match != null)
             {
                 if (SelectedDevice == null || SelectedDevice.Id != match.Id)
@@ -846,21 +927,65 @@ public partial class MappingViewModel : ObservableObject
                 return;
             }
         }
-        else if (SelectedDevice == null && _config.Current.Devices.Count > 0)
+        else if (SelectedDevice == null && Devices.Count > 0)
         {
-            SelectedDevice = _config.Current.Devices[0];
+            SelectedDevice = Devices[0];
             return;
         }
     }
 
+    private void SyncDevicesCollection()
+    {
+        var configured = _config.Current.Devices;
+        var configuredIds = configured.Select(d => d.Id).ToHashSet();
+
+        foreach (var staleId in _drafts.Keys.Where(id => !configuredIds.Contains(id)).ToArray())
+        {
+            _drafts.Remove(staleId);
+        }
+
+        Devices.Clear();
+        foreach (var dev in configured)
+        {
+            Devices.Add(dev);
+        }
+        OnPropertyChanged(nameof(HasDevices));
+    }
+
+    public void SyncWithDevices()
+    {
+        SyncDevicesCollection();
+        if (SelectedDevice != null && !_config.Current.Devices.Contains(SelectedDevice))
+        {
+            var replacement = !string.IsNullOrEmpty(_config.Current.SelectedDeviceId)
+                ? Devices.FirstOrDefault(d => d.Id == _config.Current.SelectedDeviceId)
+                : null;
+            SelectedDevice = replacement ?? Devices.FirstOrDefault();
+            if (SelectedDevice == null)
+            {
+                LoadMappings();
+            }
+            return;
+        }
+        LoadMappings();
+    }
+
     public void LoadMappings()
     {
+        SyncDevicesCollection();
         CurrentMappings.Clear();
-        OnPropertyChanged(nameof(Devices));
-        if (SelectedDevice == null && _config.Current.Devices.Count > 0)
+
+        if (SelectedDevice != null && !_config.Current.Devices.Contains(SelectedDevice))
         {
-            SelectedDevice = _config.Current.Devices.FirstOrDefault(d => d.Id == _config.Current.SelectedDeviceId)
-                ?? _config.Current.Devices[0];
+            SelectedDevice = Devices.FirstOrDefault(d => d.Id == _config.Current.SelectedDeviceId)
+                ?? Devices.FirstOrDefault();
+            return;
+        }
+
+        if (SelectedDevice == null && Devices.Count > 0)
+        {
+            SelectedDevice = Devices.FirstOrDefault(d => d.Id == _config.Current.SelectedDeviceId)
+                ?? Devices[0];
             return;
         }
         var selectedDev = SelectedDevice;
@@ -874,49 +999,86 @@ public partial class MappingViewModel : ObservableObject
             }
             if (selectedDev.Mappings == null || selectedDev.Mappings.Count == 0)
             {
-                selectedDev.Mappings = RemoteDevice.CreateDefaultMappings(selectedDev.ModelType);
-                _config.Save();
+                var defaults = RemoteDevice.CreateDefaultMappings(selectedDev.ModelType);
+                _config.Update(cfg =>
+                {
+                    if (cfg.Devices.Contains(selectedDev))
+                    {
+                        selectedDev.Mappings = defaults;
+                    }
+                });
             }
-            var buttons = selectedDev.ModelType is RemoteModelType.XiaomiRC001 or RemoteModelType.XiaomiRC003
-                ? new[] { RemoteButton.Power, RemoteButton.Up, RemoteButton.Left, RemoteButton.Right, RemoteButton.Ok,
-                    RemoteButton.Down, RemoteButton.Back, RemoteButton.Home, RemoteButton.Menu,
-                    RemoteButton.VolumeUp, RemoteButton.VolumeDown, RemoteButton.LiveTv }
-                : selectedDev.Mappings.Select(m => m.Button).ToArray();
+            var ownerMappings = selectedDev.Mappings ?? [];
+            var buttons = selectedDev.ModelType switch
+            {
+                RemoteModelType.XiaomiRC001 or RemoteModelType.XiaomiRC003 =>
+                    new[] { RemoteButton.Power, RemoteButton.Up, RemoteButton.Left, RemoteButton.Right, RemoteButton.Ok,
+                        RemoteButton.Down, RemoteButton.Back, RemoteButton.Home, RemoteButton.Menu,
+                        RemoteButton.VolumeUp, RemoteButton.VolumeDown, RemoteButton.LiveTv },
+                RemoteModelType.GoogleGY3LE =>
+                    ownerMappings.Select(m => m.Button).Append(RemoteButton.Custom).Distinct().ToArray(),
+                _ => ownerMappings.Select(m => m.Button).ToArray()
+            };
+            var owner = selectedDev;
             foreach (var button in buttons)
             {
-                var mapping = selectedDev.Mappings.FirstOrDefault(m => m.Button == button)
+                var mapping = ownerMappings.FirstOrDefault(m => m.Button == button)
                     ?? new ButtonMapping { Button = button, ClickAction = ButtonActionType.None };
-                CurrentMappings.Add(new MappingItemViewModel(mapping, OnMappingItemModified));
+                CurrentMappings.Add(new MappingItemViewModel(mapping, () => OnMappingItemModified(owner), owner.Id));
             }
-            _drafts[selectedDev.Id] = CurrentMappings.ToList();
+            _drafts[owner.Id] = CurrentMappings.ToList();
         }
         SelectedMapping = CurrentMappings.FirstOrDefault();
     }
 
-    private void OnMappingItemModified()
+    private void OnMappingItemModified(RemoteDevice ownerDevice)
     {
-        MappingRevision++;
-        OnPropertyChanged(nameof(MappingRevision));
-        var selectedDev = SelectedDevice;
-        if (selectedDev != null)
+        if (!_config.Current.Devices.Contains(ownerDevice))
         {
-            var visibleButtons = CurrentMappings.Select(i => i.Button).ToHashSet();
-            selectedDev.Mappings = selectedDev.Mappings.Where(m => !visibleButtons.Contains(m.Button))
-                .Concat(CurrentMappings.Select(i => i.Source)).ToList();
-            _config.Save();
+            _drafts.Remove(ownerDevice.Id);
+            return;
         }
+
+        if (!_drafts.TryGetValue(ownerDevice.Id, out var ownerDraft))
+        {
+            return;
+        }
+
+        if (ReferenceEquals(SelectedDevice, ownerDevice))
+        {
+            MappingRevision++;
+            OnPropertyChanged(nameof(MappingRevision));
+        }
+
+        var visibleButtons = ownerDraft.Select(i => i.Button).ToHashSet();
+        var merged = (ownerDevice.Mappings ?? []).Where(m => !visibleButtons.Contains(m.Button))
+            .Concat(ownerDraft.Select(i => i.Source)).ToList();
+        _config.Update(cfg =>
+        {
+            if (cfg.Devices.Contains(ownerDevice))
+            {
+                ownerDevice.Mappings = merged;
+            }
+        });
     }
 
     [RelayCommand]
     public void SaveMappings()
     {
         var selectedDev = SelectedDevice;
-        if (selectedDev != null)
+        if (selectedDev != null && _config.Current.Devices.Contains(selectedDev))
         {
-            var visibleButtons = CurrentMappings.Select(i => i.Button).ToHashSet();
-            selectedDev.Mappings = selectedDev.Mappings.Where(m => !visibleButtons.Contains(m.Button))
-                .Concat(CurrentMappings.Select(i => i.Source)).ToList();
-            _config.Save();
+            var sourceItems = _drafts.TryGetValue(selectedDev.Id, out var draft) ? draft : CurrentMappings.ToList();
+            var visibleButtons = sourceItems.Select(i => i.Button).ToHashSet();
+            var merged = (selectedDev.Mappings ?? []).Where(m => !visibleButtons.Contains(m.Button))
+                .Concat(sourceItems.Select(i => i.Source)).ToList();
+            _config.Update(cfg =>
+            {
+                if (cfg.Devices.Contains(selectedDev))
+                {
+                    selectedDev.Mappings = merged;
+                }
+            });
         }
     }
 }
@@ -956,6 +1118,13 @@ public partial class IntegrationsViewModel : ObservableObject
         }
     }
 
+    public string VirtualCableStatusBrush => VirtualAudioAuditor.AuditCableInputDevice() switch
+    {
+        DriverReadinessStatus.Ready => "#00CC66",
+        DriverReadinessStatus.Disabled or DriverReadinessStatus.RebootRequired => "#FFB347",
+        _ => "#FF6666"
+    };
+
     private readonly Action<WizardMode>? _openWizard;
 
     public IntegrationsViewModel(ConfigService config, Action<WizardMode>? openWizard = null)
@@ -975,6 +1144,7 @@ public partial class IntegrationsViewModel : ObservableObject
         OnPropertyChanged(nameof(CurrentShortcutDisplay));
         OnPropertyChanged(nameof(CurrentTriggerModeDisplay));
         OnPropertyChanged(nameof(VirtualCableStatusDescription));
+        OnPropertyChanged(nameof(VirtualCableStatusBrush));
     }
 }
 
@@ -982,6 +1152,9 @@ public partial class EnvironmentViewModel : ObservableObject
 {
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(DriverStatusBadgeText))]
+    [NotifyPropertyChangedFor(nameof(DriverStatusBadgeColor))]
+    [NotifyPropertyChangedFor(nameof(DriverStatusBadgeBgColor))]
+    [NotifyPropertyChangedFor(nameof(DriverStatusBadgeBorderColor))]
     private DriverReadinessStatus _driverStatus;
 
     public string DriverStatusBadgeText => DriverStatus switch
@@ -992,6 +1165,100 @@ public partial class EnvironmentViewModel : ObservableObject
         DriverReadinessStatus.RebootRequired => "需重启",
         _ => "初始化失败"
     };
+
+    public string DriverStatusBadgeColor => DriverStatus switch
+    {
+        DriverReadinessStatus.Ready => "#44FF88",
+        DriverReadinessStatus.Disabled or DriverReadinessStatus.RebootRequired => "#FFB347",
+        _ => "#FF6666"
+    };
+
+    public string DriverStatusBadgeBgColor => DriverStatus switch
+    {
+        DriverReadinessStatus.Ready => "#1C3827",
+        DriverReadinessStatus.Disabled or DriverReadinessStatus.RebootRequired => "#3D2E18",
+        _ => "#3D1818"
+    };
+
+    public string DriverStatusBadgeBorderColor => DriverStatus switch
+    {
+        DriverReadinessStatus.Ready => "#2D6A42",
+        DriverReadinessStatus.Disabled or DriverReadinessStatus.RebootRequired => "#8A5A1A",
+        _ => "#8A2D2D"
+    };
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(EtwStatusBadgeText))]
+    [NotifyPropertyChangedFor(nameof(EtwStatusBadgeColor))]
+    [NotifyPropertyChangedFor(nameof(EtwStatusBadgeBgColor))]
+    [NotifyPropertyChangedFor(nameof(EtwStatusBadgeBorderColor))]
+    [NotifyPropertyChangedFor(nameof(EtwStatusDescription))]
+    [NotifyPropertyChangedFor(nameof(CanRetryEtwCapture))]
+    private EtwCaptureStatus _etwStatus = EtwCaptureStatus.Idle;
+
+    public string EtwStatusBadgeText => EtwStatus switch
+    {
+        EtwCaptureStatus.RunningInProcess => "运行中 (内置特权)",
+        EtwCaptureStatus.RunningElevatedWorker => "运行中 (提权进程)",
+        EtwCaptureStatus.Starting => "正在启动",
+        EtwCaptureStatus.ElevationDeclined => "已拒绝提权",
+        EtwCaptureStatus.Disconnected => "已意外断开",
+        EtwCaptureStatus.Failed => "启动失败",
+        _ => "待机"
+    };
+
+    public string EtwStatusBadgeColor => EtwStatus switch
+    {
+        EtwCaptureStatus.RunningInProcess or EtwCaptureStatus.RunningElevatedWorker => "#44FF88",
+        EtwCaptureStatus.Starting => "#88CCFF",
+        EtwCaptureStatus.ElevationDeclined or EtwCaptureStatus.Disconnected => "#FFB347",
+        EtwCaptureStatus.Failed => "#FF6666",
+        _ => "#AAB1BE"
+    };
+
+    public string EtwStatusBadgeBgColor => EtwStatus switch
+    {
+        EtwCaptureStatus.RunningInProcess or EtwCaptureStatus.RunningElevatedWorker => "#1C3827",
+        EtwCaptureStatus.Starting => "#1E2836",
+        EtwCaptureStatus.ElevationDeclined or EtwCaptureStatus.Disconnected => "#3D2E18",
+        EtwCaptureStatus.Failed => "#3D1818",
+        _ => "#25272B"
+    };
+
+    public string EtwStatusBadgeBorderColor => EtwStatus switch
+    {
+        EtwCaptureStatus.RunningInProcess or EtwCaptureStatus.RunningElevatedWorker => "#2D6A42",
+        EtwCaptureStatus.Starting => "#385373",
+        EtwCaptureStatus.ElevationDeclined or EtwCaptureStatus.Disconnected => "#8A5A1A",
+        EtwCaptureStatus.Failed => "#8A2D2D",
+        _ => "#3E4249"
+    };
+
+    public string EtwStatusDescription => EtwStatus switch
+    {
+        EtwCaptureStatus.RunningInProcess => "当前进程已具有管理员权限，Chromecast / T1 按键补充 ETW 捕获服务正在内置运行。",
+        EtwCaptureStatus.RunningElevatedWorker => "已通过提权工作进程运行 Chromecast / T1 按键补充 ETW 捕获服务。",
+        EtwCaptureStatus.Starting => "正在启动 ETW 提权捕获工作进程，如弹出 UAC 权限确认请点击“是”。",
+        EtwCaptureStatus.ElevationDeclined => "您取消或拒绝了 UAC 提权请求，Chromecast (G9N9N/GY3LE) 与 T1 部分专用按键可能无法被捕获。",
+        EtwCaptureStatus.Disconnected => "ETW 提权工作进程意外断开，请点击下方按钮重新启动捕获服务。",
+        EtwCaptureStatus.Failed => "ETW 捕获服务启动失败，请重试启动或尝试以管理员身份重启本程序。",
+        _ => "尚未连接需要 ETW 补充捕获的遥控器，或服务当前处于待机状态。"
+    };
+
+    public bool CanRetryEtwCapture => EtwStatus is EtwCaptureStatus.ElevationDeclined or EtwCaptureStatus.Disconnected or EtwCaptureStatus.Failed;
+
+    internal Action? RetryEtwCaptureAction { get; set; }
+
+    public void UpdateEtwStatus(EtwCaptureStatus status)
+    {
+        EtwStatus = status;
+    }
+
+    [RelayCommand]
+    public void RetryEtwCapture()
+    {
+        RetryEtwCaptureAction?.Invoke();
+    }
 
     public bool IsAdministrator => BluetoothAdapterHelper.IsAdministrator();
 

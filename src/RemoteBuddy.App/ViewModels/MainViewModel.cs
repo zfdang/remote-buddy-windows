@@ -80,6 +80,42 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private bool _isVoiceActive = false;
 
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasWarningBanner))]
+    private string _warningBannerMessage = string.Empty;
+
+    [ObservableProperty]
+    private string _warningBannerActionText = string.Empty;
+
+    public bool HasWarningBanner => !string.IsNullOrEmpty(WarningBannerMessage);
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(EtwIndicatorText))]
+    [NotifyPropertyChangedFor(nameof(EtwIndicatorColor))]
+    private EtwCaptureStatus _etwCaptureStatus = EtwCaptureStatus.Idle;
+
+    private enum WarningKind { None, Audio, Etw }
+    private WarningKind _activeWarningKind;
+
+    public string EtwIndicatorText => EtwCaptureStatus switch
+    {
+        EtwCaptureStatus.RunningInProcess or EtwCaptureStatus.RunningElevatedWorker => "ETW 按键捕获：运行中",
+        EtwCaptureStatus.Starting => "ETW 按键捕获：启动中…",
+        EtwCaptureStatus.ElevationDeclined => "ETW 按键捕获：已拒绝提权",
+        EtwCaptureStatus.Disconnected => "ETW 按键捕获：已断开",
+        EtwCaptureStatus.Failed => "ETW 按键捕获：启动失败",
+        _ => "ETW 按键捕获：待机"
+    };
+
+    public string EtwIndicatorColor => EtwCaptureStatus switch
+    {
+        EtwCaptureStatus.RunningInProcess or EtwCaptureStatus.RunningElevatedWorker => "#44FF88",
+        EtwCaptureStatus.Starting => "#88CCFF",
+        EtwCaptureStatus.ElevationDeclined or EtwCaptureStatus.Disconnected => "#FFB347",
+        EtwCaptureStatus.Failed => "#FF6666",
+        _ => "#888888"
+    };
+
     public GeneralViewModel GeneralVm { get; }
     public DevicesViewModel DevicesVm { get; }
     public MappingViewModel MappingVm { get; }
@@ -119,11 +155,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         GeneralVm = new GeneralViewModel(_configService, _bluetoothManager, mode => RequestOpenWizard?.Invoke(mode), Navigate);
         DevicesVm = new DevicesViewModel(_configService, _bluetoothManager, mode => RequestOpenWizard?.Invoke(mode));
-        MappingVm = new MappingViewModel(_configService);
-        DevicesVm.DevicesChanged += RefreshInputSources;
+        MappingVm = new MappingViewModel(_configService, mode => RequestOpenWizard?.Invoke(mode));
+        DevicesVm.DevicesChanged += OnDevicesChanged;
         MappingVm.PropertyChanged += OnMappingSettingsChanged;
         IntegrationsVm = new IntegrationsViewModel(_configService, mode => RequestOpenWizard?.Invoke(mode));
         EnvironmentVm = new EnvironmentViewModel();
+        EnvironmentVm.RetryEtwCaptureAction = RetryEtwCapture;
         AppIntegrationVm = new AppIntegrationViewModel(_configService);
         AboutVm = new AboutViewModel();
         SettingsVm = new SettingsViewModel(_configService, mode => RequestOpenWizard?.Invoke(mode));
@@ -137,12 +174,95 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _bluetoothManager.VoiceSessionStarted += OnVoiceSessionStarted;
         _bluetoothManager.VoiceSessionEnded += OnVoiceSessionEnded;
         _bluetoothManager.VoiceButtonPressed += OnVoiceButtonPressed;
+        _bluetoothManager.AudioOutputFailed += OnAudioOutputFailed;
         _rawInputReceiver.ButtonEvent += OnRawButtonEvent;
         _chromecastButtonReceiver.ButtonEvent += OnChromecastButtonEvent;
         _chromecastButtonReceiver.TruncatedPacketDetected += OnChromecastTruncatedPacketDetected;
         _chromecastButtonReceiver.DeviceDisconnected += OnEtwDeviceDisconnected;
         _chromecastButtonReceiver.SourceBound += OnEtwSourceBound;
         _chromecastButtonReceiver.UnexpectedDisconnect += OnEtwUnexpectedDisconnect;
+        _chromecastButtonReceiver.StatusChanged += OnEtwStatusChanged;
+    }
+
+    private void OnDevicesChanged()
+    {
+        MappingVm.SyncWithDevices();
+        RefreshInputSources();
+    }
+
+    private void OnAudioOutputFailed(ulong address, string reason) => RunOnUi(() =>
+    {
+        _activeWarningKind = WarningKind.Audio;
+        WarningBannerMessage = string.IsNullOrWhiteSpace(reason)
+            ? "虚拟音频输出未就绪，请检查 VB-CABLE 驱动是否已安装并启用。"
+            : $"语音音频输出失败：{reason}";
+        WarningBannerActionText = "查看驱动";
+        EnvironmentVm.RefreshStatus();
+    });
+
+    private void OnEtwStatusChanged(EtwCaptureStatus status) => RunOnUi(() =>
+    {
+        EtwCaptureStatus = status;
+        EnvironmentVm.UpdateEtwStatus(status);
+
+        switch (status)
+        {
+            case EtwCaptureStatus.ElevationDeclined:
+                _activeWarningKind = WarningKind.Etw;
+                WarningBannerMessage = "未授予管理员权限，Chromecast / T1 按键捕获服务未启动。";
+                WarningBannerActionText = "重新提权";
+                break;
+            case EtwCaptureStatus.Disconnected:
+                _activeWarningKind = WarningKind.Etw;
+                WarningBannerMessage = "ETW 按键捕获服务已意外断开，部分遥控器实体按键可能暂时无响应。";
+                WarningBannerActionText = "重新启动";
+                break;
+            case EtwCaptureStatus.Failed:
+                _activeWarningKind = WarningKind.Etw;
+                WarningBannerMessage = "ETW 按键捕获服务启动失败，请重试或检查安全权限设置。";
+                WarningBannerActionText = "重试启动";
+                break;
+            case EtwCaptureStatus.RunningInProcess:
+            case EtwCaptureStatus.RunningElevatedWorker:
+            case EtwCaptureStatus.Idle:
+                if (_activeWarningKind == WarningKind.Etw)
+                {
+                    _activeWarningKind = WarningKind.None;
+                    WarningBannerMessage = string.Empty;
+                    WarningBannerActionText = string.Empty;
+                }
+                break;
+        }
+    });
+
+    internal void SimulateEtwStatusForTest(EtwCaptureStatus status) => OnEtwStatusChanged(status);
+
+    [RelayCommand]
+    public void DismissWarningBanner()
+    {
+        _activeWarningKind = WarningKind.None;
+        WarningBannerMessage = string.Empty;
+        WarningBannerActionText = string.Empty;
+    }
+
+    [RelayCommand]
+    public void ExecuteWarningBannerAction()
+    {
+        switch (_activeWarningKind)
+        {
+            case WarningKind.Audio:
+                Navigate("Permissions");
+                break;
+            case WarningKind.Etw:
+                RetryEtwCapture();
+                break;
+        }
+    }
+
+    [RelayCommand]
+    public void RetryEtwCapture()
+    {
+        RefreshInputSources(forceRetry: true);
     }
 
     private IEnumerable<RemoteDevice> KnownRemotes()
@@ -503,6 +623,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
 
             IsVoiceActive = true;
+            if (_activeWarningKind == WarningKind.Audio)
+            {
+                _activeWarningKind = WarningKind.None;
+                WarningBannerMessage = string.Empty;
+                WarningBannerActionText = string.Empty;
+            }
             if (ActiveOnboardingVm is { } onboarding && (onboarding.CurrentWizardStep != WizardStep.TranscriptionVerify ||
                 (owner != 0 && onboarding.SelectedDevice is { BluetoothAddress: not 0 } selected && selected.BluetoothAddress != owner)))
             {
@@ -933,6 +1059,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _bluetoothManager.VoiceSessionStarted -= OnVoiceSessionStarted;
         _bluetoothManager.VoiceSessionEnded -= OnVoiceSessionEnded;
         _bluetoothManager.VoiceButtonPressed -= OnVoiceButtonPressed;
+        _bluetoothManager.AudioOutputFailed -= OnAudioOutputFailed;
         _rawInputReceiver.ButtonEvent -= OnRawButtonEvent;
         _rawInputReceiver.PhysicalVoiceKeyPressed -= OnRawVoiceKey;
         foreach (var reader in _hidReaders.Values) reader.Dispose();
@@ -942,6 +1069,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _chromecastButtonReceiver.DeviceDisconnected -= OnEtwDeviceDisconnected;
         _chromecastButtonReceiver.SourceBound -= OnEtwSourceBound;
         _chromecastButtonReceiver.UnexpectedDisconnect -= OnEtwUnexpectedDisconnect;
+        _chromecastButtonReceiver.StatusChanged -= OnEtwStatusChanged;
         CancelEtwTasks();
         _chromecastButtonReceiver.Dispose();
 
@@ -949,7 +1077,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _voiceKeyGuard.Dispose();
         ResetGestures();
         MappingVm.PropertyChanged -= OnMappingSettingsChanged;
-        DevicesVm.DevicesChanged -= RefreshInputSources;
+        DevicesVm.DevicesChanged -= OnDevicesChanged;
         DevicesVm.Dispose();
         _rawInputReceiver.Dispose();
     }

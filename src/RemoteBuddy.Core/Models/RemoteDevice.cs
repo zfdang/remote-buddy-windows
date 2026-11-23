@@ -98,6 +98,10 @@ public partial class RemoteDevice : ObservableObject
     [JsonIgnore]
     public bool IsG9N9N => ModelType is RemoteModelType.GoogleG9N9N or RemoteModelType.GoogleGY3LE;
     [JsonIgnore]
+    public bool IsG9N9NLayout => ModelType == RemoteModelType.GoogleG9N9N;
+    [JsonIgnore]
+    public bool IsGY3LELayout => ModelType == RemoteModelType.GoogleGY3LE;
+    [JsonIgnore]
     public bool IsT1 => ModelType == RemoteModelType.T1Remote;
     [JsonIgnore]
     public bool IsXiaomi => !IsG9N9N && !IsT1;
@@ -175,8 +179,11 @@ public partial class RemoteDevice : ObservableObject
     partial void OnModelTypeChanged(RemoteModelType value)
     {
         OnPropertyChanged(nameof(IsG9N9N));
+        OnPropertyChanged(nameof(IsG9N9NLayout));
+        OnPropertyChanged(nameof(IsGY3LELayout));
         OnPropertyChanged(nameof(IsT1));
         OnPropertyChanged(nameof(IsXiaomi));
+        OnPropertyChanged(nameof(IllustrationSource));
     }
 
     [ObservableProperty]
@@ -252,6 +259,10 @@ public partial class RemoteDevice : ObservableObject
                 shortcut: isG9N9N ? "Ctrl+W" : null);
             Add(RemoteButton.Input, isG9N9N ? ButtonActionType.MediaControl : ButtonActionType.None,
                 media: isG9N9N ? MediaCommand.PlayPause : MediaCommand.None);
+            if (type == RemoteModelType.GoogleGY3LE)
+            {
+                Add(RemoteButton.Custom, ButtonActionType.None);
+            }
         }
 
         return list;

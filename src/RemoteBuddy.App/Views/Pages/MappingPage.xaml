@@ -73,6 +73,8 @@
                         <TextBox Text="{Binding Shortcut, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                  AutomationProperties.Name="键盘快捷键" Padding="8,5"/>
                     </DockPanel>
+                    <TextBlock Text="{Binding ShortcutValidationError}" Foreground="#FF6666" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8"
+                               Visibility="{Binding HasShortcutError, Converter={StaticResource BoolToVisibilityConverter}}"/>
                     <TextBlock Text="常用按键与组合快捷键" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,4"/>
                     <ComboBox ItemsSource="{x:Static vm:MappingGestureViewModel.ShortcutPresets}" DisplayMemberPath="Key"
                               SelectionChanged="ApplyShortcutPreset" AutomationProperties.Name="常用快捷键"/>
@@ -98,6 +100,11 @@
                         <TextBlock Text="🔄 持续连发模式：按住此键时将以约 100 毫秒间隔重复触发【单击】动作，松开即停。"
                                    Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap"/>
                     </Border>
+                    <Border Background="#3D2E18" BorderBrush="#8A5A1A" BorderThickness="1" CornerRadius="6" Padding="10,8" Margin="0,8,0,0"
+                            Visibility="{Binding ShowRepeatNeedsClickWarning, Converter={StaticResource BoolToVisibilityConverter}}">
+                        <TextBlock Text="⚠️ 当前未配置【单击】动作，持续连发不会触发任何操作。请先为【单击】设置快捷键、媒体控制或短语。"
+                                   Foreground="#FFB347" FontSize="12" TextWrapping="Wrap"/>
+                    </Border>
                 </StackPanel>
             </StackPanel>
         </DataTemplate>
@@ -113,15 +120,18 @@
                 <TextBlock Text="按键映射" FontSize="22" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
                 <TextBlock Text="{Binding DeviceNote}" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,4,0,0" TextWrapping="Wrap"/>
             </StackPanel>
-            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"
+                        Visibility="{Binding HasDevices, Converter={StaticResource BoolToVisibilityConverter}}">
                 <TextBlock Text="遥控器" Foreground="{StaticResource SecondaryTextBrush}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                <ComboBox ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}" DisplayMemberPath="Name" Width="170" Margin="0,0,14,0"/>
+                <ComboBox ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}" DisplayMemberPath="Name" Width="170" Margin="0,0,14,0"
+                          PreviewMouseDown="FlushFocusedInput"/>
                 <CheckBox Content="启用自定义按键" IsChecked="{Binding CustomMappingEnabled}" Foreground="{StaticResource PrimaryTextBrush}" VerticalAlignment="Center"/>
             </StackPanel>
         </Grid>
 
         <!-- Bottom Footer: RawInput Status & Selection Lock & Reset Defaults -->
-        <Border DockPanel.Dock="Bottom" Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="8" Padding="16,12" Margin="0,16,0,0">
+        <Border DockPanel.Dock="Bottom" Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="8" Padding="16,12" Margin="0,16,0,0"
+                Visibility="{Binding HasDevices, Converter={StaticResource BoolToVisibilityConverter}}">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -138,8 +148,22 @@
             </Grid>
         </Border>
 
-        <!-- Main 2-Column Mapping Workspace -->
+        <!-- Workspace / Empty State Wrapper -->
         <Grid>
+            <!-- Empty State Card when no remotes are configured -->
+            <Border Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" Padding="36" CornerRadius="8" VerticalAlignment="Center"
+                    Visibility="{Binding HasDevices, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Inverse}">
+                <StackPanel HorizontalAlignment="Center" MaxWidth="420">
+                    <TextBlock Text="🎮" FontSize="40" HorizontalAlignment="Center" Margin="0,0,0,12"/>
+                    <TextBlock Text="尚未配置遥控器" FontSize="18" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" HorizontalAlignment="Center" Margin="0,0,0,8"/>
+                    <TextBlock Text="请先添加并配对蓝牙遥控器，完成后即可在此为每个实体按键独立设置单击、长按和双击快捷动作。" FontSize="13" Foreground="{StaticResource SecondaryTextBrush}" HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" Margin="0,0,0,20"/>
+                    <Button Content="➕ 添加遥控器" Padding="18,9" Background="#007ACC" HorizontalAlignment="Center"
+                            Command="{Binding AddDeviceCommand}"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Main 2-Column Mapping Workspace -->
+            <Grid Visibility="{Binding HasDevices, Converter={StaticResource BoolToVisibilityConverter}}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="260"/>
                 <ColumnDefinition Width="20"/>
@@ -259,7 +283,7 @@
                             </Border>
                             <!-- 2. Google Chromecast G9N9N Remote Body -->
                             <Border Background="#242629" BorderBrush="#3E4249" BorderThickness="1" CornerRadius="28" Padding="14,10" Width="210"
-                                    Visibility="{Binding IsG9N9N, Converter={StaticResource BoolToVisibilityConverter}}">
+                                    Visibility="{Binding IsG9N9NLayout, Converter={StaticResource BoolToVisibilityConverter}}">
                                 <StackPanel>
                                     <!-- Directional Ring (D-Pad) -->
                                     <Border Background="#1C1D20" BorderBrush="#383B42" BorderThickness="1" CornerRadius="64" Width="128" Height="128" Margin="0,0,0,8">
@@ -321,6 +345,80 @@
                                     </Grid>
 
                                     <!-- Side Volume Buttons -->
+                                    <Grid Margin="0,4,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Button Grid.Column="0" Content="🔊 音量 +" Tag="VolumeUp" Click="SelectRemoteButton" Height="30" Margin="3"/>
+                                        <Button Grid.Column="1" Content="🔉 音量 −" Tag="VolumeDown" Click="SelectRemoteButton" Height="30" Margin="3"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- 2b. Google TV Streamer (GY3LE) Remote Body -->
+                            <Border Background="#242629" BorderBrush="#3E4249" BorderThickness="1" CornerRadius="28" Padding="14,10" Width="210"
+                                    Visibility="{Binding IsGY3LELayout, Converter={StaticResource BoolToVisibilityConverter}}">
+                                <StackPanel>
+                                    <!-- Directional Ring (D-Pad) -->
+                                    <Border Background="#1C1D20" BorderBrush="#383B42" BorderThickness="1" CornerRadius="64" Width="128" Height="128" Margin="0,0,0,8">
+                                        <Grid>
+                                            <Button Content="▲" Tag="Up" Click="SelectRemoteButton"
+                                                    HorizontalAlignment="Center" VerticalAlignment="Top" Width="38" Height="30" Margin="0,5,0,0"/>
+                                            <Button Content="▼" Tag="Down" Click="SelectRemoteButton"
+                                                    HorizontalAlignment="Center" VerticalAlignment="Bottom" Width="38" Height="30" Margin="0,0,0,5"/>
+                                            <Button Content="◀" Tag="Left" Click="SelectRemoteButton"
+                                                    HorizontalAlignment="Left" VerticalAlignment="Center" Width="30" Height="38" Margin="5,0,0,0"/>
+                                            <Button Content="▶" Tag="Right" Click="SelectRemoteButton"
+                                                    HorizontalAlignment="Right" VerticalAlignment="Center" Width="30" Height="38" Margin="0,0,5,0"/>
+                                            <Button Content="OK" Tag="Ok" Click="SelectRemoteButton"
+                                                    HorizontalAlignment="Center" VerticalAlignment="Center" Width="46" Height="46"
+                                                    FontWeight="Bold"/>
+                                        </Grid>
+                                    </Border>
+
+                                    <!-- Row 1: Back & Home -->
+                                    <Grid Margin="0,0,0,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Button Grid.Column="0" Content="↩ 返回" Tag="Back" Click="SelectRemoteButton" Height="32" Margin="3"/>
+                                        <Button Grid.Column="1" Content="⌂ 主页" Tag="Home" Click="SelectRemoteButton" Height="32" Margin="3"/>
+                                    </Grid>
+
+                                    <!-- Row 2: Voice & Mute -->
+                                    <Grid Margin="0,0,0,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Button Grid.Column="0" Content="🎙️ 语音" Tag="Voice" Click="SelectRemoteButton" Height="32" Margin="3"
+                                                ToolTip="短按免提、长按松手即停"/>
+                                        <Button Grid.Column="1" Content="🔇 静音" Tag="Mute" Click="SelectRemoteButton" Height="32" Margin="3"/>
+                                    </Grid>
+
+                                    <!-- Row 3: YouTube & Netflix -->
+                                    <Grid Margin="0,0,0,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Button Grid.Column="0" Content="▶ YouTube" Tag="YouTube" Click="SelectRemoteButton" Height="32" Margin="3"/>
+                                        <Button Grid.Column="1" Content="N Netflix" Tag="Netflix" Click="SelectRemoteButton" Height="32" Margin="3"/>
+                                    </Grid>
+
+                                    <!-- Row 4: Power & Custom (Star) -->
+                                    <Grid Margin="0,0,0,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Button Grid.Column="0" Content="⏻ 电源" Tag="Power" Click="SelectRemoteButton" Height="32" Margin="3"/>
+                                        <Button Grid.Column="1" Content="★ 自定义" Tag="Custom" Click="SelectRemoteButton" Height="32" Margin="3"/>
+                                    </Grid>
+
+                                    <!-- VolumeUp & VolumeDown -->
                                     <Grid Margin="0,4,0,0">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
@@ -468,14 +566,17 @@
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
                             <Button Grid.Column="0" Content="👆 单击设置" Padding="0,7"
+                                    PreviewMouseDown="FlushFocusedInput"
                                     Command="{Binding SelectTriggerCommand}" CommandParameter="SingleClick"
                                     Style="{StaticResource GestureSelectorButtonStyle}"
                                     Tag="{Binding SelectedTrigger, Converter={StaticResource EqualValueToBoolConverter}, ConverterParameter=SingleClick}"/>
                             <Button Grid.Column="2" Content="⏱️ 长按设置" Padding="0,7"
+                                    PreviewMouseDown="FlushFocusedInput"
                                     Command="{Binding SelectTriggerCommand}" CommandParameter="LongPress"
                                     Style="{StaticResource GestureSelectorButtonStyle}"
                                     Tag="{Binding SelectedTrigger, Converter={StaticResource EqualValueToBoolConverter}, ConverterParameter=LongPress}"/>
                             <Button Grid.Column="4" Content="✌️ 双击设置" Padding="0,7"
+                                    PreviewMouseDown="FlushFocusedInput"
                                     Command="{Binding SelectTriggerCommand}" CommandParameter="DoubleClick"
                                     Style="{StaticResource GestureSelectorButtonStyle}"
                                     Tag="{Binding SelectedTrigger, Converter={StaticResource EqualValueToBoolConverter}, ConverterParameter=DoubleClick}"/>
@@ -488,6 +589,7 @@
                     </ScrollViewer>
                 </DockPanel>
             </Border>
+            </Grid>
         </Grid>
     </DockPanel>
 </UserControl>

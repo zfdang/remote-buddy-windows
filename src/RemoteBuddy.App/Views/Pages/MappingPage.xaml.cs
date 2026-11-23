@@ -60,8 +60,22 @@ public partial class MappingPage : UserControl
         return null;
     }
 
+    private static void FlushFocusedTextBoxBinding()
+    {
+        if (Keyboard.FocusedElement is TextBox tb)
+        {
+            tb.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+        }
+    }
+
+    private void FlushFocusedInput(object sender, MouseButtonEventArgs e)
+    {
+        FlushFocusedTextBoxBinding();
+    }
+
     private void SelectRemoteButton(object sender, RoutedEventArgs e)
     {
+        FlushFocusedTextBoxBinding();
         if (DataContext is MappingViewModel vm && sender is Button { Tag: string tag })
             vm.SelectButton(tag);
     }
@@ -144,16 +158,19 @@ public partial class MappingPage : UserControl
 
     private void SelectSingleClickFromStatus(object sender, MouseButtonEventArgs e)
     {
+        FlushFocusedTextBoxBinding();
         if (DataContext is MappingViewModel vm) vm.SelectedTrigger = ButtonTrigger.SingleClick;
     }
 
     private void SelectLongPressFromStatus(object sender, MouseButtonEventArgs e)
     {
+        FlushFocusedTextBoxBinding();
         if (DataContext is MappingViewModel vm) vm.SelectedTrigger = ButtonTrigger.LongPress;
     }
 
     private void SelectDoubleClickFromStatus(object sender, MouseButtonEventArgs e)
     {
+        FlushFocusedTextBoxBinding();
         if (DataContext is MappingViewModel vm) vm.SelectedTrigger = ButtonTrigger.DoubleClick;
     }
 }
