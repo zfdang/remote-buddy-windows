@@ -170,13 +170,13 @@ public partial class RemoteDevice : ObservableObject
         var list = new List<ButtonMapping>();
         void Add(RemoteButton btn, ButtonActionType click, MediaCommand media = MediaCommand.None, string? shortcut = null)
         {
-            bool repeats = btn switch
+            bool repeats = click != ButtonActionType.None && (btn switch
             {
                 RemoteButton.Up or RemoteButton.Down or RemoteButton.Left or RemoteButton.Right or
                     RemoteButton.Ok or RemoteButton.VolumeUp or RemoteButton.VolumeDown => true,
                 RemoteButton.Power => click == ButtonActionType.KeyboardShortcut && shortcut == "Backspace",
                 _ => false
-            };
+            });
             list.Add(new ButtonMapping
             {
                 Button = btn,
@@ -201,14 +201,18 @@ public partial class RemoteDevice : ObservableObject
             return list;
         }
 
-        Add(RemoteButton.Up, ButtonActionType.KeyboardShortcut, shortcut: "Up");
-        Add(RemoteButton.Down, ButtonActionType.KeyboardShortcut, shortcut: "Down");
-        Add(RemoteButton.Left, ButtonActionType.KeyboardShortcut, shortcut: "Left");
-        Add(RemoteButton.Right, ButtonActionType.KeyboardShortcut, shortcut: "Right");
-        Add(RemoteButton.Ok, ButtonActionType.KeyboardShortcut, shortcut: "Enter");
-        Add(RemoteButton.Back, ButtonActionType.KeyboardShortcut, shortcut: "Escape");
         bool isGoogle = isG9N9N || type == RemoteModelType.GoogleGY3LE;
         bool isRc003 = type == RemoteModelType.XiaomiRC003;
+        bool isXiaomi = isRc003 || type == RemoteModelType.XiaomiRC001;
+
+        // Xiaomi and T1 arrow keys / OK arrive natively via Windows Bluetooth HID keyboard.
+        // Defaulting them to None prevents duplicate synthetic keystrokes while allowing custom remapping.
+        Add(RemoteButton.Up, isXiaomi ? ButtonActionType.None : ButtonActionType.KeyboardShortcut, shortcut: isXiaomi ? null : "Up");
+        Add(RemoteButton.Down, isXiaomi ? ButtonActionType.None : ButtonActionType.KeyboardShortcut, shortcut: isXiaomi ? null : "Down");
+        Add(RemoteButton.Left, isXiaomi ? ButtonActionType.None : ButtonActionType.KeyboardShortcut, shortcut: isXiaomi ? null : "Left");
+        Add(RemoteButton.Right, isXiaomi ? ButtonActionType.None : ButtonActionType.KeyboardShortcut, shortcut: isXiaomi ? null : "Right");
+        Add(RemoteButton.Ok, isXiaomi ? ButtonActionType.None : ButtonActionType.KeyboardShortcut, shortcut: isXiaomi ? null : "Enter");
+        Add(RemoteButton.Back, ButtonActionType.KeyboardShortcut, shortcut: "Escape");
         Add(RemoteButton.Home, ButtonActionType.KeyboardShortcut, shortcut: type == RemoteModelType.GoogleGY3LE ? "Alt+Tab" : "Win+Tab");
         Add(RemoteButton.VolumeUp, ButtonActionType.MediaControl, media: MediaCommand.VolumeUp);
         Add(RemoteButton.VolumeDown, ButtonActionType.MediaControl, media: MediaCommand.VolumeDown);

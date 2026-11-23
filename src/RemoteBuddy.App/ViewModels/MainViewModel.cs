@@ -482,15 +482,48 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (!_gestures.TryGetValue(address, out var gestures))
         {
             if (!isDown) return;
-            gestures = new RemoteButtonGestures(ScheduleButtonGesture, assignment =>
+            gestures = new RemoteButtonGestures(ScheduleButtonGesture, (btn, assignment) =>
             {
-                if (_bluetoothManager.IsDeviceReady(address)) _executeMapping(assignment);
+                if (_bluetoothManager.IsDeviceReady(address))
+                    ExecuteMappedButton(address, btn, assignment);
             });
             _gestures[address] = gestures;
         }
         if (!isDown) gestures.HandleUp(button);
         else if (source.Mappings?.FirstOrDefault(mapping => mapping.Button == button) is { } mapping)
             gestures.HandleDown(mapping);
+    }
+
+    private void ExecuteMappedButton(ulong address, RemoteButton button, ButtonAssignment assignment)
+    {
+        var dev = KnownRemotes().FirstOrDefault(d => d.BluetoothAddress == address);
+        if (dev != null && IsNativeKeyboardRemote(dev.ModelType) &&
+            assignment.Action == ButtonActionType.KeyboardShortcut &&
+            IsIdentityKeyboardShortcut(button, assignment.Shortcut))
+        {
+            AppLogger.Debug($"Skipping duplicate identity shortcut '{assignment.Shortcut}' for native keyboard remote {dev.ModelType} {button}", "MainViewModel");
+            return;
+        }
+
+        _executeMapping(assignment);
+    }
+
+    private static bool IsNativeKeyboardRemote(RemoteModelType type) =>
+        type is RemoteModelType.XiaomiRC003 or RemoteModelType.XiaomiRC001 or RemoteModelType.T1Remote;
+
+    private static bool IsIdentityKeyboardShortcut(RemoteButton button, string? shortcut)
+    {
+        if (string.IsNullOrWhiteSpace(shortcut)) return false;
+        return button switch
+        {
+            RemoteButton.Up => shortcut.Equals("Up", StringComparison.OrdinalIgnoreCase),
+            RemoteButton.Down => shortcut.Equals("Down", StringComparison.OrdinalIgnoreCase),
+            RemoteButton.Left => shortcut.Equals("Left", StringComparison.OrdinalIgnoreCase),
+            RemoteButton.Right => shortcut.Equals("Right", StringComparison.OrdinalIgnoreCase),
+            RemoteButton.Ok => shortcut.Equals("Enter", StringComparison.OrdinalIgnoreCase) ||
+                               shortcut.Equals("Return", StringComparison.OrdinalIgnoreCase),
+            _ => false
+        };
     }
 
     private void ShowMappingPress(RemoteButton button, RemoteDevice? sourceDevice = null)

@@ -4,7 +4,7 @@
 namespace RemoteBuddy.Core.Models;
 
 // Input edges and scheduled callbacks are delivered on the same thread.
-public sealed class RemoteButtonGestures(Func<int, Action, Action> schedule, Action<ButtonAssignment> execute)
+public sealed class RemoteButtonGestures
 {
     private const int DoubleClickMilliseconds = 300;
     private const int LongPressMilliseconds = 550;
@@ -12,8 +12,21 @@ public sealed class RemoteButtonGestures(Func<int, Action, Action> schedule, Act
     private const int RepeatIntervalMilliseconds = 100;
     private const int MaximumRepeatMilliseconds = 60_000;
 
+    private readonly Func<int, Action, Action> _schedule;
+    private readonly Action<RemoteButton, ButtonAssignment> _execute;
+
+    public RemoteButtonGestures(Func<int, Action, Action> schedule, Action<ButtonAssignment> execute)
+        : this(schedule, (_, a) => execute(a)) { }
+
+    public RemoteButtonGestures(Func<int, Action, Action> schedule, Action<RemoteButton, ButtonAssignment> execute)
+    {
+        _schedule = schedule;
+        _execute = execute;
+    }
+
     private sealed class Press(ButtonMapping mapping)
     {
+        public RemoteButton Button => mapping.Button;
         public ButtonAssignment SingleClick { get; } = mapping.GetAssignment(ButtonTrigger.SingleClick);
         public ButtonAssignment LongPress { get; } = mapping.GetAssignment(ButtonTrigger.LongPress);
         public ButtonAssignment DoubleClick { get; } = mapping.GetAssignment(ButtonTrigger.DoubleClick);
@@ -50,7 +63,7 @@ public sealed class RemoteButtonGestures(Func<int, Action, Action> schedule, Act
             _presses.Add(button, press);
             if (!press.HasDoubleClick && !press.HasLongPress)
             {
-                Fire(press.SingleClick);
+                Fire(button, press.SingleClick);
                 press.FiredOnPress = true;
             }
         }
@@ -61,7 +74,7 @@ public sealed class RemoteButtonGestures(Func<int, Action, Action> schedule, Act
             Schedule(press, LongPressMilliseconds, () =>
             {
                 press.FiredOnPress = true;
-                Fire(press.LongPress);
+                Fire(button, press.LongPress);
             });
     }
 
@@ -76,14 +89,14 @@ public sealed class RemoteButtonGestures(Func<int, Action, Action> schedule, Act
             Schedule(press, DoubleClickMilliseconds, () =>
             {
                 _presses.Remove(button);
-                Fire(press.SingleClick);
+                Fire(button, press.SingleClick);
             });
             return;
         }
 
         _presses.Remove(button);
         if (!press.FiredOnPress)
-            Fire(press.IsSecondPress ? press.DoubleClick : press.SingleClick);
+            Fire(button, press.IsSecondPress ? press.DoubleClick : press.SingleClick);
     }
 
     public void Reset()
@@ -95,7 +108,7 @@ public sealed class RemoteButtonGestures(Func<int, Action, Action> schedule, Act
     private void Repeat(Press press, int elapsed)
     {
         press.FiredOnPress = true;
-        Fire(press.SingleClick);
+        Fire(press.Button, press.SingleClick);
         int next = elapsed + RepeatIntervalMilliseconds;
         if (next <= MaximumRepeatMilliseconds)
             Schedule(press, RepeatIntervalMilliseconds, () => Repeat(press, next));
@@ -103,15 +116,15 @@ public sealed class RemoteButtonGestures(Func<int, Action, Action> schedule, Act
 
     private void Schedule(Press press, int delay, Action callback)
     {
-        press.CancelTimer = schedule(delay, () =>
+        press.CancelTimer = _schedule(delay, () =>
         {
             press.CancelTimer = null;
             callback();
         });
     }
 
-    private void Fire(ButtonAssignment assignment)
+    private void Fire(RemoteButton button, ButtonAssignment assignment)
     {
-        if (assignment.Action != ButtonActionType.None) execute(assignment);
+        if (assignment.Action != ButtonActionType.None) _execute(button, assignment);
     }
 }

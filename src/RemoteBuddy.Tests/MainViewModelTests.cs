@@ -433,4 +433,150 @@ public class MainViewModelTests
         }
     }
 
+    [Fact]
+    public void XiaomiRC003_DirectionalKeyWithIdentityMapping_SkipsDuplicateInjection()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"xiaomi-identity-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bluetooth = new TestBluetoothManager();
+            var executedShortcuts = new List<string?>();
+
+            var xiaomi = new RemoteDevice
+            {
+                Id = "xiaomi_rc003",
+                BluetoothAddress = 0x112233445566,
+                Name = "Xiaomi Bluetooth Remote 2 Pro",
+                ModelType = RemoteModelType.XiaomiRC003,
+                Mappings =
+                [
+                    new ButtonMapping
+                    {
+                        Button = RemoteButton.Left,
+                        ClickAction = ButtonActionType.KeyboardShortcut,
+                        ClickShortcut = "Left"
+                    },
+                    new ButtonMapping
+                    {
+                        Button = RemoteButton.Right,
+                        ClickAction = ButtonActionType.KeyboardShortcut,
+                        ClickShortcut = "Right"
+                    },
+                    new ButtonMapping
+                    {
+                        Button = RemoteButton.Ok,
+                        ClickAction = ButtonActionType.KeyboardShortcut,
+                        ClickShortcut = "Enter"
+                    }
+                ]
+            };
+            config.Current.Devices.Add(xiaomi);
+            bluetooth.ReadyAddresses.Add(xiaomi.BluetoothAddress);
+
+            using var vm = new MainViewModel(config, bluetooth, action => executedShortcuts.Add(action.Shortcut));
+
+            vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Left, true);
+            vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Left, false);
+
+            vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Right, true);
+            vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Right, false);
+
+            vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Ok, true);
+            vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Ok, false);
+
+            // Identity shortcuts must NOT be synthesized, preventing double movement in Task View
+            Assert.Empty(executedShortcuts);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void XiaomiRC003_DirectionalKeyWithCustomMapping_ExecutesCustomShortcut()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"xiaomi-custom-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bluetooth = new TestBluetoothManager();
+            var executedShortcuts = new List<string?>();
+
+            var xiaomi = new RemoteDevice
+            {
+                Id = "xiaomi_rc003",
+                BluetoothAddress = 0x112233445566,
+                Name = "Xiaomi Bluetooth Remote 2 Pro",
+                ModelType = RemoteModelType.XiaomiRC003,
+                Mappings =
+                [
+                    new ButtonMapping
+                    {
+                        Button = RemoteButton.Left,
+                        ClickAction = ButtonActionType.KeyboardShortcut,
+                        ClickShortcut = "Ctrl+Left"
+                    }
+                ]
+            };
+            config.Current.Devices.Add(xiaomi);
+            bluetooth.ReadyAddresses.Add(xiaomi.BluetoothAddress);
+
+            using var vm = new MainViewModel(config, bluetooth, action => executedShortcuts.Add(action.Shortcut));
+
+            vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Left, true);
+            vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Left, false);
+
+            // Non-identity custom shortcut must execute as intended
+            Assert.Equal(new[] { "Ctrl+Left" }, executedShortcuts);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void GoogleG9N9N_DirectionalKey_ExecutesShortcutNormally()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"g9n9n-dpad-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bluetooth = new TestBluetoothManager();
+            var executedShortcuts = new List<string?>();
+
+            var g9n9n = new RemoteDevice
+            {
+                Id = "g9n9n",
+                BluetoothAddress = 0x4754514C6FCC,
+                Name = "Chromecast Remote",
+                ModelType = RemoteModelType.GoogleG9N9N,
+                Mappings =
+                [
+                    new ButtonMapping
+                    {
+                        Button = RemoteButton.Left,
+                        ClickAction = ButtonActionType.KeyboardShortcut,
+                        ClickShortcut = "Left"
+                    }
+                ]
+            };
+            config.Current.Devices.Add(g9n9n);
+            bluetooth.ReadyAddresses.Add(g9n9n.BluetoothAddress);
+
+            using var vm = new MainViewModel(config, bluetooth, action => executedShortcuts.Add(action.Shortcut));
+
+            vm.HandleDeviceButton(g9n9n.BluetoothAddress, RemoteButton.Left, true);
+            vm.HandleDeviceButton(g9n9n.BluetoothAddress, RemoteButton.Left, false);
+
+            // G9N9N does not deliver native Windows keyboard arrow keys, so synthetic injection is required
+            Assert.Equal(new[] { "Left" }, executedShortcuts);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
 }
