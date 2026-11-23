@@ -1,4 +1,4 @@
-﻿// Copyright (C) 2026 Remote Buddy Contributors
+// Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
 using System.Windows;
@@ -14,8 +14,9 @@ namespace RemoteBuddy.App;
 public partial class App : Application
 {
     private ConfigService? _configService;
-    private WinRtBluetoothManager? _bluetoothManager;
+    private MultiRemoteBluetoothManager? _bluetoothManager;
     private MainViewModel? _mainViewModel;
+    private Mutex? _instanceMutex;
 
     private void OnStartup(object sender, StartupEventArgs e)
     {
@@ -23,22 +24,39 @@ public partial class App : Application
         AppLogger.Info($"=== Application Starting (PID: {Environment.ProcessId}) ===", "App");
         AppLogger.Info($"OS: {Environment.OSVersion}, .NET Runtime: {Environment.Version}, Args: [{string.Join(", ", e.Args)}]", "App");
 
-        for (int i = 0; i < e.Args.Length; i++)
+        if (e.Args is ["--chromecast-worker", var pipeName, var encodedSources])
         {
-            if (string.Equals(e.Args[i], "--chromecast-worker", StringComparison.OrdinalIgnoreCase) &&
-                i + 2 < e.Args.Length && Guid.TryParse(e.Args[i + 2], out var marker))
+            try
             {
-                string pipeName = e.Args[i + 1];
-                var protocolKind = EtwProtocolKind.GoogleG9N9N;
-                if (i + 3 < e.Args.Length && Enum.TryParse<EtwProtocolKind>(e.Args[i + 3], out var parsedKind))
-                {
-                    protocolKind = parsedKind;
-                }
-                ChromecastWorkerHost.RunWorker(pipeName, marker, protocolKind);
+                var sources = System.Text.Json.JsonSerializer.Deserialize<EtwButtonSource[]>(
+                    Convert.FromBase64String(encodedSources));
+                if (sources is { Length: > 0 })
+                    ChromecastWorkerHost.RunWorker(pipeName, sources);
+            }
+            catch (Exception ex) when (ex is FormatException or System.Text.Json.JsonException)
+            {
+                AppLogger.Warn("Invalid ETW worker arguments", "App");
+            }
+            Shutdown();
+            return;
+        }
+
+        var mutex = new Mutex(false, @"Local\RemoteBuddy.Windows.Main");
+        try
+        {
+            if (!mutex.WaitOne(0))
+            {
+                mutex.Dispose();
+                AppLogger.Info("Remote Buddy is already running in this Windows session.", "App");
                 Shutdown(0);
                 return;
             }
         }
+        catch (AbandonedMutexException)
+        {
+            // The previous instance stopped without releasing ownership.
+        }
+        _instanceMutex = mutex;
 
         // Global unhandled exception handlers for diagnostic logging
         AppDomain.CurrentDomain.UnhandledException += (s, args) =>
@@ -72,7 +90,7 @@ public partial class App : Application
         ShutdownMode = ShutdownMode.OnExplicitShutdown;
 
         _configService = new ConfigService();
-        _bluetoothManager = new WinRtBluetoothManager();
+        _bluetoothManager = new MultiRemoteBluetoothManager();
         _mainViewModel = new MainViewModel(_configService, _bluetoothManager);
 
         var mainWindow = new MainWindow { DataContext = _mainViewModel };
@@ -97,14 +115,12 @@ public partial class App : Application
             }
         }
 
-        // Auto-reconnect to previously saved remote device
-        if (_configService.Current.HasCompletedOnboarding && !string.IsNullOrEmpty(_configService.Current.SelectedDeviceId))
+        if (_configService.Current.HasCompletedOnboarding)
         {
-            var savedDevice = _configService.Current.Devices.FirstOrDefault(d => d.Id == _configService.Current.SelectedDeviceId);
-            if (savedDevice != null && savedDevice.BluetoothAddress != 0)
+            foreach (var device in _configService.Current.Devices.Where(d => d.BluetoothAddress != 0).DistinctBy(d => d.BluetoothAddress))
             {
-                AppLogger.Info($"Attempting auto-reconnect to saved device: '{savedDevice.Name}' (0x{savedDevice.BluetoothAddress:X12})", "App");
-                _ = _bluetoothManager.ConnectAsync(savedDevice.BluetoothAddress);
+                _bluetoothManager.SetDeviceVoiceSettings(device);
+                _ = _bluetoothManager.ConnectAsync(device.BluetoothAddress);
             }
         }
 
@@ -155,6 +171,8 @@ public partial class App : Application
         _mainViewModel?.Dispose();
         _bluetoothManager?.Dispose();
         AppLogger.Flush();
+        _instanceMutex?.ReleaseMutex();
+        _instanceMutex?.Dispose();
         base.OnExit(e);
     }
 }

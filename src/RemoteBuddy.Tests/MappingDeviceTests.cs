@@ -27,11 +27,55 @@ public class MappingDeviceTests
         Assert.Equal(ButtonActionType.KeyboardShortcut, power.ClickAction);
         Assert.Equal("Backspace", power.ClickShortcut);
 
-        var google = RemoteDevice.CreateDefaultMappings(RemoteModelType.GoogleG9N9N);
+        var google = RemoteDevice.CreateDefaultMappings(RemoteModelType.GoogleGY3LE);
         Assert.Equal("Alt+Tab", google.Single(m => m.Button == RemoteButton.Home).ClickShortcut);
         Assert.Equal("Apps", google.Single(m => m.Button == RemoteButton.Menu).ClickShortcut);
         Assert.Equal(ButtonActionType.None, google.Single(m => m.Button == RemoteButton.LiveTv).ClickAction);
         Assert.Equal(ButtonActionType.None, google.Single(m => m.Button == RemoteButton.Power).ClickAction);
+    }
+
+    [Fact]
+    public void G9N9NDefaultsAssignActionsToThePhysicalButtons()
+    {
+        var mappings = RemoteDevice.CreateDefaultMappings(RemoteModelType.GoogleG9N9N);
+        foreach (var (button, shortcut) in new[] {
+            (RemoteButton.Power, "Backspace"), (RemoteButton.Home, "Win+Tab"),
+            (RemoteButton.Back, "Escape"), (RemoteButton.YouTube, "Ctrl+R"), (RemoteButton.Netflix, "Ctrl+W")
+        })
+        {
+            var mapping = mappings.Single(m => m.Button == button);
+            Assert.Equal(new ButtonAssignment(ButtonActionType.KeyboardShortcut, shortcut),
+                mapping.GetAssignment(ButtonTrigger.SingleClick));
+        }
+
+        var input = mappings.Single(m => m.Button == RemoteButton.Input);
+        Assert.Equal(new ButtonAssignment(ButtonActionType.MediaControl, Media: MediaCommand.PlayPause),
+            input.GetAssignment(ButtonTrigger.SingleClick));
+    }
+
+    [Theory]
+    [InlineData(RemoteModelType.Unknown, true, true)]
+    [InlineData(RemoteModelType.XiaomiRC001, true, true)]
+    [InlineData(RemoteModelType.XiaomiRC003, true, true)]
+    [InlineData(RemoteModelType.XiaomiARN9, true, true)]
+    [InlineData(RemoteModelType.GoogleG9N9N, true, true)]
+    [InlineData(RemoteModelType.GoogleGY3LE, true, false)]
+    [InlineData(RemoteModelType.T1Remote, false, true)]
+    public void DefaultsRepeatOnlyNavigationVolumeAndBackspacePower(
+        RemoteModelType model, bool hasNavigationMappings, bool hasBackspacePower)
+    {
+        var expected = new List<RemoteButton> { RemoteButton.VolumeUp, RemoteButton.VolumeDown };
+        if (hasNavigationMappings)
+            expected.AddRange([RemoteButton.Up, RemoteButton.Down, RemoteButton.Left, RemoteButton.Right, RemoteButton.Ok]);
+        if (hasBackspacePower) expected.Add(RemoteButton.Power);
+
+        var mappings = RemoteDevice.CreateDefaultMappings(model);
+
+        Assert.Equal(expected.Order(), mappings
+            .Where(mapping => mapping.LongPressAction != ButtonActionType.None)
+            .Select(mapping => mapping.Button).Order());
+        Assert.All(mappings.Where(mapping => expected.Contains(mapping.Button)), mapping =>
+            Assert.Equal(ButtonActionType.ContinuousRepeat, mapping.LongPressAction));
     }
 
     [Fact]

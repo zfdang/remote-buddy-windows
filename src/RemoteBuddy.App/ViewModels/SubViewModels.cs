@@ -1,4 +1,4 @@
-// Copyright (C) 2026 Remote Buddy Contributors
+﻿// Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
 using System.Collections.ObjectModel;
@@ -37,6 +37,8 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private float _deviceGain = RemoteDevice.DefaultMicrophoneGain;
 
+    public event Action? DevicesChanged;
+
     public bool HasDevices => DiscoveredDevices.Count > 0;
 
     public DevicesViewModel(ConfigService config, IBluetoothManager bt, Action<WizardMode>? openWizard = null)
@@ -48,9 +50,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         foreach (var dev in _config.Current.Devices)
         {
             dev.PropertyChanged += OnDevicePropertyChanged;
-            dev.IsConnected = _bt.IsConnected && (
-                (_bt.ConnectedDeviceAddress != 0 && dev.BluetoothAddress == _bt.ConnectedDeviceAddress) ||
-                (_bt.ConnectedDeviceContainerId.HasValue && dev.ContainerId == _bt.ConnectedDeviceContainerId));
+            dev.IsConnected = _bt.IsDeviceReady(dev.BluetoothAddress);
 
             if (string.IsNullOrEmpty(dev.HidDevicePath) && dev.BluetoothAddress != 0)
             {
@@ -71,8 +71,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         _selectedDevice = DiscoveredDevices.FirstOrDefault(d => d.Id == _config.Current.SelectedDeviceId);
         if (_selectedDevice != null)
         {
-            _bt.CurrentGain = _selectedDevice.Gain;
-            _bt.VoiceButtonMode = _selectedDevice.VoiceButtonMode;
+            _bt.SetDeviceVoiceSettings(_selectedDevice);
         }
 
         _onDeviceDiscovered = (dev) =>
@@ -104,9 +103,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
             {
                 foreach (var dev in DiscoveredDevices)
                 {
-                    dev.IsConnected = connected && _bt.IsConnected && (
-                        (_bt.ConnectedDeviceAddress != 0 && dev.BluetoothAddress == _bt.ConnectedDeviceAddress) ||
-                        (_bt.ConnectedDeviceContainerId.HasValue && dev.ContainerId == _bt.ConnectedDeviceContainerId));
+                    dev.IsConnected = _bt.IsDeviceReady(dev.BluetoothAddress);
                 }
                 var connectedDev = DiscoveredDevices.FirstOrDefault(d => d.IsConnected);
                 if (connectedDev != null)
@@ -145,9 +142,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         foreach (var dev in _config.Current.Devices)
         {
             dev.PropertyChanged += OnDevicePropertyChanged;
-            dev.IsConnected = _bt.IsConnected && (
-                (_bt.ConnectedDeviceAddress != 0 && dev.BluetoothAddress == _bt.ConnectedDeviceAddress) ||
-                (_bt.ConnectedDeviceContainerId.HasValue && dev.ContainerId == _bt.ConnectedDeviceContainerId));
+            dev.IsConnected = _bt.IsDeviceReady(dev.BluetoothAddress);
 
             if (string.IsNullOrEmpty(dev.HidDevicePath) && dev.BluetoothAddress != 0)
             {
@@ -167,8 +162,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         SelectedDevice = DiscoveredDevices.FirstOrDefault(d => d.Id == _config.Current.SelectedDeviceId);
         if (SelectedDevice != null)
         {
-            _bt.CurrentGain = SelectedDevice.Gain;
-            _bt.VoiceButtonMode = SelectedDevice.VoiceButtonMode;
+            _bt.SetDeviceVoiceSettings(SelectedDevice);
         }
         OnPropertyChanged(nameof(HasDevices));
         RefreshHardwareDetails();
@@ -188,10 +182,9 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
 
     private void RefreshHardwareDetails()
     {
-        var information = _bt.ConnectedDeviceInformation;
         foreach (var device in DiscoveredDevices)
         {
-            device.HardwareInformation = information?.BluetoothAddress == device.BluetoothAddress ? information : null;
+            device.HardwareInformation = _bt.GetDeviceInformation(device.BluetoothAddress);
         }
     }
 
@@ -203,7 +196,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
             {
                 if (dev.Id == _config.Current.SelectedDeviceId || dev.BluetoothAddress == SelectedDevice?.BluetoothAddress)
                 {
-                    _bt.CurrentGain = dev.Gain;
+                    _bt.SetDeviceVoiceSettings(dev);
                 }
                 _config.Save();
             }
@@ -211,7 +204,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
             {
                 if (dev.Id == _config.Current.SelectedDeviceId || dev.BluetoothAddress == SelectedDevice?.BluetoothAddress)
                 {
-                    _bt.VoiceButtonMode = dev.VoiceButtonMode;
+                    _bt.SetDeviceVoiceSettings(dev);
                 }
                 _config.Save();
             }
@@ -263,31 +256,15 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
     {
         if (device == null) return;
 
-        // If another device is currently connected, disconnect it first
-        if (_bt.IsConnected && _bt.ConnectedDeviceAddress != device.BluetoothAddress)
-        {
-            _bt.Disconnect();
-            foreach (var d in DiscoveredDevices)
-            {
-                d.IsConnected = false;
-            }
-            await Task.Delay(200);
-        }
-
+        _bt.SetDeviceVoiceSettings(device);
         bool ok = await _bt.ConnectAsync(device.BluetoothAddress);
-        if (ok)
+        if (ok && _bt.IsDeviceReady(device.BluetoothAddress))
         {
             SelectedDevice = device;
-            _bt.CurrentGain = device.Gain;
-            device.IsConnected = true;
-            device.ContainerId = _bt.ConnectedDeviceContainerId;
-            foreach (var d in DiscoveredDevices)
-            {
-                if (d.Id != device.Id)
-                {
-                    d.IsConnected = false;
-                }
-            }
+            _bt.SetDeviceVoiceSettings(device);
+            foreach (var connectedDevice in DiscoveredDevices)
+                connectedDevice.IsConnected = _bt.IsDeviceReady(connectedDevice.BluetoothAddress);
+            device.ContainerId = _bt.GetDeviceContainerId(device.BluetoothAddress);
             if (device.Mappings == null || device.Mappings.Count == 0)
             {
                 device.Mappings = RemoteDevice.CreateDefaultMappings(device.ModelType);
@@ -296,6 +273,8 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
             if (!_config.Current.Devices.Any(d => d.Id == device.Id))
             {
                 _config.Current.Devices.Add(device);
+                Reload();
+                DevicesChanged?.Invoke();
             }
             _config.Save();
         }
@@ -304,18 +283,16 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
     [RelayCommand]
     public void DisconnectDevice(RemoteDevice? device = null)
     {
-        _bt.Disconnect();
-        foreach (var d in DiscoveredDevices)
-        {
-            d.IsConnected = false;
-        }
+        if (device == null) return;
+        _bt.DisconnectDevice(device.BluetoothAddress);
+        device.IsConnected = false;
     }
 
     [RelayCommand]
     public async Task ReconnectDeviceAsync(RemoteDevice? device)
     {
         if (device == null) return;
-        _bt.Disconnect();
+        _bt.DisconnectDevice(device.BluetoothAddress);
         await Task.Delay(250);
         await ConnectDeviceAsync(device);
     }
@@ -350,11 +327,12 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
 
         if (device.BluetoothAddress == SelectedDevice?.BluetoothAddress || device.IsConnected)
         {
-            _bt.Disconnect();
-            SelectedDevice = null;
+            _bt.DisconnectDevice(device.BluetoothAddress);
+            if (SelectedDevice?.BluetoothAddress == device.BluetoothAddress) SelectedDevice = null;
         }
         DiscoveredDevices.Remove(device);
         _config.Current.Devices.RemoveAll(d => d.Id == device.Id);
+        DevicesChanged?.Invoke();
         if (_config.Current.SelectedDeviceId == device.Id)
         {
             _config.Current.SelectedDeviceId = null;
@@ -367,7 +345,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
     public void SaveGain(RemoteDevice? device)
     {
         if (device == null) return;
-        _bt.CurrentGain = device.Gain;
+        _bt.SetDeviceVoiceSettings(device);
         _config.Save();
     }
 
@@ -375,7 +353,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
     {
         if (value != null)
         {
-            _bt.CurrentGain = value.Gain;
+            _bt.SetDeviceVoiceSettings(value);
             _config.Current.SelectedDeviceId = value.Id;
             if (value.Mappings == null || value.Mappings.Count == 0)
             {
@@ -581,6 +559,8 @@ public partial class MappingViewModel : ObservableObject
     private readonly ConfigService _config;
     private readonly Dictionary<string, List<MappingItemViewModel>> _drafts = new();
 
+    public int MappingRevision { get; private set; }
+
     [ObservableProperty]
     private ObservableCollection<MappingItemViewModel> _currentMappings = new();
 
@@ -694,7 +674,6 @@ public partial class MappingViewModel : ObservableObject
         }
     }
 
-    [RelayCommand]
     public void ResetToDefaults()
     {
         var selectedDev = SelectedDevice;
@@ -775,6 +754,8 @@ public partial class MappingViewModel : ObservableObject
 
     private void OnMappingItemModified()
     {
+        MappingRevision++;
+        OnPropertyChanged(nameof(MappingRevision));
         var selectedDev = SelectedDevice;
         if (selectedDev != null)
         {

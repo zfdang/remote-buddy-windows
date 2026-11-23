@@ -303,9 +303,11 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
         {
             void Update()
             {
-                IsDeviceConnected = connected;
-                DeviceConnectionStatus = connected ? $"语音服务已就绪：{name}" : $"语音服务未就绪：{name}";
-                if (!connected)
+                bool targetReady = _bt is RemoteBuddy.Platform.Windows.Bluetooth.MultiRemoteBluetoothManager
+                    ? SelectedDevice is { } device && _bt.IsDeviceReady(device.BluetoothAddress) : connected;
+                IsDeviceConnected = targetReady;
+                DeviceConnectionStatus = targetReady ? $"语音服务已就绪：{name}" : $"语音服务未就绪：{name}";
+                if (!targetReady)
                 {
                     HasButtonTested = false;
                     HasAudioTested = false;
@@ -326,6 +328,8 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
 
         _onAudioLevelChanged = (level) =>
         {
+            ulong owner = _bt.VoiceDeviceAddress;
+            if (owner != 0 && owner != SelectedDevice?.BluetoothAddress) return;
             void Update()
             {
                 LiveAudioLevel = level;
@@ -347,6 +351,8 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
 
         _onVoiceSessionEnded = () =>
         {
+            ulong owner = _bt.VoiceDeviceAddress;
+            if (owner != 0 && owner != SelectedDevice?.BluetoothAddress) return;
             void Update()
             {
                 LiveAudioLevel = 0f;
@@ -368,6 +374,8 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
 
         _onVoiceSessionStarted = () =>
         {
+            ulong owner = _bt.VoiceDeviceAddress;
+            if (owner != 0 && owner != SelectedDevice?.BluetoothAddress) return;
             void Update()
             {
                 if (CurrentWizardStep == WizardStep.ButtonTest)
@@ -419,7 +427,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             AppLogger.Info("AddDevice wizard closed without completion: discarding unverified device connection", "OnboardingViewModel");
             if (_bt.IsConnected)
             {
-                _bt.Disconnect();
+                if (SelectedDevice is { } target) _bt.DisconnectDevice(target.BluetoothAddress);
             }
             if (!string.IsNullOrEmpty(_config.Current.SelectedDeviceId))
             {
@@ -476,12 +484,13 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
         DeviceConnectionStatus = $"正在连接 {device.Name} 并协商语音服务，请稍候……";
         AppLogger.Info($"Wizard connect requested: '{device.Name}' (0x{device.BluetoothAddress:X12})", "OnboardingViewModel");
         SelectedDevice = device;
+        _bt.SetDeviceVoiceSettings(device);
         bool ok = await _bt.ConnectAsync(device.BluetoothAddress);
         if (ok)
         {
             device.IsConnected = true;
             IsDeviceConnected = true;
-            device.ContainerId = _bt.ConnectedDeviceContainerId;
+            device.ContainerId = _bt.GetDeviceContainerId(device.BluetoothAddress);
             if (device.Mappings == null || device.Mappings.Count == 0)
             {
                 device.Mappings = RemoteDevice.CreateDefaultMappings(device.ModelType);

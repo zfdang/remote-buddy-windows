@@ -1,4 +1,4 @@
-﻿// Copyright (C) 2026 Remote Buddy Contributors
+// Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
 using RemoteBuddy.Core.Models;
@@ -44,5 +44,21 @@ public interface IBluetoothManager : IDisposable
     void Disconnect();
     Task<bool> StartVoiceSessionAsync();
     Task<bool> StopVoiceSessionAsync();
-    Task ProbeButtonSourceAsync(Guid marker) => Task.CompletedTask;
+    ulong VoiceDeviceAddress => IsStreaming ? ConnectedDeviceAddress : 0;
+    bool IsDeviceReady(ulong address) => IsReady && IsConnected && address != 0 && address == ConnectedDeviceAddress;
+    Guid? GetDeviceContainerId(ulong address) => address == ConnectedDeviceAddress ? ConnectedDeviceContainerId : null;
+    RemoteDeviceInformation? GetDeviceInformation(ulong address) => ConnectedDeviceInformation?.BluetoothAddress == address ? ConnectedDeviceInformation : null;
+    void SetDeviceVoiceSettings(RemoteDevice device)
+    {
+        if (device.BluetoothAddress != ConnectedDeviceAddress) return;
+        CurrentGain = device.Gain;
+        VoiceButtonMode = device.VoiceButtonMode;
+    }
+    void DisconnectDevice(ulong address)
+    {
+        if (address == ConnectedDeviceAddress) Disconnect();
+    }
+    Task<bool> StartVoiceSessionAsync(ulong address) => address == ConnectedDeviceAddress ? StartVoiceSessionAsync() : Task.FromResult(false);
+    Task<bool> StopVoiceSessionAsync(ulong address) => address == ConnectedDeviceAddress ? StopVoiceSessionAsync() : Task.FromResult(false);
+    Task ProbeButtonSourceAsync(Guid marker, ulong address) => Task.CompletedTask;
 }

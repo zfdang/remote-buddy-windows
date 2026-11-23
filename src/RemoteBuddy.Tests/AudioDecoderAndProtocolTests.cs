@@ -1,4 +1,4 @@
-﻿// Copyright (C) 2026 Remote Buddy Contributors
+// Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
 using RemoteBuddy.Core.Audio;
@@ -559,6 +559,12 @@ public class AudioDecoderAndProtocolTests
         ulong g9n9nMac = 0x5347DD011BD0;
         Assert.True(RemoteBuddy.Platform.Windows.Input.RawInputReceiver.EvaluateDeviceMatch(
             targetContainer, (IntPtr)1234, g9n9nIssue16Path, g9n9nMac));
+
+        // Runtime admission requires the active remote's identity, even for known vendor/product IDs.
+        Assert.False(RemoteBuddy.Platform.Windows.Input.RawInputReceiver.EvaluateDeviceMatch(
+            targetContainer, (IntPtr)1234, remotePath, g9n9nMac, requireExactIdentity: true));
+        Assert.True(RemoteBuddy.Platform.Windows.Input.RawInputReceiver.EvaluateDeviceMatch(
+            targetContainer, (IntPtr)1234, g9n9nIssue16Path, g9n9nMac, requireExactIdentity: true));
 
         // When target remote is unknown (null): normal keyboard MUST be rejected!
         Assert.False(RemoteBuddy.Platform.Windows.Input.RawInputReceiver.EvaluateDeviceMatch(

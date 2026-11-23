@@ -1,4 +1,4 @@
-﻿// Copyright (C) 2026 Remote Buddy Contributors
+// Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
 using Windows.Devices.Bluetooth;
@@ -76,7 +76,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
     public Guid? ConnectedDeviceContainerId { get; private set; }
     public RemoteDeviceInformation? ConnectedDeviceInformation { get; private set; }
 
-    public async Task ProbeButtonSourceAsync(Guid marker)
+    internal async Task ProbeButtonSourceAsync(Guid marker)
     {
         BluetoothLEDevice? device;
         lock (_stateLock) device = _connectedDevice;
@@ -107,8 +107,13 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
     public void StartScan() => StartScanning();
     public void StopScan() => StopScanning();
 
-    public WinRtBluetoothManager()
+    private readonly VoiceSessionArbiter? _voiceArbiter;
+
+    public WinRtBluetoothManager() : this(null) { }
+
+    internal WinRtBluetoothManager(VoiceSessionArbiter? voiceArbiter)
     {
+        _voiceArbiter = voiceArbiter;
         _watcher = new BluetoothLEAdvertisementWatcher
         {
             ScanningMode = BluetoothLEScanningMode.Active
@@ -488,7 +493,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
 
             AppLogger.Info($"Bluetooth remote connected and ready: '{device.Name}', FrameSize={_frameSize}, ContainerId={ConnectedDeviceContainerId}", "BluetoothManager");
             ConnectionStatusChanged?.Invoke(true, device.Name);
-            _ = Task.Run(() => _audioPlayer.Start());
+            _ = Task.Run(() => VirtualAudioAuditor.GetCachedStatus());
             if (isChromecast)
             {
                 _ = LoadChromecastHardwareDetailsAsync(device, targetConnGen, information);
@@ -608,7 +613,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
             }
 
             // Output must be ready before opening mic
-            if (!_audioPlayer.Start())
+            if (!TryStartAudio())
             {
                 AppLogger.Error("Audio player failed to start output device before opening mic", component: "BluetoothManager");
                 return false;
@@ -649,6 +654,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                     {
                         _audioPlayer.Stop();
                         _sessionState = BluetoothSessionState.Idle;
+                        if (!_voiceSessionStartedEmitted) _voiceArbiter?.Release(this);
                     }
                 }
                 return false;
@@ -663,6 +669,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                     {
                         _audioPlayer.Stop();
                         _sessionState = BluetoothSessionState.Idle;
+                        if (!_voiceSessionStartedEmitted) _voiceArbiter?.Release(this);
                         _ = SendClosePacketAsync(_currentSessionId);
                     }
                     return false;
@@ -676,6 +683,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                     _ = SendClosePacketAsync(_currentSessionId);
                     _audioPlayer.Stop();
                     _sessionState = BluetoothSessionState.Idle;
+                    if (!_voiceSessionStartedEmitted) _voiceArbiter?.Release(this);
                     return false;
                 }
 
@@ -697,6 +705,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 {
                     _audioPlayer.Stop();
                     _sessionState = BluetoothSessionState.Idle;
+                    if (!_voiceSessionStartedEmitted) _voiceArbiter?.Release(this);
                 }
             }
             return false;
@@ -721,6 +730,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 _activeOpeningOperationId++;
                 _audioPlayer.Stop();
                 _sessionState = BluetoothSessionState.Idle;
+                if (!_voiceSessionStartedEmitted) _voiceArbiter?.Release(this);
                 _ = SendClosePacketAsync(_currentSessionId);
                 return true;
             }
@@ -774,6 +784,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
 
             _audioPlayer.Stop();
             _sessionState = BluetoothSessionState.Idle;
+            if (!_voiceSessionStartedEmitted) _voiceArbiter?.Release(this);
             if (_voiceSessionStartedEmitted)
             {
                 emitEnded = true;
@@ -784,7 +795,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
         AppLogger.Info("Voice session closed and audio stopped. State -> Idle", "BluetoothManager");
         if (emitEnded)
         {
-            VoiceSessionEnded?.Invoke();
+            EndVoiceSession();
         }
         return true;
     }
@@ -1071,6 +1082,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                             if (capturedConnGen != _connectionGeneration) return;
                             _audioPlayer.Stop();
                             _sessionState = BluetoothSessionState.Idle;
+                            if (!_voiceSessionStartedEmitted) _voiceArbiter?.Release(this);
                             StopKeepaliveTimer();
                             if (_voiceSessionStartedEmitted)
                             {
@@ -1080,7 +1092,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                         }
                         if (shouldEmitEnded)
                         {
-                            VoiceSessionEnded?.Invoke();
+                            EndVoiceSession();
                         }
                         return;
                     }
@@ -1106,7 +1118,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                         }
                         else if (_sessionState == BluetoothSessionState.Idle)
                         {
-                            if (!_audioPlayer.Start())
+                            if (!TryStartAudio())
                             {
                                 wasCancelledOrEnded = true;
                                 AppLogger.Error("Cannot accept remote AudioStart: audio output failed", component: "BluetoothManager");
@@ -1175,6 +1187,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                         StopKeepaliveTimer();
                         _audioPlayer.Stop();
                         _sessionState = BluetoothSessionState.Idle;
+                        if (!_voiceSessionStartedEmitted) _voiceArbiter?.Release(this);
                         if (_voiceSessionStartedEmitted)
                         {
                             emitRefusedEnded = true;
@@ -1184,7 +1197,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 }
                 if (emitRefusedEnded)
                 {
-                    VoiceSessionEnded?.Invoke();
+                    EndVoiceSession();
                 }
                 break;
 
@@ -1207,6 +1220,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                     if (capturedConnGen != _connectionGeneration) return;
                 }
 
+                if (_voiceArbiter?.Owner is { } owner && owner != this) return;
                 if (IsSmartToggleEligible())
                 {
                     if (_smartToggle.IsActive && _smartToggle.ShouldStopOnRemoteOpenRequest())
@@ -1221,8 +1235,8 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                     _smartToggle.BeginPhysicalPress(Environment.TickCount64);
                 }
 
-                VoiceButtonPressed?.Invoke();
                 _ = StartVoiceSessionAsync();
+                VoiceButtonPressed?.Invoke();
                 break;
 
             case ATVVProtocol.OpcodeAudioStop: // 0x00
@@ -1289,6 +1303,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
             _smartToggle.Reset();
             CancelSmartToggleTimers();
             _audioPlayer.Stop();
+            if (!emitEnded) _voiceArbiter?.Release(this);
 
             if (_connectedDevice != null)
             {
@@ -1337,7 +1352,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
 
         if (emitEnded)
         {
-            VoiceSessionEnded?.Invoke();
+            EndVoiceSession();
         }
 
         if (hadConnection)
@@ -1346,6 +1361,31 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
         }
 
         devToDispose?.Dispose();
+    }
+
+    private bool TryStartAudio()
+    {
+        if (_voiceArbiter?.TryAcquire(this) == false)
+        {
+            AppLogger.Info($"Ignoring voice from '{ConnectedDeviceName}': another session owns the microphone", "BluetoothManager");
+            return false;
+        }
+        bool started = false;
+        try
+        {
+            started = _audioPlayer.Start();
+            return started;
+        }
+        finally
+        {
+            if (!started) _voiceArbiter?.Release(this);
+        }
+    }
+
+    private void EndVoiceSession()
+    {
+        try { VoiceSessionEnded?.Invoke(); }
+        finally { _voiceArbiter?.Release(this); }
     }
 
     public void Dispose()

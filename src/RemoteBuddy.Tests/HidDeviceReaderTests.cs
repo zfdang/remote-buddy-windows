@@ -110,7 +110,7 @@ public class HidDeviceReaderTests
     [Fact]
     public void ScopedWizard_ButtonTest_WorksInBothDeviceOnlyAndFullModes()
     {
-        var config = new ConfigService();
+        var config = new ConfigService(Path.Combine(Path.GetTempPath(), $"remote-buddy-wizard-{Guid.NewGuid():N}.json"));
         var mockBt = new TestBluetoothManager();
 
         // 1. DeviceOnly mode: ButtonTest is Step 2
