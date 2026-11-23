@@ -8,6 +8,21 @@ namespace RemoteBuddy.Tests;
 
 public class NativeInputSenderTests
 {
+    [Theory]
+    [InlineData("RAlt", 0x40, 0x00)]
+    [InlineData("Ctrl+Shift+D", 0x03, 0x07)]
+    [InlineData("RCtrl+RShift+D", 0x30, 0x07)]
+    [InlineData("Ctrl+Win", 0x09, 0x00)]
+    [InlineData("LAlt+F24", 0x04, 0x73)]
+    [InlineData("Ctrl+/", 0x01, 0x38)]
+    [InlineData("Tab", 0x00, 0x2B)]
+    public void DoubaoKeyboard_EncodesWholeShortcut(string shortcut, int modifiers, int key)
+    {
+        Assert.True(DoubaoUsbKeyboard.TryEncodeShortcut(shortcut, out byte actualModifiers, out byte actualKey));
+        Assert.Equal((byte)modifiers, actualModifiers);
+        Assert.Equal((byte)key, actualKey);
+    }
+
     [Fact]
     public void ShortcutRelease_AlwaysBalancesInjectedModifierAndMainKey()
     {

@@ -1,7 +1,8 @@
 ﻿<UserControl x:Class="RemoteBuddy.App.Views.Pages.IntegrationsPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:converters="clr-namespace:RemoteBuddy.App.Converters">
+             xmlns:converters="clr-namespace:RemoteBuddy.App.Converters"
+             xmlns:vm="clr-namespace:RemoteBuddy.App.ViewModels">
     <UserControl.Resources>
         <converters:EqualValueToBrushConverter x:Key="ActiveToolBorderConverter">
             <converters:EqualValueToBrushConverter.ActiveBrush>
@@ -121,7 +122,7 @@
                             <TextBlock Text="✓ 正在生效" Foreground="#00CC66" FontSize="12" VerticalAlignment="Center" Margin="10,0,0,0"
                                        Visibility="{Binding SelectedTool, Converter={StaticResource EqualValueToVisibilityConverter}, ConverterParameter=WeChatInput}"/>
                         </StackPanel>
-                        <TextBlock Text="支持微信键盘按键上屏。长按语音键说话，松开后自动转写并直接上屏。（默认快捷键 Ctrl+F5）"
+                        <TextBlock Text="{x:Static vm:OnboardingViewModel.WeChatVoiceSetup}"
                                    FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,14"/>
                     </DockPanel>
                 </Border>
@@ -143,7 +144,7 @@
                             <TextBlock Text="✓ 正在生效" Foreground="#00CC66" FontSize="12" VerticalAlignment="Center" Margin="10,0,0,0"
                                        Visibility="{Binding SelectedTool, Converter={StaticResource EqualValueToVisibilityConverter}, ConverterParameter=DoubaoInput}"/>
                         </StackPanel>
-                        <TextBlock Text="支持豆包悬浮麦克风实时 AI 语音识别与文本润色。按住说话，松开即刻完成识别。（默认快捷键 RAlt / 右 Alt）"
+                        <TextBlock Text="{x:Static vm:OnboardingViewModel.DoubaoVoiceSetup}"
                                    FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,14"/>
                     </DockPanel>
                 </Border>

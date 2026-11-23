@@ -15,7 +15,7 @@ namespace RemoteBuddy.App.ViewModels;
 
 public partial class MainViewModel : ObservableObject, IDisposable
 {
-    private record struct ActiveVoiceSession(ulong DeviceAddress, long Token, VoiceTriggerMode TriggerMode, string Shortcut, TargetInputTool Tool);
+    private record struct ActiveVoiceSession(ulong DeviceAddress, long Token, VoiceTriggerMode TriggerMode, string Shortcut, TargetInputTool Tool, bool ShortcutSent = false);
 
     private readonly ConfigService _configService;
     private readonly IBluetoothManager _bluetoothManager;
@@ -23,6 +23,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly Dictionary<ulong, HidDeviceReader> _hidReaders = new();
     private readonly ChromecastButtonReceiver _chromecastButtonReceiver = new();
     private readonly RemoteVoiceKeyGuard _voiceKeyGuard;
+    private readonly DoubaoUsbKeyboard _doubaoKeyboard = new();
     private readonly object _voiceLifecycleLock = new();
     private ActiveVoiceSession? _activeVoiceSession;
     private long _voiceEventSeq;
@@ -94,7 +95,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [NotifyPropertyChangedFor(nameof(EtwIndicatorColor))]
     private EtwCaptureStatus _etwCaptureStatus = EtwCaptureStatus.Idle;
 
-    private enum WarningKind { None, Audio, Etw }
+    private enum WarningKind { None, Audio, Etw, DoubaoKeyboard }
     private WarningKind _activeWarningKind;
 
     public string EtwIndicatorText => EtwCaptureStatus switch
@@ -255,6 +256,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         switch (_activeWarningKind)
         {
+            case WarningKind.DoubaoKeyboard:
+                BluetoothAdapterHelper.RestartAppAsAdministrator();
+                break;
             case WarningKind.Audio:
                 Navigate("Permissions");
                 break;
@@ -657,6 +661,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var session = new ActiveVoiceSession(owner, token, currentConfig.TriggerMode, currentConfig.Shortcut, currentConfig.Tool);
             _activeVoiceSession = session;
             AppLogger.Info($"Voice session started: Device=0x{owner:X12}, Tool={session.Tool}, Mode={session.TriggerMode}, Shortcut='{session.Shortcut}'", "MainViewModel");
+            if (session.Tool == TargetInputTool.DoubaoInput)
+            {
+                // The low-level F5 guard cannot distinguish a USB/IP key from
+                // the physical keyboard and would also suppress this report.
+                _activeVoiceSession = session with { ShortcutSent = SendDoubaoShortcut(session) };
+                return;
+            }
             if (session.TriggerMode == VoiceTriggerMode.HoldToTalk)
             {
                 _voiceKeyGuard.BeginShortcutHold(session.Shortcut);
@@ -712,7 +723,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 CurrentAudioLevel = 0f;
                 _activeVoiceSession = null;
                 AppLogger.Info($"Voice session ended: Device=0x{session.DeviceAddress:X12}, Mode={session.TriggerMode}, Shortcut='{session.Shortcut}'", "MainViewModel");
-                if (session.TriggerMode == VoiceTriggerMode.HoldToTalk)
+                if (session.Tool == TargetInputTool.DoubaoInput)
+                {
+                    EndDoubaoShortcut(session);
+                }
+                else if (session.TriggerMode == VoiceTriggerMode.HoldToTalk)
                 {
                     NativeInputSender.SendShortcutUp(session.Shortcut);
                 }
@@ -984,7 +999,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (_activeVoiceSession is { } session)
         {
             _activeVoiceSession = null;
-            if (session.TriggerMode == VoiceTriggerMode.HoldToTalk)
+            if (session.Tool == TargetInputTool.DoubaoInput)
+            {
+                EndDoubaoShortcut(session);
+            }
+            else if (session.TriggerMode == VoiceTriggerMode.HoldToTalk)
             {
                 AppLogger.Info($"Releasing held voice shortcut: Shortcut='{session.Shortcut}'", "MainViewModel");
                 NativeInputSender.SendShortcutUp(session.Shortcut);
@@ -998,6 +1017,37 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _voiceKeyGuard.EndShortcutHold();
         _voiceKeyGuardOwnerAddress = 0;
         NativeInputSender.ReleaseAllHeldSyntheticKeys();
+    }
+
+    private bool SendDoubaoShortcut(ActiveVoiceSession session)
+    {
+        bool administrator = BluetoothAdapterHelper.IsAdministrator();
+        bool sent = administrator && (session.TriggerMode == VoiceTriggerMode.HoldToTalk
+            ? _doubaoKeyboard.SendDown(session.Shortcut)
+            : _doubaoKeyboard.SendClick(session.Shortcut));
+        AppLogger.Info($"Doubao USB/IP shortcut start: Success={sent}", "MainViewModel");
+        if (!sent)
+        {
+            _activeWarningKind = WarningKind.DoubaoKeyboard;
+            WarningBannerMessage = administrator
+                ? "豆包虚拟键盘未能发送快捷键。请检查 USB/IP 驱动状态，然后重试。"
+                : "豆包语音快捷键需要管理员权限来运行 USB/IP 虚拟键盘。";
+            WarningBannerActionText = administrator ? string.Empty : "以管理员身份重启";
+        }
+        else if (_activeWarningKind == WarningKind.DoubaoKeyboard)
+        {
+            DismissWarningBanner();
+        }
+        return sent;
+    }
+
+    private void EndDoubaoShortcut(ActiveVoiceSession session)
+    {
+        if (!session.ShortcutSent) return;
+        bool sent = session.TriggerMode == VoiceTriggerMode.HoldToTalk
+            ? _doubaoKeyboard.Release()
+            : _doubaoKeyboard.SendClick(session.Shortcut);
+        AppLogger.Info($"Doubao USB/IP shortcut end: Success={sent}", "MainViewModel");
     }
 
     public void HandleDeviceArrival(IntPtr hDevice)
@@ -1090,6 +1140,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _chromecastButtonReceiver.Dispose();
 
         ReleaseHeldVoiceShortcut();
+        _doubaoKeyboard.Dispose();
         _voiceKeyGuard.Dispose();
         ResetGestures();
         MappingVm.PropertyChanged -= OnMappingSettingsChanged;

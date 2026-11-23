@@ -2,6 +2,9 @@
   <PropertyGroup>
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <RootNamespace>RemoteBuddy.Platform.Windows</RootNamespace>
+    <HidMaestroVersion>2.3.0</HidMaestroVersion>
+    <HidMaestroDirectory>$(MSBuildProjectDirectory)/obj/hidmaestro/$(HidMaestroVersion)</HidMaestroDirectory>
+    <HidMaestroArchive>HIDMaestro-v$(HidMaestroVersion).zip</HidMaestroArchive>
   </PropertyGroup>
 
   <ItemGroup>
@@ -11,7 +14,21 @@
   <ItemGroup>
     <PackageReference Include="NAudio.Wasapi" Version="22.0.0" />
     <PackageReference Include="NAudio.Core" Version="2.2.1" />
+    <Reference Include="HIDMaestro.Core" HintPath="$(HidMaestroDirectory)/HIDMaestro.Core.dll" />
+    <None Include="$(HidMaestroDirectory)/LICENSE" Link="licenses/HIDMaestro-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="$(HidMaestroDirectory)/THIRD-PARTY-NOTICES.txt" Link="licenses/HIDMaestro-THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <Target Name="GetHidMaestro" BeforeTargets="ResolveAssemblyReferences;GetCopyToOutputDirectoryItems" Condition="'$(DesignTimeBuild)' != 'true'"
+          Inputs="$(MSBuildProjectFullPath)" Outputs="$(HidMaestroDirectory)/HIDMaestro.Core.dll;$(HidMaestroDirectory)/LICENSE;$(HidMaestroDirectory)/THIRD-PARTY-NOTICES.txt">
+    <MakeDir Directories="$(HidMaestroDirectory)" />
+    <DownloadFile SourceUrl="https://github.com/hifihedgehog/HIDMaestro/releases/download/v$(HidMaestroVersion)/$(HidMaestroArchive)"
+                  DestinationFolder="$(HidMaestroDirectory)" Condition="!Exists('$(HidMaestroDirectory)/$(HidMaestroArchive)')" />
+    <VerifyFileHash File="$(HidMaestroDirectory)/$(HidMaestroArchive)" Algorithm="SHA256"
+                    Hash="FDDB61B76D076AA2CF508A46C1E30E23AA75B4AE622D52B15E7259959FD12295" />
+    <Unzip SourceFiles="$(HidMaestroDirectory)/$(HidMaestroArchive)" DestinationFolder="$(HidMaestroDirectory)" />
+    <Touch Files="$(HidMaestroDirectory)/HIDMaestro.Core.dll;$(HidMaestroDirectory)/LICENSE;$(HidMaestroDirectory)/THIRD-PARTY-NOTICES.txt" />
+  </Target>
 
   <ItemGroup>
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">

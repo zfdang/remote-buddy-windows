@@ -232,3 +232,9 @@ SOFTWARE.
 VB-CABLE Virtual Audio Device is developed and copyrighted by Vincent Burel / VB-Audio Software (<https://vb-audio.com/Cable/>).
 
 VB-CABLE is not bundled, sublicensed, or redistributed in this repository or binary releases. Users download and install VB-CABLE independently under its own license terms from VB-Audio Software.
+
+## HIDMaestro and usbip-win2
+
+- **HIDMaestro 2.3.0 (MIT):** [matching source archive](https://github.com/hifihedgehog/HIDMaestro/archive/refs/tags/v2.3.0.tar.gz) and [binary release](https://github.com/hifihedgehog/HIDMaestro/releases/tag/v2.3.0).
+- **usbip-win2 0.9.8.1 (BSD-2-Clause):** [matching driver source](https://github.com/vadimgrn/usbip-win2/archive/refs/tags/v.0.9.8.1.tar.gz) and [signed driver release](https://github.com/vadimgrn/usbip-win2/releases/tag/v.0.9.8.1). The SDK also identifies the exact ARM64 build in its accompanying notes.
+- The release includes the SDK's unmodified license and third-party notices in the `licenses` directory. Remote Buddy explicitly selects the USB/IP backend for its Doubao virtual keyboard.

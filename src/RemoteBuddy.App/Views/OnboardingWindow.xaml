@@ -133,7 +133,7 @@
             <!-- Step 6: IME Tool Configuration -->
             <StackPanel x:Name="Step6Panel" Visibility="Collapsed">
                 <TextBlock Text="配置目标语音输入工具" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,10"/>
-                <TextBlock Text="选择您正在使用的语音输入法，系统将自动配置匹配的快捷键与模式：" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,14"/>
+                <TextBlock Text="选择语音输入工具，然后确认两边的快捷键一致。" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,14"/>
 
                 <WrapPanel Margin="0,0,0,14">
                     <Button Content="微信输入法" Margin="0,0,8,8" Command="{Binding ApplyPresetCommand}" CommandParameter="WeChatInput"
@@ -195,8 +195,8 @@
                             <TextBlock Text="支持单个修饰键（如右 Alt / 右 Ctrl）或组合键（如 Ctrl+F5），按 Esc 取消录制。"
                                        FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,6,0,0" TextWrapping="Wrap"/>
                         </StackPanel>
-                        <TextBlock Text="麦克风输入端点要求：" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,4"/>
-                        <TextBlock Text="请在目标输入法中将麦克风选择为「CABLE Output」；对于 Windows 听写，请将「CABLE Output」设为系统默认麦克风。" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" FontSize="12"/>
+                        <TextBlock Text="语音输入工具设置" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,4"/>
+                        <TextBlock Text="{Binding InputToolSetupInstructions}" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" FontSize="12"/>
                     </StackPanel>
                 </Border>
             </StackPanel>
