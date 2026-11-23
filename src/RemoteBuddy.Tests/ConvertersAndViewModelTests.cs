@@ -545,4 +545,25 @@ public class ConvertersAndViewModelTests
             if (File.Exists(path)) File.Delete(path);
         }
     }
+
+    [Fact]
+    public void OnboardingViewModel_WhenDriverAlreadyReady_PopulatesDriverStatusMessage()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-onb-ready-{Guid.NewGuid():N}.json");
+        var previousOverride = VirtualAudioAuditor.StatusOverride;
+        try
+        {
+            VirtualAudioAuditor.StatusOverride = DriverReadinessStatus.Ready;
+            var config = new ConfigService(path);
+            using var vm = new OnboardingViewModel(config, new DummyBluetoothManager(), WizardMode.Full);
+
+            Assert.Equal(DriverReadinessStatus.Ready, vm.DriverStatus);
+            Assert.Contains("VB-CABLE 虚拟麦克风已就绪", vm.DriverStatusMessage);
+        }
+        finally
+        {
+            VirtualAudioAuditor.StatusOverride = previousOverride;
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
 }

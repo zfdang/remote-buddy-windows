@@ -90,22 +90,17 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     private string _stepTitle = "欢迎使用 Remote Buddy";
 
     [ObservableProperty]
-    private DriverReadinessStatus _driverStatus;
+    [NotifyPropertyChangedFor(nameof(DriverStatusMessage))]
+    private DriverReadinessStatus _driverStatus = DriverReadinessStatus.NotInstalled;
 
-    partial void OnDriverStatusChanged(DriverReadinessStatus value)
+    public string DriverStatusMessage => DriverStatus switch
     {
-        DriverStatusMessage = value switch
-        {
-            DriverReadinessStatus.Ready => "✅ VB-CABLE 虚拟麦克风已就绪，音频服务工作正常。",
-            DriverReadinessStatus.NotInstalled => "❌ 未检测到 VB-CABLE。请点击下方按钮前往官网下载安装。",
-            DriverReadinessStatus.Disabled => "⚠️ 检测到 CABLE Input 音频设备已被禁用，请在 Windows 声音设置中启用后再继续。",
-            DriverReadinessStatus.RebootRequired => "⚠️ 检测到虚拟声卡安装未完全生效，请重启电脑完成系统音频服务初始化。",
-            _ => "❌ 虚拟麦克风初始化失败，请在设备管理器中检查设备状态。"
-        };
-    }
-
-    [ObservableProperty]
-    private string _driverStatusMessage = string.Empty;
+        DriverReadinessStatus.Ready => "✅ VB-CABLE 虚拟麦克风已就绪，音频服务工作正常。",
+        DriverReadinessStatus.NotInstalled => "❌ 未检测到 VB-CABLE。请点击下方按钮前往官网下载安装。",
+        DriverReadinessStatus.Disabled => "⚠️ 检测到 CABLE Input 音频设备已被禁用，请在 Windows 声音设置中启用后再继续。",
+        DriverReadinessStatus.RebootRequired => "⚠️ 检测到虚拟声卡安装未完全生效，请重启电脑完成系统音频服务初始化。",
+        _ => "❌ 虚拟麦克风初始化失败，请在设备管理器中检查设备状态。"
+    };
 
     [ObservableProperty]
     private bool _isScanning = false;
@@ -445,6 +440,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     public void RefreshDriverStatus()
     {
         DriverStatus = VirtualAudioAuditor.AuditCableInputDevice(forceRefresh: true);
+        OnPropertyChanged(nameof(DriverStatusMessage));
     }
 
     [RelayCommand]
