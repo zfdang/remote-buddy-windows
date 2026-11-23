@@ -19,6 +19,9 @@ public class MainViewModelTests
         public bool IsStreaming => VoiceDeviceAddress != 0;
         public HashSet<ulong> ReadyAddresses { get; } = [];
         public ulong VoiceDeviceAddress { get; set; }
+        public IReadOnlyCollection<ulong> ConnectedDeviceAddresses => ReadyAddresses.Count > 0
+            ? ReadyAddresses.ToArray()
+            : (IsConnected && ConnectedDeviceAddress != 0 ? [ConnectedDeviceAddress] : []);
         public bool IsDeviceReady(ulong address) => ReadyAddresses.Contains(address) ||
             (IsReady && IsConnected && address != 0 && address == ConnectedDeviceAddress);
         public Task<bool> StartVoiceSessionAsync(ulong address)
@@ -42,17 +45,29 @@ public class MainViewModelTests
         public G9N9NVoiceButtonMode VoiceButtonMode { get; set; } = G9N9NVoiceButtonMode.SmartToggle;
 
         public event Action<RemoteDevice>? DeviceDiscovered { add { } remove { } }
-        public event Action<bool, string>? ConnectionStatusChanged;
-        public event Action? ConnectedDeviceInformationChanged { add { } remove { } }
-        public event Action<float>? AudioLevelChanged { add { } remove { } }
-        public event Action? VoiceButtonPressed { add { } remove { } }
-        public event Action? VoiceSessionStarted { add { } remove { } }
-        public event Action? VoiceSessionEnded { add { } remove { } }
+        public event Action<ulong, bool, string>? ConnectionStatusChanged;
+        public event Action<ulong>? ConnectedDeviceInformationChanged { add { } remove { } }
+        public event Action<ulong, float>? AudioLevelChanged { add { } remove { } }
+        public event Action<ulong>? VoiceButtonPressed;
+        public event Action<ulong>? VoiceSessionStarted;
+        public event Action<ulong>? VoiceSessionEnded;
 
         public int StartVoiceSessionCount { get; private set; }
         public int StopVoiceSessionCount { get; private set; }
 
-        public void RaiseConnectionStatusChanged(bool connected, string name) => ConnectionStatusChanged?.Invoke(connected, name);
+        public void RaiseConnectionStatusChanged(bool connected, string name, ulong address = 0) =>
+            ConnectionStatusChanged?.Invoke(address != 0 ? address : ConnectedDeviceAddress, connected, name);
+        public void RaiseVoiceButtonPressed(ulong address) => VoiceButtonPressed?.Invoke(address);
+        public void RaiseVoiceSessionStarted(ulong address)
+        {
+            VoiceDeviceAddress = address;
+            VoiceSessionStarted?.Invoke(address);
+        }
+        public void RaiseVoiceSessionEnded(ulong address)
+        {
+            if (VoiceDeviceAddress == address) VoiceDeviceAddress = 0;
+            VoiceSessionEnded?.Invoke(address);
+        }
 
         public void StartScanning() => IsScanning = true;
         public void StopScanning() => IsScanning = false;
@@ -578,5 +593,147 @@ public class MainViewModelTests
         {
             if (File.Exists(path)) File.Delete(path);
         }
+    }
+
+    [Fact]
+    public void CrossDevice_StaleVoiceSessionEnded_DoesNotCancelActiveRemoteSession()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"cross-voice-end-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new TestBluetoothManager { IsConnected = true, IsReady = true };
+            const ulong remoteA = 0x111111111111;
+            const ulong remoteB = 0x222222222222;
+            bt.ReadyAddresses.Add(remoteA);
+            bt.ReadyAddresses.Add(remoteB);
+            config.Current.Devices.Add(new RemoteDevice { Id = "A", BluetoothAddress = remoteA, Name = "Remote A" });
+            config.Current.Devices.Add(new RemoteDevice { Id = "B", BluetoothAddress = remoteB, Name = "Remote B" });
+
+            using var vm = new MainViewModel(config, bt);
+
+            bt.RaiseVoiceSessionStarted(remoteB);
+            Assert.True(vm.IsVoiceActive);
+
+            // Spurious or delayed end notification for Remote A must NOT cancel Remote B
+            bt.RaiseVoiceSessionEnded(remoteA);
+            Assert.True(vm.IsVoiceActive);
+
+            // Matching end for Remote B terminates it cleanly
+            bt.RaiseVoiceSessionEnded(remoteB);
+            Assert.False(vm.IsVoiceActive);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void SingleRemoteDisconnect_WhileAnotherRemainsConnected_PreservesOtherRemoteVoiceSession()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"single-disc-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new TestBluetoothManager
+            {
+                IsConnected = true,
+                IsReady = true,
+                ConnectedDeviceAddress = 0x222222222222,
+                ConnectedDeviceName = "Remote B"
+            };
+            const ulong remoteA = 0x111111111111;
+            const ulong remoteB = 0x222222222222;
+            bt.ReadyAddresses.Add(remoteA);
+            bt.ReadyAddresses.Add(remoteB);
+            config.Current.Devices.Add(new RemoteDevice { Id = "A", BluetoothAddress = remoteA, Name = "Remote A" });
+            config.Current.Devices.Add(new RemoteDevice { Id = "B", BluetoothAddress = remoteB, Name = "Remote B" });
+
+            using var vm = new MainViewModel(config, bt);
+            bt.RaiseVoiceSessionStarted(remoteB);
+            Assert.True(vm.IsVoiceActive);
+
+            bt.ReadyAddresses.Remove(remoteA);
+            bt.RaiseConnectionStatusChanged(false, "Remote A", remoteA);
+
+            Assert.True(vm.IsConnected);
+            Assert.True(vm.IsVoiceActive);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void VoiceButtonPressed_WithDeviceAddress_ReachesOnboardingWithoutActiveVoiceStream()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"voice-btn-onb-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new TestBluetoothManager { IsConnected = true, IsReady = true, VoiceDeviceAddress = 0 };
+            const ulong remoteB = 0x222222222222;
+            var devB = new RemoteDevice { Id = "B", BluetoothAddress = remoteB, Name = "Remote B" };
+            config.Current.Devices.Add(devB);
+
+            using var vm = new MainViewModel(config, bt);
+            using var onboarding = new OnboardingViewModel(config, bt, WizardMode.DeviceOnly)
+            {
+                SelectedDevice = devB,
+                CurrentStep = 2
+            };
+            vm.ActiveOnboardingVm = onboarding;
+
+            bt.RaiseVoiceButtonPressed(remoteB);
+
+            Assert.True(onboarding.HasButtonTested);
+            Assert.Contains("语音键", onboarding.LastPressedButtonName);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void OnboardingConnectionChanged_IgnoresUnrelatedRemoteStatus()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"onb-filter-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new TestBluetoothManager();
+            var devB = new RemoteDevice { Id = "B", BluetoothAddress = 0x222222222222, Name = "Remote B" };
+            using var onboarding = new OnboardingViewModel(config, bt, WizardMode.DeviceOnly)
+            {
+                SelectedDevice = devB
+            };
+
+            bt.RaiseConnectionStatusChanged(false, "Remote A", 0x111111111111);
+            Assert.DoesNotContain("Remote A", onboarding.DeviceConnectionStatus);
+
+            bt.ReadyAddresses.Add(devB.BluetoothAddress);
+            bt.RaiseConnectionStatusChanged(true, "Remote B", devB.BluetoothAddress);
+            Assert.True(onboarding.IsDeviceConnected);
+            Assert.Contains("Remote B", onboarding.DeviceConnectionStatus);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void MultiRemoteBluetoothManager_DisposeIsIdempotentAndRemoveDeviceSafe()
+    {
+        var manager = new RemoteBuddy.Platform.Windows.Bluetooth.MultiRemoteBluetoothManager();
+        manager.RemoveDevice(0x112233445566);
+        manager.Dispose();
+        manager.Dispose();
+        // SetDeviceVoiceSettings after Dispose must not re-populate state or throw
+        manager.SetDeviceVoiceSettings(new RemoteDevice { Id = "X", BluetoothAddress = 0x112233445566 });
+        Assert.Empty(manager.ConnectedDeviceAddresses);
     }
 }

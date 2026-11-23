@@ -23,7 +23,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
     private readonly IBluetoothManager _bt;
     private readonly Action<WizardMode>? _openWizard;
     private readonly Action<RemoteDevice> _onDeviceDiscovered;
-    private readonly Action<bool, string> _onConnectionChanged;
+    private readonly Action<ulong, bool, string> _onConnectionChanged;
 
     [ObservableProperty]
     private ObservableCollection<RemoteDevice> _discoveredDevices = new();
@@ -97,7 +97,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         };
         _bt.DeviceDiscovered += _onDeviceDiscovered;
 
-        _onConnectionChanged = (connected, name) =>
+        _onConnectionChanged = (addr, connected, name) =>
         {
             void Update()
             {
@@ -106,7 +106,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
                     dev.IsConnected = _bt.IsDeviceReady(dev.BluetoothAddress);
                 }
                 var connectedDev = DiscoveredDevices.FirstOrDefault(d => d.IsConnected);
-                if (connectedDev != null)
+                if (connectedDev != null && (SelectedDevice == null || _bt is not MultiRemoteBluetoothManager))
                 {
                     SelectedDevice = connectedDev;
                 }
@@ -168,7 +168,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         RefreshHardwareDetails();
     }
 
-    private void OnConnectedDeviceInformationChanged()
+    private void OnConnectedDeviceInformationChanged(ulong address)
     {
         if (App.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
         {
@@ -325,11 +325,16 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
 
         if (!confirmed) return;
 
-        if (device.BluetoothAddress == SelectedDevice?.BluetoothAddress || device.IsConnected)
+        device.PropertyChanged -= OnDevicePropertyChanged;
+        if (device.BluetoothAddress != 0)
+        {
+            _bt.RemoveDevice(device.BluetoothAddress);
+        }
+        else if (device.BluetoothAddress == SelectedDevice?.BluetoothAddress || device.IsConnected)
         {
             _bt.DisconnectDevice(device.BluetoothAddress);
-            if (SelectedDevice?.BluetoothAddress == device.BluetoothAddress) SelectedDevice = null;
         }
+        if (SelectedDevice?.BluetoothAddress == device.BluetoothAddress) SelectedDevice = null;
         DiscoveredDevices.Remove(device);
         _config.Current.Devices.RemoveAll(d => d.Id == device.Id);
         DevicesChanged?.Invoke();
@@ -1005,7 +1010,16 @@ public partial class GeneralViewModel : ObservableObject
     public string RemoteBadgeBackground => RemoteReady ? "#1C3827" : "#332200";
     public string RemoteBorderBrush => RemoteReady ? "#2D6A42" : "#664400";
     public string RemoteIcon => RemoteReady ? "✓" : "⚠";
-    public string RemoteSummary => _bt.IsConnected ? (!string.IsNullOrEmpty(_bt.ConnectedDeviceName) ? $"已连接 {_bt.ConnectedDeviceName}，语音服务就绪" : "已连接蓝牙遥控器") : "未连接遥控器";
+    public string RemoteSummary
+    {
+        get
+        {
+            if (!_bt.IsConnected) return "未连接遥控器";
+            int count = _bt.ConnectedDeviceAddresses.Count;
+            if (count > 1) return $"已连接 {count} 台遥控器，语音服务就绪";
+            return !string.IsNullOrEmpty(_bt.ConnectedDeviceName) ? $"已连接 {_bt.ConnectedDeviceName}，语音服务就绪" : "已连接蓝牙遥控器";
+        }
+    }
 
     public bool IntegrationReady => !string.IsNullOrEmpty(_config.Current.InputTool.Shortcut);
     public string IntegrationStatusText => IntegrationReady ? "已配置" : "未配置";
@@ -1041,7 +1055,7 @@ public partial class GeneralViewModel : ObservableObject
         LaunchAtStartup = StartupService.IsLaunchAtStartupEnabled();
         MinimizeToTrayOnClose = _config.Current.MinimizeToTrayOnClose;
 
-        _bt.ConnectionStatusChanged += (_, _) =>
+        _bt.ConnectionStatusChanged += (_, _, _) =>
         {
             if (System.Windows.Application.Current?.Dispatcher != null)
             {

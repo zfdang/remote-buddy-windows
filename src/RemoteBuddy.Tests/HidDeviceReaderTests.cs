@@ -28,16 +28,16 @@ public class HidDeviceReaderTests
         public G9N9NVoiceButtonMode VoiceButtonMode { get; set; } = G9N9NVoiceButtonMode.SmartToggle;
 
         public event Action<RemoteDevice>? DeviceDiscovered;
-        public event Action<bool, string>? ConnectionStatusChanged;
-        public event Action? ConnectedDeviceInformationChanged { add { } remove { } }
-        public event Action<float>? AudioLevelChanged { add { } remove { } }
-        public event Action? VoiceButtonPressed;
-        public event Action? VoiceSessionStarted { add { } remove { } }
-        public event Action? VoiceSessionEnded { add { } remove { } }
+        public event Action<ulong, bool, string>? ConnectionStatusChanged;
+        public event Action<ulong>? ConnectedDeviceInformationChanged { add { } remove { } }
+        public event Action<ulong, float>? AudioLevelChanged { add { } remove { } }
+        public event Action<ulong>? VoiceButtonPressed;
+        public event Action<ulong>? VoiceSessionStarted { add { } remove { } }
+        public event Action<ulong>? VoiceSessionEnded { add { } remove { } }
 
         public void RaiseDeviceDiscovered(RemoteDevice dev) => DeviceDiscovered?.Invoke(dev);
-        public void RaiseConnectionStatusChanged(bool connected, string name) => ConnectionStatusChanged?.Invoke(connected, name);
-        public void RaiseVoiceButtonPressed() => VoiceButtonPressed?.Invoke();
+        public void RaiseConnectionStatusChanged(bool connected, string name, ulong address = 0) => ConnectionStatusChanged?.Invoke(address, connected, name);
+        public void RaiseVoiceButtonPressed(ulong address = 0) => VoiceButtonPressed?.Invoke(address);
 
         public void StartScanning() => IsScanning = true;
         public void StopScanning() => IsScanning = false;

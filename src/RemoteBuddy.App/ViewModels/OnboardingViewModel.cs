@@ -44,10 +44,10 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     private readonly WizardStep[] _activeSteps;
 
     private readonly Action<RemoteDevice> _onDeviceDiscovered;
-    private readonly Action<bool, string> _onConnectionChanged;
-    private readonly Action<float> _onAudioLevelChanged;
-    private readonly Action _onVoiceSessionEnded;
-    private readonly Action _onVoiceSessionStarted;
+    private readonly Action<ulong, bool, string> _onConnectionChanged;
+    private readonly Action<ulong, float> _onAudioLevelChanged;
+    private readonly Action<ulong> _onVoiceSessionEnded;
+    private readonly Action<ulong> _onVoiceSessionStarted;
 
     public WizardMode Mode { get; }
 
@@ -299,12 +299,14 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             }));
         };
 
-        _onConnectionChanged = (connected, name) =>
+        _onConnectionChanged = (addr, connected, name) =>
         {
+            if (SelectedDevice is { BluetoothAddress: not 0 } selected && addr != 0 && addr != selected.BluetoothAddress) return;
             void Update()
             {
-                bool targetReady = _bt is RemoteBuddy.Platform.Windows.Bluetooth.MultiRemoteBluetoothManager
-                    ? SelectedDevice is { } device && _bt.IsDeviceReady(device.BluetoothAddress) : connected;
+                bool targetReady = SelectedDevice is { BluetoothAddress: not 0 } device
+                    ? (_bt.IsDeviceReady(device.BluetoothAddress) || (connected && (addr == 0 || addr == device.BluetoothAddress)))
+                    : connected;
                 IsDeviceConnected = targetReady;
                 DeviceConnectionStatus = targetReady ? $"语音服务已就绪：{name}" : $"语音服务未就绪：{name}";
                 if (!targetReady)
@@ -326,10 +328,9 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             }
         };
 
-        _onAudioLevelChanged = (level) =>
+        _onAudioLevelChanged = (addr, level) =>
         {
-            ulong owner = _bt.VoiceDeviceAddress;
-            if (owner != 0 && owner != SelectedDevice?.BluetoothAddress) return;
+            if (SelectedDevice is { BluetoothAddress: not 0 } selected && addr != 0 && addr != selected.BluetoothAddress) return;
             void Update()
             {
                 LiveAudioLevel = level;
@@ -349,10 +350,9 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             }
         };
 
-        _onVoiceSessionEnded = () =>
+        _onVoiceSessionEnded = (addr) =>
         {
-            ulong owner = _bt.VoiceDeviceAddress;
-            if (owner != 0 && owner != SelectedDevice?.BluetoothAddress) return;
+            if (SelectedDevice is { BluetoothAddress: not 0 } selected && addr != 0 && addr != selected.BluetoothAddress) return;
             void Update()
             {
                 LiveAudioLevel = 0f;
@@ -372,10 +372,9 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             }
         };
 
-        _onVoiceSessionStarted = () =>
+        _onVoiceSessionStarted = (addr) =>
         {
-            ulong owner = _bt.VoiceDeviceAddress;
-            if (owner != 0 && owner != SelectedDevice?.BluetoothAddress) return;
+            if (SelectedDevice is { BluetoothAddress: not 0 } selected && addr != 0 && addr != selected.BluetoothAddress) return;
             void Update()
             {
                 if (CurrentWizardStep == WizardStep.ButtonTest)
@@ -425,9 +424,10 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
         if (!IsCompleted && Mode == WizardMode.DeviceOnly)
         {
             AppLogger.Info("AddDevice wizard closed without completion: discarding unverified device connection", "OnboardingViewModel");
-            if (_bt.IsConnected)
+            if (SelectedDevice is { BluetoothAddress: not 0 } target &&
+                _config.Current.Devices.All(d => d.BluetoothAddress != target.BluetoothAddress))
             {
-                if (SelectedDevice is { } target) _bt.DisconnectDevice(target.BluetoothAddress);
+                _bt.RemoveDevice(target.BluetoothAddress);
             }
             if (!string.IsNullOrEmpty(_config.Current.SelectedDeviceId))
             {

@@ -28,12 +28,13 @@ public interface IBluetoothManager : IDisposable
     G9N9NVoiceButtonMode VoiceButtonMode { get; set; }
 
     event Action<RemoteDevice>? DeviceDiscovered;
-    event Action<bool, string>? ConnectionStatusChanged;
-    event Action? ConnectedDeviceInformationChanged;
-    event Action<float>? AudioLevelChanged;
-    event Action? VoiceButtonPressed;
-    event Action? VoiceSessionStarted;
-    event Action? VoiceSessionEnded;
+    event Action<ulong, bool, string>? ConnectionStatusChanged;
+    event Action<ulong>? ConnectedDeviceInformationChanged;
+    event Action<ulong, float>? AudioLevelChanged;
+    event Action<ulong>? VoiceButtonPressed;
+    event Action<ulong>? VoiceSessionStarted;
+    event Action<ulong>? VoiceSessionEnded;
+    event Action<ulong, string>? AudioOutputFailed { add { } remove { } }
 
     void StartScanning();
     void StopScanning();
@@ -45,6 +46,7 @@ public interface IBluetoothManager : IDisposable
     Task<bool> StartVoiceSessionAsync();
     Task<bool> StopVoiceSessionAsync();
     ulong VoiceDeviceAddress => IsStreaming ? ConnectedDeviceAddress : 0;
+    IReadOnlyCollection<ulong> ConnectedDeviceAddresses => IsConnected && ConnectedDeviceAddress != 0 ? [ConnectedDeviceAddress] : [];
     bool IsDeviceReady(ulong address) => IsReady && IsConnected && address != 0 && address == ConnectedDeviceAddress;
     Guid? GetDeviceContainerId(ulong address) => address == ConnectedDeviceAddress ? ConnectedDeviceContainerId : null;
     RemoteDeviceInformation? GetDeviceInformation(ulong address) => ConnectedDeviceInformation?.BluetoothAddress == address ? ConnectedDeviceInformation : null;
@@ -58,6 +60,7 @@ public interface IBluetoothManager : IDisposable
     {
         if (address == ConnectedDeviceAddress) Disconnect();
     }
+    void RemoveDevice(ulong address) => DisconnectDevice(address);
     Task<bool> StartVoiceSessionAsync(ulong address) => address == ConnectedDeviceAddress ? StartVoiceSessionAsync() : Task.FromResult(false);
     Task<bool> StopVoiceSessionAsync(ulong address) => address == ConnectedDeviceAddress ? StopVoiceSessionAsync() : Task.FromResult(false);
     Task ProbeButtonSourceAsync(Guid marker, ulong address) => Task.CompletedTask;

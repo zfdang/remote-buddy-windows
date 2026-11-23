@@ -29,21 +29,24 @@ public class ConvertersAndViewModelTests
         public G9N9NVoiceButtonMode VoiceButtonMode { get; set; } = G9N9NVoiceButtonMode.SmartToggle;
 
         public event Action<RemoteDevice>? DeviceDiscovered;
-        public event Action<bool, string>? ConnectionStatusChanged;
-        public event Action? ConnectedDeviceInformationChanged;
-        public event Action<float>? AudioLevelChanged { add { } remove { } }
-        public event Action? VoiceButtonPressed { add { } remove { } }
-        public event Action? VoiceSessionStarted { add { } remove { } }
-        public event Action? VoiceSessionEnded;
+        public event Action<ulong, bool, string>? ConnectionStatusChanged;
+        public event Action<ulong>? ConnectedDeviceInformationChanged;
+        public event Action<ulong, float>? AudioLevelChanged { add { } remove { } }
+        public event Action<ulong>? VoiceButtonPressed;
+        public event Action<ulong>? VoiceSessionStarted;
+        public event Action<ulong>? VoiceSessionEnded;
 
         public void RaiseDeviceDiscovered(RemoteDevice dev) => DeviceDiscovered?.Invoke(dev);
-        public void RaiseConnectionStatusChanged(bool connected, string name) => ConnectionStatusChanged?.Invoke(connected, name);
+        public void RaiseConnectionStatusChanged(bool connected, string name, ulong address = 0) =>
+            ConnectionStatusChanged?.Invoke(address != 0 ? address : ConnectedDeviceAddress, connected, name);
         public void SetConnectedDeviceInformation(RemoteDeviceInformation? information)
         {
             ConnectedDeviceInformation = information;
-            ConnectedDeviceInformationChanged?.Invoke();
+            ConnectedDeviceInformationChanged?.Invoke(information?.BluetoothAddress ?? ConnectedDeviceAddress);
         }
-        public void RaiseVoiceSessionEnded() => VoiceSessionEnded?.Invoke();
+        public void RaiseVoiceButtonPressed(ulong address = 0) => VoiceButtonPressed?.Invoke(address);
+        public void RaiseVoiceSessionStarted(ulong address = 0) => VoiceSessionStarted?.Invoke(address);
+        public void RaiseVoiceSessionEnded(ulong address = 0) => VoiceSessionEnded?.Invoke(address);
 
         public void StartScanning() => IsScanning = true;
         public void StopScanning() => IsScanning = false;

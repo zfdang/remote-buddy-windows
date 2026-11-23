@@ -15,7 +15,7 @@ namespace RemoteBuddy.App.ViewModels;
 
 public partial class MainViewModel : ObservableObject, IDisposable
 {
-    private record struct ActiveVoiceSession(VoiceTriggerMode TriggerMode, string Shortcut, TargetInputTool Tool);
+    private record struct ActiveVoiceSession(ulong DeviceAddress, long Token, VoiceTriggerMode TriggerMode, string Shortcut, TargetInputTool Tool);
 
     private readonly ConfigService _configService;
     private readonly IBluetoothManager _bluetoothManager;
@@ -23,7 +23,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly Dictionary<ulong, HidDeviceReader> _hidReaders = new();
     private readonly ChromecastButtonReceiver _chromecastButtonReceiver = new();
     private readonly RemoteVoiceKeyGuard _voiceKeyGuard;
+    private readonly object _voiceLifecycleLock = new();
     private ActiveVoiceSession? _activeVoiceSession;
+    private long _voiceEventSeq;
+    private ulong _liveVoiceAddress;
+    private long _liveVoiceToken;
+    private ulong _voiceKeyGuardOwnerAddress;
 
     private readonly Dictionary<ulong, RemoteButtonGestures> _gestures = new();
     private readonly Dictionary<ulong, (RemoteButton Button, bool Down, long Time)> _dedup = new();
@@ -228,23 +233,72 @@ public partial class MainViewModel : ObservableObject, IDisposable
         });
     }
 
-    private void OnConnectionStatusChanged(bool connected, string name) => RunOnUi(() =>
+    private void OnConnectionStatusChanged(ulong address, bool connected, string name) => RunOnUi(() =>
     {
-        IsConnected = connected;
-        ConnectedDeviceName = connected ? name : "未连接设备";
+        bool anyConnected = _bluetoothManager.IsConnected;
+        IsConnected = anyConnected;
+        var connectedAddresses = _bluetoothManager.ConnectedDeviceAddresses;
+        if (!anyConnected)
+        {
+            ConnectedDeviceName = "未连接设备";
+        }
+        else if (connectedAddresses.Count > 1)
+        {
+            ConnectedDeviceName = $"已连接 {connectedAddresses.Count} 台遥控器";
+        }
+        else
+        {
+            ulong activeAddr = connectedAddresses.FirstOrDefault();
+            var activeDev = activeAddr != 0 ? KnownRemotes().FirstOrDefault(d => d.BluetoothAddress == activeAddr) : null;
+            ConnectedDeviceName = !string.IsNullOrEmpty(activeDev?.Name) ? activeDev.Name :
+                (!string.IsNullOrEmpty(_bluetoothManager.ConnectedDeviceName) ? _bluetoothManager.ConnectedDeviceName :
+                (connected && !string.IsNullOrEmpty(name) ? name : "已连接遥控器"));
+        }
+
         if (!connected)
         {
-            IsVoiceActive = false;
-            CurrentAudioLevel = 0;
-            ReleaseHeldVoiceShortcut();
-            _voiceKeyGuard.Clear();
-            _rawInputReceiver.ResetDeviceState();
+            bool matchesActiveVoice = address == 0 || !anyConnected || _activeVoiceSession?.DeviceAddress == address;
+            if (matchesActiveVoice)
+            {
+                lock (_voiceLifecycleLock)
+                {
+                    if (address == 0 || !anyConnected || _liveVoiceAddress == address)
+                    {
+                        _liveVoiceAddress = 0;
+                        _liveVoiceToken = 0;
+                    }
+                }
+                IsVoiceActive = false;
+                CurrentAudioLevel = 0;
+                ReleaseHeldVoiceShortcut();
+            }
+
+            if (address == 0 || !anyConnected || _voiceKeyGuardOwnerAddress == address)
+            {
+                _voiceKeyGuard.Clear();
+                _voiceKeyGuardOwnerAddress = 0;
+            }
+
+            if (!anyConnected || address == 0)
+            {
+                _rawInputReceiver.ResetDeviceState();
+            }
+            else
+            {
+                ResetDeviceGestures(address);
+                foreach (var handle in _rawAddresses.Where(pair => pair.Value == address).Select(pair => pair.Key).ToArray())
+                {
+                    _rawAddresses.Remove(handle);
+                    _rawInputReceiver.ResetDeviceState(handle);
+                }
+            }
         }
 
         // The selection is the mapping editor's selection, independent of connection state.
         if (_bluetoothManager is not MultiRemoteBluetoothManager && connected)
         {
-            var device = KnownRemotes().FirstOrDefault(d => d.BluetoothAddress == _bluetoothManager.ConnectedDeviceAddress)
+            ulong resolvedAddr = address != 0 ? address : _bluetoothManager.ConnectedDeviceAddress;
+            var device = KnownRemotes().FirstOrDefault(d => d.BluetoothAddress == resolvedAddr)
                 ?? _configService.Current.Devices.FirstOrDefault(d => d.Id == _configService.Current.SelectedDeviceId);
             if (device != null)
             {
@@ -258,8 +312,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         RefreshInputSources();
     });
 
-    private void OnAudioLevelChanged(float level)
+    private void OnAudioLevelChanged(ulong address, float level)
     {
+        if (address != 0 && _bluetoothManager.VoiceDeviceAddress is { } activeOwner && activeOwner != 0 && activeOwner != address)
+            return;
+
         if (System.Windows.Application.Current?.Dispatcher != null && !System.Windows.Application.Current.Dispatcher.CheckAccess())
         {
             System.Windows.Application.Current.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Render, () =>
@@ -273,24 +330,48 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void OnVoiceSessionStarted()
+    private void OnVoiceSessionStarted(ulong address)
     {
-        ulong owner = _bluetoothManager.VoiceDeviceAddress;
+        ulong owner = address != 0 ? address : _bluetoothManager.VoiceDeviceAddress;
+        long token;
+        lock (_voiceLifecycleLock)
+        {
+            token = ++_voiceEventSeq;
+            _liveVoiceAddress = owner;
+            _liveVoiceToken = token;
+        }
+
         void Update()
         {
+            lock (_voiceLifecycleLock)
+            {
+                if (_liveVoiceToken != token) return;
+            }
+
             IsVoiceActive = true;
             if (ActiveOnboardingVm is { } onboarding && (onboarding.CurrentWizardStep != WizardStep.TranscriptionVerify ||
-                (owner != 0 && onboarding.SelectedDevice?.BluetoothAddress != owner))) return;
+                (owner != 0 && onboarding.SelectedDevice is { BluetoothAddress: not 0 } selected && selected.BluetoothAddress != owner)))
+            {
+                return;
+            }
+
+            // Clean up any orphaned prior session that wasn't closed on the UI thread yet
+            if (_activeVoiceSession != null)
+            {
+                ReleaseHeldVoiceShortcut();
+            }
+
             UpdateVoiceKeyGuard();
             // ATVV is itself a verified remote source. Some Windows BLE HID
             // paths do not deliver a source-bearing F5 Raw Input event, so
             // relying solely on PhysicalVoiceKeyPressed leaves F5 held when
             // the IME chord is injected.
+            _voiceKeyGuardOwnerAddress = owner;
             _voiceKeyGuard.Arm();
             var currentConfig = _configService.Current.InputTool;
-            var session = new ActiveVoiceSession(currentConfig.TriggerMode, currentConfig.Shortcut, currentConfig.Tool);
+            var session = new ActiveVoiceSession(owner, token, currentConfig.TriggerMode, currentConfig.Shortcut, currentConfig.Tool);
             _activeVoiceSession = session;
-            AppLogger.Info($"Voice session started: Tool={session.Tool}, Mode={session.TriggerMode}, Shortcut='{session.Shortcut}'", "MainViewModel");
+            AppLogger.Info($"Voice session started: Device=0x{owner:X12}, Tool={session.Tool}, Mode={session.TriggerMode}, Shortcut='{session.Shortcut}'", "MainViewModel");
             if (session.TriggerMode == VoiceTriggerMode.HoldToTalk)
             {
                 _voiceKeyGuard.BeginShortcutHold(session.Shortcut);
@@ -315,17 +396,37 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void OnVoiceSessionEnded()
+    private void OnVoiceSessionEnded(ulong address)
     {
+        long endedToken = 0;
+        lock (_voiceLifecycleLock)
+        {
+            if (address == 0 || _liveVoiceAddress == address || _liveVoiceAddress == 0)
+            {
+                endedToken = _liveVoiceToken;
+                _liveVoiceAddress = 0;
+                _liveVoiceToken = 0;
+            }
+        }
+
         void Update()
         {
-            _voiceKeyGuard.Clear();
-            IsVoiceActive = false;
-            CurrentAudioLevel = 0f;
             if (_activeVoiceSession is { } session)
             {
+                bool matchesAddress = address == 0 || session.DeviceAddress == 0 || session.DeviceAddress == address;
+                bool matchesToken = endedToken == 0 || session.Token == endedToken;
+                if (!matchesAddress || !matchesToken)
+                {
+                    AppLogger.Debug($"Ignoring stale VoiceSessionEnded for 0x{address:X12} (active=0x{session.DeviceAddress:X12}, token={session.Token}, endedToken={endedToken})", "MainViewModel");
+                    return;
+                }
+
+                _voiceKeyGuard.Clear();
+                _voiceKeyGuardOwnerAddress = 0;
+                IsVoiceActive = false;
+                CurrentAudioLevel = 0f;
                 _activeVoiceSession = null;
-                AppLogger.Info($"Voice session ended: Mode={session.TriggerMode}, Shortcut='{session.Shortcut}'", "MainViewModel");
+                AppLogger.Info($"Voice session ended: Device=0x{session.DeviceAddress:X12}, Mode={session.TriggerMode}, Shortcut='{session.Shortcut}'", "MainViewModel");
                 if (session.TriggerMode == VoiceTriggerMode.HoldToTalk)
                 {
                     NativeInputSender.SendShortcutUp(session.Shortcut);
@@ -334,6 +435,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 {
                     NativeInputSender.SendShortcutClick(session.Shortcut);
                 }
+            }
+            else if (_liveVoiceToken == 0)
+            {
+                _voiceKeyGuard.Clear();
+                _voiceKeyGuardOwnerAddress = 0;
+                IsVoiceActive = false;
+                CurrentAudioLevel = 0f;
             }
         }
 
@@ -347,15 +455,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void OnVoiceButtonPressed()
+    private void OnVoiceButtonPressed(ulong address)
     {
-        ulong address = _bluetoothManager.VoiceDeviceAddress;
-        if (address == 0) address = _bluetoothManager.ConnectedDeviceAddress;
+        ulong resolved = address != 0 ? address :
+            (_bluetoothManager.VoiceDeviceAddress != 0 ? _bluetoothManager.VoiceDeviceAddress : _bluetoothManager.ConnectedDeviceAddress);
         RunOnUi(() =>
         {
-            var device = KnownRemotes().FirstOrDefault(d => d.BluetoothAddress == address);
+            var device = KnownRemotes().FirstOrDefault(d => d.BluetoothAddress == resolved);
             if (ActiveOnboardingVm is { CurrentWizardStep: WizardStep.ButtonTest } onboarding &&
-                onboarding.SelectedDevice?.BluetoothAddress == address)
+                (onboarding.SelectedDevice?.BluetoothAddress == resolved || (resolved == 0 && onboarding.SelectedDevice != null)))
                 onboarding.NotifyButtonPressed(RemoteButton.Voice);
             else if (ActiveOnboardingVm == null && device != null)
                 ShowMappingPress(RemoteButton.Voice, device);
@@ -430,7 +538,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         ulong source = _rawAddresses.GetValueOrDefault(handle);
         ulong owner = _bluetoothManager.VoiceDeviceAddress;
-        if (source != 0 && (owner == 0 || source == owner)) _voiceKeyGuard.Arm();
+        if (source != 0 && (owner == 0 || source == owner))
+        {
+            _voiceKeyGuardOwnerAddress = source;
+            _voiceKeyGuard.Arm();
+        }
     }
 
     private void OnRawButtonEvent(IntPtr handle, RemoteButton button, bool isDown)
@@ -558,6 +670,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
         }
         _voiceKeyGuard.EndShortcutHold();
+        _voiceKeyGuardOwnerAddress = 0;
         NativeInputSender.ReleaseAllHeldSyntheticKeys();
     }
 
