@@ -182,6 +182,7 @@ public sealed class MultiRemoteBluetoothManager : IBluetoothManager
     public Task<bool> StopVoiceSessionAsync(ulong address) => _voice.Owner == _remotes.GetValueOrDefault(address)?.Remote && _voice.Owner is { } owner
         ? owner.StopVoiceSessionAsync() : Task.FromResult(false);
     public Task ProbeButtonSourceAsync(Guid marker, ulong address) => _remotes.GetValueOrDefault(address)?.Remote.ProbeButtonSourceAsync(marker) ?? Task.CompletedTask;
+    public EtwAttributeFilter GetEtwAttributeFilter(ulong address) => _remotes.GetValueOrDefault(address)?.Remote.ConnectedEtwAttributeFilter ?? default;
 
     public void Dispose()
     {

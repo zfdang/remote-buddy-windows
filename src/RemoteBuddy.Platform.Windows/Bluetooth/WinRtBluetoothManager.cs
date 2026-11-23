@@ -43,7 +43,9 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
     private static readonly Guid DeviceInformationServiceUuid = new("0000180A-0000-1000-8000-00805F9B34FB");
     private static readonly Guid ModelNumberUuid = new("00002A24-0000-1000-8000-00805F9B34FB");
     private static readonly Guid FirmwareRevisionUuid = new("00002A26-0000-1000-8000-00805F9B34FB");
+    private static readonly Guid HardwareRevisionUuid = new("00002A27-0000-1000-8000-00805F9B34FB");
     private static readonly Guid PnpIdUuid = new("00002A50-0000-1000-8000-00805F9B34FB");
+    private static readonly Guid HidServiceUuid = new("00001812-0000-1000-8000-00805F9B34FB");
 
     private readonly BluetoothLEAdvertisementWatcher _watcher;
     private BluetoothLEDevice? _connectedDevice;
@@ -113,6 +115,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
     public ulong ConnectedDeviceAddress => _connectedDevice?.BluetoothAddress ?? 0;
     public Guid? ConnectedDeviceContainerId { get; private set; }
     public RemoteDeviceInformation? ConnectedDeviceInformation { get; private set; }
+    public EtwAttributeFilter ConnectedEtwAttributeFilter { get; private set; }
 
     internal async Task ProbeButtonSourceAsync(Guid marker)
     {
@@ -548,6 +551,16 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 foundContainerId = Input.RawInputReceiver.GetDeviceContainerId(device.DeviceId);
             }
 
+            EtwAttributeFilter discoveredFilter = default;
+            if (isChromecast)
+            {
+                discoveredFilter = await DiscoverChromecastAttributeFilterAsync(
+                    device,
+                    tx.AttributeHandle,
+                    audio.AttributeHandle,
+                    control.AttributeHandle).ConfigureAwait(false);
+            }
+
             lock (_stateLock)
             {
                 if (targetConnGen != _connectionGeneration)
@@ -560,6 +573,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 ConnectedDeviceContainerId = foundContainerId;
                 if (isChromecast)
                 {
+                    ConnectedEtwAttributeFilter = discoveredFilter;
                     information = information with { VoiceCapabilities = capabilities };
                     ConnectedDeviceInformation = information;
                 }
@@ -590,9 +604,149 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
         }
     }
 
+    private static async Task<EtwAttributeFilter> DiscoverChromecastAttributeFilterAsync(
+        BluetoothLEDevice device,
+        ushort txHandle,
+        ushort audioHandle,
+        ushort controlHandle)
+    {
+        ushort[] priorityExcluded = new ushort[] { txHandle, audioHandle, controlHandle }
+            .Where(h => h != 0)
+            .Distinct()
+            .OrderBy(h => h)
+            .ToArray();
+
+        try
+        {
+            var servicesResult = await device.GetGattServicesAsync(BluetoothCacheMode.Cached).AsTask().ConfigureAwait(false);
+            try
+            {
+                if (servicesResult.Status != GattCommunicationStatus.Success || servicesResult.Services.Count == 0)
+                {
+                    AppLogger.Info(
+                        $"G9N9N GATT layout discovery unavailable for 0x{device.BluetoothAddress:X12}: Status={servicesResult.Status}, Count={servicesResult.Services.Count}; falling back to priority exclusions [{string.Join(", ", priorityExcluded.Select(h => $"0x{h:X4}"))}]",
+                        "BluetoothManager");
+                    return new EtwAttributeFilter(0, 0, priorityExcluded);
+                }
+
+                var services = new List<(Guid ServiceUuid, ushort StartHandle)>(servicesResult.Services.Count);
+                var nonHidHandles = new List<ushort>();
+                foreach (var svc in servicesResult.Services)
+                {
+                    services.Add((svc.Uuid, svc.AttributeHandle));
+                    if (svc.Uuid == HidServiceUuid) continue;
+
+                    try
+                    {
+                        var charsResult = await svc.GetCharacteristicsAsync(BluetoothCacheMode.Cached).AsTask().ConfigureAwait(false);
+                        if (charsResult.Status == GattCommunicationStatus.Success)
+                        {
+                            foreach (var ch in charsResult.Characteristics)
+                            {
+                                if (ch.AttributeHandle != 0)
+                                {
+                                    nonHidHandles.Add(ch.AttributeHandle);
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        AppLogger.Debug($"Non-HID characteristic scan skipped for service {svc.Uuid}: {ex.Message}", "BluetoothManager");
+                    }
+                }
+
+                var filter = BuildEtwAttributeFilter(services, priorityExcluded, nonHidHandles, out string summary);
+                AppLogger.Info($"G9N9N GATT layout for 0x{device.BluetoothAddress:X12}: {summary}", "BluetoothManager");
+                return filter;
+            }
+            finally
+            {
+                foreach (var svc in servicesResult.Services) svc.Dispose();
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Info(
+                $"G9N9N GATT layout discovery failed for 0x{device.BluetoothAddress:X12}: {ex.Message}; falling back to priority exclusions [{string.Join(", ", priorityExcluded.Select(h => $"0x{h:X4}"))}]",
+                "BluetoothManager");
+            return new EtwAttributeFilter(0, 0, priorityExcluded);
+        }
+    }
+
+    internal static EtwAttributeFilter BuildEtwAttributeFilter(
+        IReadOnlyList<(Guid ServiceUuid, ushort StartHandle)> services,
+        IReadOnlyCollection<ushort> priorityExcludedHandles,
+        IReadOnlyCollection<ushort> nonHidCharacteristicHandles,
+        out string summary)
+    {
+        var sorted = services
+            .Where(s => s.StartHandle > 0)
+            .Distinct()
+            .OrderBy(s => s.StartHandle)
+            .ToArray();
+
+        ushort hidStart = 0;
+        ushort hidEnd = 0;
+        for (int i = 0; i < sorted.Length; i++)
+        {
+            if (sorted[i].ServiceUuid != HidServiceUuid) continue;
+            hidStart = sorted[i].StartHandle;
+            hidEnd = (i + 1 < sorted.Length && sorted[i + 1].StartHandle > hidStart)
+                ? (ushort)(sorted[i + 1].StartHandle - 1)
+                : ushort.MaxValue;
+            break;
+        }
+
+        bool hasHidRange = hidStart > 0 && hidEnd >= hidStart;
+        var excluded = new SortedSet<ushort>();
+        foreach (ushort handle in priorityExcludedHandles)
+        {
+            if (handle != 0) excluded.Add(handle);
+        }
+
+        foreach (ushort handle in nonHidCharacteristicHandles.Where(h => h != 0).Distinct().OrderBy(h => h))
+        {
+            if (hasHidRange && (handle < hidStart || handle > hidEnd)) continue;
+            if (excluded.Count >= 32) break;
+            excluded.Add(handle);
+        }
+
+        var serviceSummaries = new List<string>(sorted.Length);
+        for (int i = 0; i < sorted.Length; i++)
+        {
+            ushort end = (i + 1 < sorted.Length && sorted[i + 1].StartHandle > sorted[i].StartHandle)
+                ? (ushort)(sorted[i + 1].StartHandle - 1)
+                : ushort.MaxValue;
+            serviceSummaries.Add($"{FormatServiceUuid(sorted[i].ServiceUuid)}@0x{sorted[i].StartHandle:X4}..0x{end:X4}");
+        }
+
+        ushort[] excludedArray = excluded.ToArray();
+        summary =
+            $"hidRange={(hasHidRange ? $"0x{hidStart:X4}..0x{hidEnd:X4}" : "none")}, " +
+            $"excluded=[{string.Join(", ", excludedArray.Select(h => $"0x{h:X4}"))}], " +
+            $"services=[{string.Join(", ", serviceSummaries)}]";
+
+        return new EtwAttributeFilter(hidStart, hidEnd, excludedArray);
+    }
+
+    private static string FormatServiceUuid(Guid uuid)
+    {
+        string formatted = uuid.ToString("D");
+        if (formatted.StartsWith("0000", StringComparison.OrdinalIgnoreCase) &&
+            formatted.EndsWith("-0000-1000-8000-00805f9b34fb", StringComparison.OrdinalIgnoreCase))
+        {
+            return "0x" + formatted.Substring(4, 4).ToUpperInvariant();
+        }
+        return formatted;
+    }
+
     private async Task LoadChromecastHardwareDetailsAsync(BluetoothLEDevice device, int generation, RemoteDeviceInformation information)
     {
         var updated = await ReadDeviceInformationAsync(device, information, includeHardwareDetails: true).ConfigureAwait(false);
+        AppLogger.Info(
+            $"G9N9N hardware details for 0x{device.BluetoothAddress:X12}: model='{updated.ModelNumber ?? "-"}', firmware='{updated.FirmwareRevision ?? "-"}', hardwareRev='{updated.HardwareRevision ?? "-"}', pnp='{updated.VendorProductId ?? "-"}', hidVersion='{updated.HidVersionText ?? "-"}'",
+            "BluetoothManager");
         if (updated == information) return;
 
         lock (_stateLock)
@@ -620,11 +774,14 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 if (!includeHardwareDetails) return information;
 
                 var firmware = await ReadDeviceInformationValueAsync(service, FirmwareRevisionUuid).ConfigureAwait(false);
+                var hardware = await ReadDeviceInformationValueAsync(service, HardwareRevisionUuid).ConfigureAwait(false);
                 var pnpId = await ReadDeviceInformationValueAsync(service, PnpIdUuid).ConfigureAwait(false);
                 return information with
                 {
                     FirmwareRevision = RemoteDeviceInformation.DecodeDeviceString(firmware),
+                    HardwareRevision = RemoteDeviceInformation.DecodeDeviceString(hardware),
                     PnpId = RemoteDeviceInformation.DecodePnpId(pnpId),
+                    ProductVersion = RemoteDeviceInformation.DecodePnpProductVersion(pnpId),
                 };
             }
             finally
@@ -1930,6 +2087,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
             _audioStopReceived = false;
             ConnectedDeviceContainerId = null;
             ConnectedDeviceInformation = null;
+            ConnectedEtwAttributeFilter = default;
             _capabilitiesTcs?.TrySetCanceled();
             _audioStopTcs?.TrySetCanceled();
         }

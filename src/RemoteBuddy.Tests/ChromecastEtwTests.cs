@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
+using RemoteBuddy.Core.Diagnostics;
 using RemoteBuddy.Core.Models;
 using RemoteBuddy.Platform.Windows.Bluetooth;
 using RemoteBuddy.Platform.Windows.Input;
@@ -590,5 +591,298 @@ public class ChromecastEtwTests
         Assert.True(ChromecastEtwReceiver.TryParseAclPacket(padded, out var btn, out bool down, EtwProtocolKind.GoogleG9N9N));
         Assert.Equal(RemoteButton.Ok, btn);
         Assert.True(down);
+    }
+
+    private static (byte[] Request, byte[] Response) CreateProbeHandshake(Guid marker, ushort connectionHandle = 0x0040)
+    {
+        byte[] markerPayload = new byte[20];
+        new byte[] { 0xFF, 0xFF, 0x00, 0x28 }.CopyTo(markerPayload, 0);
+        var uuid = markerPayload.AsSpan(4);
+        marker.TryWriteBytes(uuid, bigEndian: true, out _);
+        uuid.Reverse();
+        return (
+            CreateAclPacket(0x06, 0x0001, markerPayload, connectionHandle),
+            CreateAclPacket(0x01, 0x0106, [0x00, 0x0A], connectionHandle));
+    }
+
+    private static void BindSource(ChromecastEtwReceiver receiver, EtwButtonSource source, ushort connectionHandle = 0x0040)
+    {
+        var (request, response) = CreateProbeHandshake(source.Marker, connectionHandle);
+        receiver.ProcessPacket(4, request);
+        receiver.ProcessPacket(3, response);
+    }
+
+    [Theory]
+    [InlineData(0x01, RemoteButton.Power)]
+    [InlineData(0x03, RemoteButton.Up)]
+    [InlineData(0x04, RemoteButton.Down)]
+    [InlineData(0x05, RemoteButton.Left)]
+    [InlineData(0x06, RemoteButton.Right)]
+    [InlineData(0x07, RemoteButton.Ok)]
+    [InlineData(0x08, RemoteButton.Mute)]
+    [InlineData(0x0A, RemoteButton.Home)]
+    [InlineData(0x0B, RemoteButton.Back)]
+    [InlineData(0x0C, RemoteButton.VolumeUp)]
+    [InlineData(0x0D, RemoteButton.VolumeDown)]
+    [InlineData(0x0E, RemoteButton.YouTube)]
+    [InlineData(0x0F, RemoteButton.Netflix)]
+    [InlineData(0x11, RemoteButton.Input)]
+    public void G9N9N_1ByteShortReport_PressAndRelease_DecodesOn0046AndInHidRange(byte code, RemoteButton expected)
+    {
+        IReadOnlySet<ushort> customAttrs = new HashSet<ushort> { 0x0046 };
+        Assert.True(ChromecastEtwReceiver.TryParseAclPacket(
+            CreateAclPacket(0x1B, 0x0046, [code]),
+            out var staticBtn, out bool staticDown, out _, EtwProtocolKind.GoogleG9N9N, customAttrs));
+        Assert.Equal(expected, staticBtn);
+        Assert.True(staticDown);
+
+        Assert.True(ChromecastEtwReceiver.TryParseAclPacket(
+            CreateAclPacket(0x1B, 0x0046, [0x00]),
+            out var releaseBtn, out bool releaseDown, out _, EtwProtocolKind.GoogleG9N9N, customAttrs));
+        Assert.Equal(RemoteButton.None, releaseBtn);
+        Assert.False(releaseDown);
+
+        // Stateful ProcessPacket: both fallback (no HID range) and discovered HID range
+        foreach (var range in new (ushort Start, ushort End)[] { (0, 0), (0x0030, 0x0050) })
+        {
+            using var receiver = new ChromecastEtwReceiver();
+            var source = new EtwButtonSource(0xA02607, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, range.Start, range.End);
+            receiver.SetSources([source]);
+            var edges = new List<(RemoteButton, bool)>();
+            receiver.ButtonEvent += (_, btn, down) => edges.Add((btn, down));
+            BindSource(receiver, source);
+
+            receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0046, [code]));
+            receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0046, [0x00]));
+
+            Assert.Equal([(expected, true), (expected, false)], edges);
+        }
+    }
+
+    [Theory]
+    [InlineData(0x01, 0x00, RemoteButton.Power)]
+    [InlineData(0x03, 0x00, RemoteButton.Up)]
+    [InlineData(0x11, 0x00, RemoteButton.Input)]
+    [InlineData(0x03, 0x0B, RemoteButton.Up)]
+    public void G9N9N_2ByteIndexedReport_ParsesPowerWithoutReportIdMisparseAndChords(byte b0, byte b1, RemoteButton expected)
+    {
+        using var receiver = new ChromecastEtwReceiver();
+        var source = new EtwButtonSource(0x01102602, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x0020, 0x0050);
+        receiver.SetSources([source]);
+        var edges = new List<(RemoteButton, bool)>();
+        receiver.ButtonEvent += (_, btn, down) => edges.Add((btn, down));
+        BindSource(receiver, source);
+
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0035, [b0, b1]));
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0035, [0x00, 0x00]));
+
+        Assert.Equal([(expected, true), (expected, false)], edges);
+    }
+
+    [Theory]
+    [InlineData(0x0042, RemoteButton.Up)]
+    [InlineData(0x0043, RemoteButton.Down)]
+    [InlineData(0x0044, RemoteButton.Left)]
+    [InlineData(0x0045, RemoteButton.Right)]
+    [InlineData(0x0041, RemoteButton.Ok)]
+    [InlineData(0x0224, RemoteButton.Back)]
+    [InlineData(0x0223, RemoteButton.Home)]
+    [InlineData(0x00E2, RemoteButton.Mute)]
+    [InlineData(0x00E9, RemoteButton.VolumeUp)]
+    [InlineData(0x00EA, RemoteButton.VolumeDown)]
+    [InlineData(0x0077, RemoteButton.YouTube)]
+    [InlineData(0x0078, RemoteButton.Netflix)]
+    [InlineData(0x019E, RemoteButton.Power)]
+    [InlineData(0x0189, RemoteButton.Input)]
+    public void G9N9N_011B_2ByteAnd3ByteConsumerUsage_All14KeysWorkInHidRange(ushort usage, RemoteButton expected)
+    {
+        byte lo = (byte)(usage & 0xFF);
+        byte hi = (byte)((usage >> 8) & 0xFF);
+
+        using var receiver = new ChromecastEtwReceiver();
+        var source = new EtwButtonSource(0x011B0001, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x0025, 0x0050, [0x0015, 0x0028]);
+        receiver.SetSources([source]);
+        var edges = new List<(RemoteButton, bool)>();
+        receiver.ButtonEvent += (_, btn, down) => edges.Add((btn, down));
+        BindSource(receiver, source);
+
+        // 2-byte truncated Consumer Usage on handle 0x004A inside HID range
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x004A, [lo, hi]));
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x004A, [0x00, 0x00]));
+        // Compliant 3-byte Consumer Usage payload [lo, hi, 0x00] / [0, 0, 0]
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x004A, [lo, hi, 0x00]));
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x004A, [0x00, 0x00, 0x00]));
+
+        Assert.Equal([(expected, true), (expected, false), (expected, true), (expected, false)], edges);
+    }
+
+    [Fact]
+    public void G9N9N_ZeroRegression_Locks0029AndRejectsAtvvAndOutsideHidRange()
+    {
+        using var receiver = new ChromecastEtwReceiver();
+        var source = new EtwButtonSource(
+            0x4754514C6FCC,
+            Guid.NewGuid(),
+            EtwProtocolKind.GoogleG9N9N,
+            HidHandleStart: 0x0020,
+            HidHandleEnd: 0x0050,
+            ExcludedAttributes: [0x0025, 0x0028, 0x002D]);
+        receiver.SetSources([source]);
+        var edges = new List<(RemoteButton, bool)>();
+        receiver.ButtonEvent += (_, btn, down) => edges.Add((btn, down));
+        BindSource(receiver, source);
+
+        // Excluded ATVV handles cannot spoof Mute (0x08) or PlayPause ([0x00, 0x02]) even inside HID range
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0025, [0x08]));
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0028, [0x00, 0x02]));
+        // [0x00, 0x02] must never parse even on 0x0029 or 0x0046
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x00, 0x02]));
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0046, [0x00, 0x02]));
+        // Battery / DIS handle outside HID range (0x0055) sending 10% (0x0A) must not trigger Home
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0055, [0x0A]));
+        Assert.Empty(edges);
+
+        // Valid press on 0x0029 locks the connection onto 0x0029
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x07, 0, 0, 0, 0, 0, 0, 0]));
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, new byte[8]));
+        // After lock-in, another handle inside HID range (e.g. 0x0031 / 0x0046) must be ignored
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0031, [0x0A]));
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0046, [0x42, 0x00]));
+        Assert.Equal([(RemoteButton.Ok, true), (RemoteButton.Ok, false)], edges);
+
+        // Disconnect clears lock so rebinding works cleanly on next connection
+        receiver.ProcessPacket(2, [0x05, 0x04, 0x00, 0x40, 0x00, 0x13]);
+        BindSource(receiver, source);
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0046, [0x03]));
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0046, [0x00]));
+        Assert.Equal([(RemoteButton.Ok, true), (RemoteButton.Ok, false), (RemoteButton.Up, true), (RemoteButton.Up, false)], edges);
+    }
+
+    [Theory]
+    [InlineData(1, 0x0046)]
+    [InlineData(2, 0x0046)]
+    [InlineData(3, 0x0029)]
+    [InlineData(8, 0x0029)]
+    public void G9N9N_RedactedHeaderOnlyPackets_AreDetectedFor1_2_3_And8BytePayloads(int payloadLength, ushort handle)
+    {
+        IReadOnlySet<ushort> customAttrs = new HashSet<ushort> { 0x0029, 0x0046 };
+        byte[] redacted = CreateAclPacket(0x1B, handle, new byte[payloadLength])[..11];
+
+        bool ok = ChromecastEtwReceiver.TryParseAclPacket(redacted, out _, out _, out bool isTruncated, EtwProtocolKind.GoogleG9N9N, customAttrs);
+        Assert.False(ok);
+        Assert.True(isTruncated);
+
+        using var receiver = new ChromecastEtwReceiver();
+        var source = new EtwButtonSource(0x1234, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x0020, 0x0050);
+        receiver.SetSources([source]);
+        var truncatedAddrs = new List<ulong>();
+        receiver.TruncatedPacketDetected += truncatedAddrs.Add;
+        BindSource(receiver, source);
+
+        receiver.ProcessPacket(3, redacted);
+        Assert.Equal([0x1234UL], truncatedAddrs);
+    }
+
+    [Fact]
+    public void G9N9N_DiagnosticLogging_LogsObservedFormat_IgnoresExcluded_AndCapsUnknownsAt32()
+    {
+        string tempLogDir = Path.Combine(Path.GetTempPath(), "RB_G9N9N_Diag_" + Guid.NewGuid().ToString("N"));
+        AppLogger.ResetForTesting();
+        AppLogger.Initialize(tempLogDir);
+        try
+        {
+            using var receiver = new ChromecastEtwReceiver();
+            var source = new EtwButtonSource(
+                0xABCDEF123456,
+                Guid.NewGuid(),
+                EtwProtocolKind.GoogleG9N9N,
+                HidHandleStart: 0x0020,
+                HidHandleEnd: 0x0050,
+                ExcludedAttributes: [0x0025, 0x0028]);
+            receiver.SetSources([source]);
+            BindSource(receiver, source);
+
+            // Observed format on valid button press
+            receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0046, [0x42, 0x00]));
+            receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0046, [0x00, 0x00]));
+
+            // Excluded attribute notifications must stay silent
+            receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0025, [0x08]));
+            receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0028, [0xDE, 0xAD, 0xBE, 0xEF]));
+
+            // Duplicate unknown payload inside HID range -> logged once
+            receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0048, [0xDE, 0xAD, 0xBE, 0xEF]));
+            receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0048, [0xDE, 0xAD, 0xBE, 0xEF]));
+
+            // Outside HID range non-excluded notification -> logged once (#2)
+            receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0055, [0x0A]));
+
+            // Send 32 additional distinct unrecognized payloads (#3..#32 logged, #33 triggers cap, #34 suppressed)
+            for (byte i = 1; i <= 32; i++)
+            {
+                receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0048, [0x5A, i, 0x01, 0x02]));
+            }
+
+            string logText = File.ReadAllText(AppLogger.CurrentLogFilePath);
+            Assert.Contains("G9N9N ETW report format observed: addr=0xABCDEF123456, attr=0x0046, format=ConsumerUsage2Byte, len=2, sample=4200, button=Up, down=True", logText);
+            Assert.Contains("G9N9N ETW unrecognized notification [UnknownPayload]: addr=0xABCDEF123456, attr=0x0048, opcode=0x1B, len=4, hex=DEADBEEF (hidRange=0x0020..0x0050)", logText);
+            Assert.Contains("G9N9N ETW unrecognized notification [OutsideHidRange]: addr=0xABCDEF123456, attr=0x0055, opcode=0x1B, len=1, hex=0A (hidRange=0x0020..0x0050)", logText);
+            Assert.Contains("log cap (32) reached", logText);
+            Assert.DoesNotContain("attr=0x0025", logText);
+            Assert.DoesNotContain("attr=0x0028", logText);
+            Assert.DoesNotContain("hex=5A200102", logText); // 32nd loop iteration = 34th unique item -> suppressed
+
+            int unrecognizedLines = logText.Split('\n').Count(line => line.Contains("G9N9N ETW unrecognized notification ["));
+            Assert.Equal(32, unrecognizedLines);
+        }
+        finally
+        {
+            AppLogger.ResetForTesting();
+            try
+            {
+                if (Directory.Exists(tempLogDir)) Directory.Delete(tempLogDir, recursive: true);
+            }
+            catch { }
+        }
+    }
+
+    [Fact]
+    public void BuildEtwAttributeFilter_ComputesHidRangeAndExclusionsCorrectly()
+    {
+        Guid gap = new("00001800-0000-1000-8000-00805F9B34FB");
+        Guid gatt = new("00001801-0000-1000-8000-00805F9B34FB");
+        Guid hid = new("00001812-0000-1000-8000-00805F9B34FB");
+        Guid atvv = new("AB5E0001-5A21-4F05-BC7D-AF01F617B664");
+        Guid battery = new("0000180F-0000-1000-8000-00805F9B34FB");
+
+        // 0x1812 in middle
+        var midFilter = WinRtBluetoothManager.BuildEtwAttributeFilter(
+            [(battery, 0x0060), (hid, 0x0020), (gap, 0x0001), (atvv, 0x0050), (gatt, 0x0010)],
+            [0x0052, 0x0054, 0x0056],
+            [0x0062, 0x0012, 0x0052],
+            out string midSummary);
+        Assert.Equal(0x0020, midFilter.HidHandleStart);
+        Assert.Equal(0x004F, midFilter.HidHandleEnd);
+        Assert.Equal([0x0052, 0x0054, 0x0056], midFilter.ExcludedAttributes);
+        Assert.Contains("hidRange=0x0020..0x004F", midSummary);
+        Assert.Contains("0x1812@0x0020..0x004F", midSummary);
+
+        // 0x1812 as last service
+        var lastFilter = WinRtBluetoothManager.BuildEtwAttributeFilter(
+            [(gap, 0x0001), (hid, 0x0050)],
+            [0x0025],
+            [],
+            out _);
+        Assert.Equal(0x0050, lastFilter.HidHandleStart);
+        Assert.Equal(ushort.MaxValue, lastFilter.HidHandleEnd);
+
+        // 0x1812 missing -> fallback includes sorted distinct non-HID handles
+        var missingFilter = WinRtBluetoothManager.BuildEtwAttributeFilter(
+            [(gap, 0x0001), (atvv, 0x0050)],
+            [0x0054, 0x0052],
+            [0x0062, 0x0012],
+            out _);
+        Assert.False(missingFilter.HasHidRange);
+        Assert.Equal([0x0012, 0x0052, 0x0054, 0x0062], missingFilter.ExcludedAttributes);
     }
 }

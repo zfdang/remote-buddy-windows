@@ -745,7 +745,13 @@ public class MainViewModelTests
     {
         var sources = new[]
         {
-            new RemoteBuddy.Platform.Windows.Input.EtwButtonSource(0x112233445566, Guid.NewGuid(), RemoteBuddy.Platform.Windows.Input.EtwProtocolKind.GoogleG9N9N)
+            new RemoteBuddy.Platform.Windows.Input.EtwButtonSource(
+                0x112233445566,
+                Guid.NewGuid(),
+                RemoteBuddy.Platform.Windows.Input.EtwProtocolKind.GoogleG9N9N,
+                HidHandleStart: 0x0020,
+                HidHandleEnd: 0x004F,
+                ExcludedAttributes: [0x0052, 0x0055])
         };
         string encoded = Convert.ToBase64String(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(sources));
 
@@ -759,7 +765,11 @@ public class MainViewModelTests
         Assert.True(handled4Arg);
         Assert.Equal("pipeA", capturedPipe);
         Assert.Equal(12345, capturedPid);
-        Assert.Single(capturedSources!);
+        Assert.NotNull(capturedSources);
+        Assert.Single(capturedSources);
+        Assert.Equal((ushort)0x0020, capturedSources[0].HidHandleStart);
+        Assert.Equal((ushort)0x004F, capturedSources[0].HidHandleEnd);
+        Assert.Equal(new ushort[] { 0x0052, 0x0055 }, capturedSources[0].ExcludedAttributes);
 
         bool handled3Arg = RemoteBuddy.App.App.TryRunChromecastWorker(
             ["--chromecast-worker", "pipeB", encoded],

@@ -305,18 +305,30 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (_hidReaders.Remove(address, out var reader)) reader.Dispose();
         }
 
-        var wanted = devices.Select(device => (device.BluetoothAddress, Protocol: device.IsG9N9N ||
-            G9N9NProtocol.IsCandidate(device.Name) ? EtwProtocolKind.GoogleG9N9N :
-            device.IsT1 ? EtwProtocolKind.T1Remote : EtwProtocolKind.Xiaomi)).ToArray();
-        bool rebuild = !_etwSources.Select(source => (source.Address, source.Protocol)).SequenceEqual(wanted) ||
-            !_chromecastButtonReceiver.IsRunning;
+        var wanted = devices.Select(device =>
+        {
+            var protocol = device.IsG9N9N || G9N9NProtocol.IsCandidate(device.Name)
+                ? EtwProtocolKind.GoogleG9N9N
+                : device.IsT1 ? EtwProtocolKind.T1Remote : EtwProtocolKind.Xiaomi;
+            var filter = protocol == EtwProtocolKind.GoogleG9N9N
+                ? _bluetoothManager.GetEtwAttributeFilter(device.BluetoothAddress)
+                : default;
+            return new EtwButtonSource(
+                device.BluetoothAddress,
+                Guid.NewGuid(),
+                protocol,
+                filter.HidHandleStart,
+                filter.HidHandleEnd,
+                filter.ExcludedAttributes);
+        }).ToArray();
+        bool rebuild = !EtwSourcesMatch(_etwSources, wanted) || !_chromecastButtonReceiver.IsRunning;
         if (rebuild && ready.Length > 0)
         {
             int generation = Interlocked.Increment(ref _buttonSourceGeneration);
             CancelEtwTasks();
             _chromecastButtonReceiver.Stop();
             ResetGestures();
-            _etwSources = wanted.Select(source => new EtwButtonSource(source.BluetoothAddress, Guid.NewGuid(), source.Protocol)).ToArray();
+            _etwSources = wanted;
             lock (_etwProbeLock)
             {
                 _unboundEtwAddresses.Clear();
@@ -391,6 +403,28 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _probeRetryCts?.Dispose();
             _probeRetryCts = null;
         }
+    }
+
+    private static bool EtwSourcesMatch(EtwButtonSource[] existing, EtwButtonSource[] wanted)
+    {
+        if (existing.Length != wanted.Length) return false;
+        for (int i = 0; i < existing.Length; i++)
+        {
+            ref readonly var a = ref existing[i];
+            ref readonly var b = ref wanted[i];
+            if (a.Address != b.Address ||
+                a.Protocol != b.Protocol ||
+                a.HidHandleStart != b.HidHandleStart ||
+                a.HidHandleEnd != b.HidHandleEnd)
+            {
+                return false;
+            }
+            if (!(a.ExcludedAttributes ?? []).SequenceEqual(b.ExcludedAttributes ?? []))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     private async Task StartAndProbeEtwAsync(EtwButtonSource[] sources, int generation, CancellationToken ct)
