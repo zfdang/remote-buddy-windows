@@ -370,6 +370,9 @@ public class ConvertersAndViewModelTests
         vm.DriverStatus = DriverReadinessStatus.NotInstalled;
         Assert.Equal("未安装", vm.DriverStatusBadgeText);
 
+        vm.DriverStatus = DriverReadinessStatus.Disabled;
+        Assert.Equal("已禁用", vm.DriverStatusBadgeText);
+
         vm.DriverStatus = DriverReadinessStatus.RebootRequired;
         Assert.Equal("需重启", vm.DriverStatusBadgeText);
 

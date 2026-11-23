@@ -946,7 +946,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
         await FlushAudioPipelineAsync(currentAudioGen, frameSize, gain).ConfigureAwait(false);
 
         // Drain audio player asynchronously OUTSIDE _stateLock to prevent blocking other threads
-        await _audioPlayer.DrainAsync(50).ConfigureAwait(false);
+        await _audioPlayer.DrainAsync(450).ConfigureAwait(false);
 
         bool emitEnded = false;
         lock (_stateLock)

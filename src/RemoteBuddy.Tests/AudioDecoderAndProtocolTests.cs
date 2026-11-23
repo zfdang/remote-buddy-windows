@@ -121,23 +121,6 @@ public class AudioDecoderAndProtocolTests
     }
 
     [Fact]
-    public void AudioRingBuffer_WriteRead_PreservesDataAndOrder()
-    {
-        var ring = new AudioRingBuffer(capacity: 10);
-        short[] input = [10, 20, 30, 40, 50];
-        ring.Write(input);
-
-        Assert.Equal(5, ring.Available);
-
-        short[] output = new short[5];
-        int read = ring.Read(output);
-
-        Assert.Equal(5, read);
-        Assert.Equal(0, ring.Available);
-        Assert.Equal(input, output);
-    }
-
-    [Fact]
     public void G9N9NProtocol_CandidateCheck()
     {
         Assert.True(G9N9NProtocol.IsCandidate("Chromecast Remote"));

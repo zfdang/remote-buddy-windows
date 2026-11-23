@@ -98,6 +98,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
         {
             DriverReadinessStatus.Ready => "✅ VB-CABLE 虚拟麦克风已就绪，音频服务工作正常。",
             DriverReadinessStatus.NotInstalled => "❌ 未检测到 VB-CABLE。请点击下方按钮前往官网下载安装。",
+            DriverReadinessStatus.Disabled => "⚠️ 检测到 CABLE Input 音频设备已被禁用，请在 Windows 声音设置中启用后再继续。",
             DriverReadinessStatus.RebootRequired => "⚠️ 检测到虚拟声卡安装未完全生效，请重启电脑完成系统音频服务初始化。",
             _ => "❌ 虚拟麦克风初始化失败，请在设备管理器中检查设备状态。"
         };
@@ -622,7 +623,9 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
                 }
                 if (DriverStatus != DriverReadinessStatus.Ready)
                 {
-                    ValidationError = "请先安装 VB-CABLE 并确保音频端点就绪（如需重启请先重启电脑）。";
+                    ValidationError = DriverStatus == DriverReadinessStatus.Disabled
+                        ? "CABLE Input 音频设备当前处于禁用状态，请在 Windows 声音设置中启用。"
+                        : "请先安装 VB-CABLE 并确保音频端点就绪（如需重启请先重启电脑）。";
                     return;
                 }
                 break;

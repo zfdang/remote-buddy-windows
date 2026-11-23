@@ -813,6 +813,7 @@ public partial class IntegrationsViewModel : ObservableObject
             {
                 DriverReadinessStatus.Ready => "CABLE Input (VB-Audio Virtual Cable) 驱动已就绪",
                 DriverReadinessStatus.NotInstalled => "未检测到 VB-CABLE 驱动，请前往【环境与驱动】安装",
+                DriverReadinessStatus.Disabled => "CABLE Input 已被系统禁用，请在 Windows 声音设置中启用",
                 DriverReadinessStatus.RebootRequired => "VB-CABLE 需要重启系统完成初始化",
                 _ => "虚拟音频设备未就绪"
             };
@@ -851,6 +852,7 @@ public partial class EnvironmentViewModel : ObservableObject
     {
         DriverReadinessStatus.Ready => "已就绪",
         DriverReadinessStatus.NotInstalled => "未安装",
+        DriverReadinessStatus.Disabled => "已禁用",
         DriverReadinessStatus.RebootRequired => "需重启",
         _ => "初始化失败"
     };
@@ -886,11 +888,12 @@ public partial class EnvironmentViewModel : ObservableObject
     [RelayCommand]
     public void RefreshStatus()
     {
-        DriverStatus = VirtualAudioAuditor.AuditCableInputDevice();
+        DriverStatus = VirtualAudioAuditor.AuditCableInputDevice(forceRefresh: true);
         StatusDescription = DriverStatus switch
         {
             DriverReadinessStatus.Ready => "VB-CABLE 虚拟麦克风已就绪，音频服务工作正常。",
             DriverReadinessStatus.NotInstalled => "未检测到 VB-CABLE。请从官方网站下载并安装。",
+            DriverReadinessStatus.Disabled => "检测到 CABLE Input 虚拟扬声器设备已被禁用。请打开 Windows 声音设置启用 “CABLE Input”。",
             DriverReadinessStatus.RebootRequired => "检测到虚拟声卡安装未完全生效，请重启电脑完成系统音频服务初始化。",
             _ => "虚拟麦克风初始化失败，请在设备管理器中检查设备状态。"
         };
@@ -997,12 +1000,24 @@ public partial class GeneralViewModel : ObservableObject
     private DriverReadinessStatus _driverStatus = VirtualAudioAuditor.GetCachedStatus();
 
     public bool PermissionsReady => DriverStatus == DriverReadinessStatus.Ready;
-    public string PermissionsStatusText => PermissionsReady ? "驱动就绪" : "缺少驱动";
+    public string PermissionsStatusText => DriverStatus switch
+    {
+        DriverReadinessStatus.Ready => "驱动就绪",
+        DriverReadinessStatus.Disabled => "设备已禁用",
+        DriverReadinessStatus.RebootRequired => "需重启",
+        _ => "缺少驱动"
+    };
     public string PermissionsStatusBrush => PermissionsReady ? "#44FF88" : "#FFAA33";
     public string PermissionsBadgeBackground => PermissionsReady ? "#1C3827" : "#332200";
     public string PermissionsBorderBrush => PermissionsReady ? "#2D6A42" : "#664400";
     public string PermissionsIcon => PermissionsReady ? "✓" : "⚠";
-    public string PermissionsSummary => PermissionsReady ? "VB-CABLE 虚拟麦克风已就绪，音频服务工作正常" : "未检测到 VB-CABLE 虚拟音频驱动，请进入检查并安装";
+    public string PermissionsSummary => DriverStatus switch
+    {
+        DriverReadinessStatus.Ready => "VB-CABLE 虚拟麦克风已就绪，音频服务工作正常",
+        DriverReadinessStatus.Disabled => "CABLE Input 音频设备已被禁用，请在 Windows 声音设置中启用",
+        DriverReadinessStatus.RebootRequired => "VB-CABLE 安装尚未完成，请重启系统完成初始化",
+        _ => "未检测到 VB-CABLE 虚拟音频驱动，请进入检查并安装"
+    };
 
     public bool RemoteReady => _bt.IsConnected;
     public string RemoteStatusText => RemoteReady ? "已连接" : "未连接";
