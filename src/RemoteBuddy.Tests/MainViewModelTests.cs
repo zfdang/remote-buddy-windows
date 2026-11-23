@@ -164,4 +164,32 @@ public class MainViewModelTests
             if (File.Exists(path)) File.Delete(path);
         }
     }
+
+    [Fact]
+    public void MainViewModel_HandleAppCommandButton_Behavior_ReflectsState()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-mvm-appcmd-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new TestBluetoothManager();
+            using var vm = new MainViewModel(config, bt);
+
+            // On General page with no mappings: unhandled
+            Assert.False(vm.HandleAppCommandButton(RemoteButton.Back));
+
+            // On Mapping page: handled to highlight on UI
+            vm.Navigate("Mapping");
+            Assert.True(vm.HandleAppCommandButton(RemoteButton.Back));
+
+            // Onboarding active: handled
+            vm.Navigate("General");
+            vm.ActiveOnboardingVm = new OnboardingViewModel(config, bt, WizardMode.Full);
+            Assert.True(vm.HandleAppCommandButton(RemoteButton.Back));
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
 }

@@ -478,6 +478,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
 
             AppLogger.Info($"Bluetooth remote connected and ready: '{device.Name}', FrameSize={_frameSize}, ContainerId={ConnectedDeviceContainerId}", "BluetoothManager");
             ConnectionStatusChanged?.Invoke(true, device.Name);
+            _ = Task.Run(() => _audioPlayer.Start());
             if (isChromecast)
             {
                 _ = LoadChromecastHardwareDetailsAsync(device, targetConnGen, information);

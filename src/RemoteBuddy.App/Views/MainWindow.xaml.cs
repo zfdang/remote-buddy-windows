@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Interop;
 using RemoteBuddy.App.ViewModels;
 using RemoteBuddy.App.Views.Pages;
+using RemoteBuddy.Core.Models;
 
 namespace RemoteBuddy.App.Views;
 
@@ -172,6 +173,24 @@ public partial class MainWindow : Window
             }
             handled = true;
             return IntPtr.Zero;
+        }
+        else if (msg == 0x0319 /* WM_APPCOMMAND */ && DataContext is MainViewModel vmApp)
+        {
+            int cmd = (int)((lParam.ToInt64() >> 16) & 0xFFF);
+            RemoteButton? appBtn = cmd switch
+            {
+                1 /* APPCOMMAND_BROWSER_BACK */ => RemoteButton.Back,
+                8 /* APPCOMMAND_VOLUME_MUTE */ => RemoteButton.Mute,
+                9 /* APPCOMMAND_VOLUME_DOWN */ => RemoteButton.VolumeDown,
+                10 /* APPCOMMAND_VOLUME_UP */ => RemoteButton.VolumeUp,
+                14 /* APPCOMMAND_MEDIA_PLAY_PAUSE */ => RemoteButton.PlayPause,
+                _ => null
+            };
+            if (appBtn.HasValue && vmApp.HandleAppCommandButton(appBtn.Value))
+            {
+                handled = true;
+                return (IntPtr)1;
+            }
         }
         else if (msg == WM_TRAYICON)
         {

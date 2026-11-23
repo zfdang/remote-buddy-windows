@@ -91,6 +91,23 @@ public class HidDeviceReaderTests
     }
 
     [Fact]
+    public void VirtualAudioAuditor_ResetDeviceCache_ClearsCachedEndpointId()
+    {
+        VirtualAudioAuditor.ResetDeviceCache();
+        // Should not throw on null device
+        VirtualAudioAuditor.EnsureEndpointUnmutedAndMaxVolume(null);
+    }
+
+    [Fact]
+    public void WasapiAudioPlayer_CanInstantiateAndDisposeSafely()
+    {
+        using var player = new WasapiAudioPlayer();
+        Assert.False(player.IsActive);
+        player.Stop();
+        Assert.False(player.IsActive);
+    }
+
+    [Fact]
     public void ScopedWizard_ButtonTest_WorksInBothDeviceOnlyAndFullModes()
     {
         var config = new ConfigService();

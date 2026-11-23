@@ -308,7 +308,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
 
         // The unique request was sent via WinRT on the selected device. Confirm its ATT response
         // on the same ACL handle before accepting any input from that connection.
-        if (_probeConnection == connection && !incomplete && att is [0x01, 0x06, 0x01, 0x00, 0x0A])
+        if (_probeConnection == connection && !incomplete && (att is [0x01, 0x06, _, _, _] || att is [0x07, ..]))
         {
             _boundConnection = connection;
             _probeConnection = null;
@@ -387,11 +387,30 @@ public sealed class ChromecastEtwReceiver : IDisposable
             return isDown;
         }
 
-        if (attribute is not (G9N9NInputAttribute or 0x0025 or 0x0028 or 0x002D) || report.Length != 2) return false;
-        ushort usage = BinaryPrimitives.ReadUInt16LittleEndian(report);
-        if (usage == 0) return true;
-        isDown = G9N9NProtocol.ConsumerButtons.TryGetValue(usage, out button);
-        return isDown;
+        if ((attribute is (G9N9NInputAttribute or 0x0025 or 0x0028 or 0x002D)) && report.Length == 2)
+        {
+            ushort usage = BinaryPrimitives.ReadUInt16LittleEndian(report);
+            if (usage == 0) return true;
+            if (G9N9NProtocol.ConsumerButtons.TryGetValue(usage, out button))
+            {
+                isDown = true;
+                return true;
+            }
+        }
+
+        if (report.Length <= 8 && XiaomiProtocol.TryParseReport(report, out var xiaomiButtons))
+        {
+            if (xiaomiButtons.Count > 0)
+            {
+                button = xiaomiButtons[0];
+                isDown = true;
+                return true;
+            }
+            isDown = false;
+            return true;
+        }
+
+        return false;
     }
 
     private void DispatchButtonEvent(RemoteButton button, bool isDown)

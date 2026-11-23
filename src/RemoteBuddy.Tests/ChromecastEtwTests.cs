@@ -66,6 +66,42 @@ public class ChromecastEtwTests
         Assert.Equal(expected, button);
     }
 
+    [Theory]
+    [InlineData(0x00F1, RemoteButton.Back)]
+    [InlineData(0x0080, RemoteButton.VolumeUp)]
+    [InlineData(0x0081, RemoteButton.VolumeDown)]
+    [InlineData(0x004A, RemoteButton.Home)]
+    [InlineData(0x0065, RemoteButton.Menu)]
+    [InlineData(0x0028, RemoteButton.Ok)]
+    [InlineData(0x0052, RemoteButton.Up)]
+    [InlineData(0x0051, RemoteButton.Down)]
+    [InlineData(0x0050, RemoteButton.Left)]
+    [InlineData(0x004F, RemoteButton.Right)]
+    public void TryParseAclPacket_Xiaomi3ByteReport_ReturnsCorrectButton(ushort usage, RemoteButton expected)
+    {
+        byte[] payload = [0x01, (byte)(usage & 0xFF), (byte)((usage >> 8) & 0xFF)];
+        byte[] packet = CreateAclPacket(0x1B, 0x002B, payload);
+
+        bool success = ChromecastEtwReceiver.TryParseAclPacket(packet, out var button, out bool isDown);
+
+        Assert.True(success);
+        Assert.True(isDown);
+        Assert.Equal(expected, button);
+    }
+
+    [Fact]
+    public void TryParseAclPacket_XiaomiRelease_ReturnsNoneAndNotDown()
+    {
+        byte[] payload = [0x01, 0x00, 0x00];
+        byte[] packet = CreateAclPacket(0x1B, 0x002B, payload);
+
+        bool success = ChromecastEtwReceiver.TryParseAclPacket(packet, out var button, out bool isDown);
+
+        Assert.True(success);
+        Assert.False(isDown);
+        Assert.Equal(RemoteButton.None, button);
+    }
+
     [Fact]
     public void TryParseAclPacket_8ByteRelease_ReturnsNoneAndNotDown()
     {
