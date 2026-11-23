@@ -556,6 +556,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
             {
                 discoveredFilter = await DiscoverChromecastAttributeFilterAsync(
                     device,
+                    service,
                     tx.AttributeHandle,
                     audio.AttributeHandle,
                     control.AttributeHandle).ConfigureAwait(false);
@@ -606,15 +607,17 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
 
     private static async Task<EtwAttributeFilter> DiscoverChromecastAttributeFilterAsync(
         BluetoothLEDevice device,
+        GattDeviceService activeAtvvService,
         ushort txHandle,
         ushort audioHandle,
         ushort controlHandle)
     {
-        ushort[] priorityExcluded = new ushort[] { txHandle, audioHandle, controlHandle }
+        ushort[] rawPriority = new ushort[] { txHandle, audioHandle, controlHandle }
             .Where(h => h != 0)
             .Distinct()
             .OrderBy(h => h)
             .ToArray();
+        ushort[] fallbackExcluded = ExpandHandlePairs(rawPriority);
 
         try
         {
@@ -624,9 +627,9 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 if (servicesResult.Status != GattCommunicationStatus.Success || servicesResult.Services.Count == 0)
                 {
                     AppLogger.Info(
-                        $"G9N9N GATT layout discovery unavailable for 0x{device.BluetoothAddress:X12}: Status={servicesResult.Status}, Count={servicesResult.Services.Count}; falling back to priority exclusions [{string.Join(", ", priorityExcluded.Select(h => $"0x{h:X4}"))}]",
+                        $"G9N9N GATT layout discovery unavailable for 0x{device.BluetoothAddress:X12}: Status={servicesResult.Status}, Count={servicesResult.Services.Count}; falling back to priority exclusions [{string.Join(", ", fallbackExcluded.Select(h => $"0x{h:X4}"))}]",
                         "BluetoothManager");
-                    return new EtwAttributeFilter(0, 0, priorityExcluded);
+                    return new EtwAttributeFilter(0, 0, fallbackExcluded);
                 }
 
                 var services = new List<(Guid ServiceUuid, ushort StartHandle)>(servicesResult.Services.Count);
@@ -634,7 +637,10 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 foreach (var svc in servicesResult.Services)
                 {
                     services.Add((svc.Uuid, svc.AttributeHandle));
-                    if (svc.Uuid == HidServiceUuid) continue;
+                    if (ReferenceEquals(svc, activeAtvvService) || svc.Uuid == ATVVProtocol.ServiceUuid || svc.Uuid == HidServiceUuid)
+                    {
+                        continue;
+                    }
 
                     try
                     {
@@ -656,22 +662,41 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                     }
                 }
 
-                var filter = BuildEtwAttributeFilter(services, priorityExcluded, nonHidHandles, out string summary);
+                var filter = BuildEtwAttributeFilter(services, rawPriority, nonHidHandles, out string summary);
                 AppLogger.Info($"G9N9N GATT layout for 0x{device.BluetoothAddress:X12}: {summary}", "BluetoothManager");
                 return filter;
             }
             finally
             {
-                foreach (var svc in servicesResult.Services) svc.Dispose();
+                foreach (var svc in servicesResult.Services)
+                {
+                    // Never dispose the cached WinRT instance backing the active ATVV subscriptions.
+                    if (!ReferenceEquals(svc, activeAtvvService) && svc.Uuid != ATVVProtocol.ServiceUuid)
+                    {
+                        try { svc.Dispose(); } catch { }
+                    }
+                }
             }
         }
         catch (Exception ex)
         {
             AppLogger.Info(
-                $"G9N9N GATT layout discovery failed for 0x{device.BluetoothAddress:X12}: {ex.Message}; falling back to priority exclusions [{string.Join(", ", priorityExcluded.Select(h => $"0x{h:X4}"))}]",
+                $"G9N9N GATT layout discovery failed for 0x{device.BluetoothAddress:X12}: {ex.Message}; falling back to priority exclusions [{string.Join(", ", fallbackExcluded.Select(h => $"0x{h:X4}"))}]",
                 "BluetoothManager");
-            return new EtwAttributeFilter(0, 0, priorityExcluded);
+            return new EtwAttributeFilter(0, 0, fallbackExcluded);
         }
+    }
+
+    private static ushort[] ExpandHandlePairs(IEnumerable<ushort> handles)
+    {
+        var expanded = new SortedSet<ushort>();
+        foreach (ushort h in handles)
+        {
+            if (h == 0) continue;
+            expanded.Add(h);
+            if (h < ushort.MaxValue) expanded.Add((ushort)(h + 1));
+        }
+        return expanded.ToArray();
     }
 
     internal static EtwAttributeFilter BuildEtwAttributeFilter(
@@ -688,28 +713,53 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
 
         ushort hidStart = 0;
         ushort hidEnd = 0;
+        ushort atvvStart = 0;
+        ushort atvvEnd = 0;
         for (int i = 0; i < sorted.Length; i++)
         {
-            if (sorted[i].ServiceUuid != HidServiceUuid) continue;
-            hidStart = sorted[i].StartHandle;
-            hidEnd = (i + 1 < sorted.Length && sorted[i + 1].StartHandle > hidStart)
+            ushort end = (i + 1 < sorted.Length && sorted[i + 1].StartHandle > sorted[i].StartHandle)
                 ? (ushort)(sorted[i + 1].StartHandle - 1)
                 : ushort.MaxValue;
-            break;
+            if (sorted[i].ServiceUuid == HidServiceUuid && hidStart == 0)
+            {
+                hidStart = sorted[i].StartHandle;
+                hidEnd = end;
+            }
+            else if (sorted[i].ServiceUuid == ATVVProtocol.ServiceUuid && atvvStart == 0)
+            {
+                atvvStart = sorted[i].StartHandle;
+                atvvEnd = end;
+            }
         }
 
         bool hasHidRange = hidStart > 0 && hidEnd >= hidStart;
         var excluded = new SortedSet<ushort>();
         foreach (ushort handle in priorityExcludedHandles)
         {
-            if (handle != 0) excluded.Add(handle);
+            if (handle == 0) continue;
+            excluded.Add(handle);
+            if (handle < ushort.MaxValue) excluded.Add((ushort)(handle + 1));
+        }
+
+        if (atvvStart > 0 && atvvEnd >= atvvStart && (atvvEnd - atvvStart) < 32)
+        {
+            for (uint h = atvvStart; h <= atvvEnd; h++)
+            {
+                excluded.Add((ushort)h);
+            }
         }
 
         foreach (ushort handle in nonHidCharacteristicHandles.Where(h => h != 0).Distinct().OrderBy(h => h))
         {
-            if (hasHidRange && (handle < hidStart || handle > hidEnd)) continue;
+            foreach (ushort candidate in handle < ushort.MaxValue
+                ? new ushort[] { handle, (ushort)(handle + 1) }
+                : new ushort[] { handle })
+            {
+                if (hasHidRange && (candidate < hidStart || candidate > hidEnd)) continue;
+                if (excluded.Count >= 32) break;
+                excluded.Add(candidate);
+            }
             if (excluded.Count >= 32) break;
-            excluded.Add(handle);
         }
 
         var serviceSummaries = new List<string>(sorted.Length);

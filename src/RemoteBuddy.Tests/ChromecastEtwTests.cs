@@ -855,7 +855,7 @@ public class ChromecastEtwTests
         Guid atvv = new("AB5E0001-5A21-4F05-BC7D-AF01F617B664");
         Guid battery = new("0000180F-0000-1000-8000-00805F9B34FB");
 
-        // 0x1812 in middle
+        // 0x1812 in middle: expands ATVV service range (0x0050..0x005F) and priority pairs
         var midFilter = WinRtBluetoothManager.BuildEtwAttributeFilter(
             [(battery, 0x0060), (hid, 0x0020), (gap, 0x0001), (atvv, 0x0050), (gatt, 0x0010)],
             [0x0052, 0x0054, 0x0056],
@@ -863,11 +863,13 @@ public class ChromecastEtwTests
             out string midSummary);
         Assert.Equal(0x0020, midFilter.HidHandleStart);
         Assert.Equal(0x004F, midFilter.HidHandleEnd);
-        Assert.Equal([0x0052, 0x0054, 0x0056], midFilter.ExcludedAttributes);
+        Assert.Equal(
+            Enumerable.Range(0x0050, 16).Select(h => (ushort)h).ToArray(),
+            midFilter.ExcludedAttributes);
         Assert.Contains("hidRange=0x0020..0x004F", midSummary);
         Assert.Contains("0x1812@0x0020..0x004F", midSummary);
 
-        // 0x1812 as last service
+        // 0x1812 as last service: priority declaration handle also expands to value handle (h + 1)
         var lastFilter = WinRtBluetoothManager.BuildEtwAttributeFilter(
             [(gap, 0x0001), (hid, 0x0050)],
             [0x0025],
@@ -875,14 +877,138 @@ public class ChromecastEtwTests
             out _);
         Assert.Equal(0x0050, lastFilter.HidHandleStart);
         Assert.Equal(ushort.MaxValue, lastFilter.HidHandleEnd);
+        Assert.NotNull(lastFilter.ExcludedAttributes);
+        Assert.Equal(new ushort[] { 0x0025, 0x0026 }, lastFilter.ExcludedAttributes);
 
-        // 0x1812 missing -> fallback includes sorted distinct non-HID handles
+        // 0x1812 missing -> fallback includes sorted distinct declaration+value pairs
         var missingFilter = WinRtBluetoothManager.BuildEtwAttributeFilter(
             [(gap, 0x0001), (atvv, 0x0050)],
             [0x0054, 0x0052],
             [0x0062, 0x0012],
             out _);
         Assert.False(missingFilter.HasHidRange);
-        Assert.Equal([0x0012, 0x0052, 0x0054, 0x0062], missingFilter.ExcludedAttributes);
+        Assert.NotNull(missingFilter.ExcludedAttributes);
+        Assert.Equal(
+            new ushort[] { 0x0012, 0x0013, 0x0052, 0x0053, 0x0054, 0x0055, 0x0062, 0x0063 },
+            missingFilter.ExcludedAttributes);
+    }
+
+    [Fact]
+    public void BuildEtwAttributeFilter_Real0x4754514C6FCCLayout_ExcludesAllAtvvAudioAndControlNotifications()
+    {
+        Guid gap = new("00001800-0000-1000-8000-00805F9B34FB");
+        Guid dis = new("0000180A-0000-1000-8000-00805F9B34FB");
+        Guid battery = new("0000180F-0000-1000-8000-00805F9B34FB");
+        Guid hid = new("00001812-0000-1000-8000-00805F9B34FB");
+        Guid vendor1 = new("d343bfc0-5a21-4f05-bc7d-af01f617b664");
+        Guid atvv = new("AB5E0001-5A21-4F05-BC7D-AF01F617B664");
+        Guid vendor2 = new("54534542-5157-4854-2053-492049415447");
+
+        var filter = WinRtBluetoothManager.BuildEtwAttributeFilter(
+            [
+                (gap, 0x0001),
+                (dis, 0x0008),
+                (battery, 0x001B),
+                (hid, 0x001F),
+                (vendor1, 0x002C),
+                (atvv, 0x0038),
+                (vendor2, 0x0041)
+            ],
+            [0x0039, 0x003B, 0x003E],
+            [],
+            out _);
+
+        Assert.Equal((ushort)0x001F, filter.HidHandleStart);
+        Assert.Equal((ushort)0x002B, filter.HidHandleEnd);
+        Assert.NotNull(filter.ExcludedAttributes);
+        for (ushort h = 0x0038; h <= 0x0040; h++)
+        {
+            Assert.Contains(h, filter.ExcludedAttributes);
+        }
+        Assert.Contains((ushort)0x003C, filter.ExcludedAttributes);
+        Assert.Contains((ushort)0x003F, filter.ExcludedAttributes);
+
+        string tempLogDir = Path.Combine(Path.GetTempPath(), "RB_G9N9N_Real_" + Guid.NewGuid().ToString("N"));
+        AppLogger.ResetForTesting();
+        AppLogger.Initialize(tempLogDir);
+        try
+        {
+            using var receiver = new ChromecastEtwReceiver();
+            var source = new EtwButtonSource(
+                0x4754514C6FCC,
+                Guid.NewGuid(),
+                EtwProtocolKind.GoogleG9N9N,
+                filter.HidHandleStart,
+                filter.HidHandleEnd,
+                filter.ExcludedAttributes);
+            receiver.SetSources([source]);
+            var edges = new List<(RemoteButton, bool)>();
+            receiver.ButtonEvent += (_, btn, down) => edges.Add((btn, down));
+            BindSource(receiver, source);
+
+            // Real ATVV control & 160-byte ADPCM audio frames captured from 0x4754514C6FCC
+            receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x003F, [0x04, 0x03, 0x02, 0x44]));
+            receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x003F, [0x08]));
+            receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x003F, [0x00, 0x02]));
+            receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x003F, [0x0A, 0x02, 0x00, 0x10, 0x00, 0x00, 0x00]));
+            byte[] audioFrame = Enumerable.Range(0, 160).Select(i => (byte)(0xA0 + (i % 16))).ToArray();
+            receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x003C, audioFrame));
+
+            Assert.Empty(edges);
+
+            // Existing 0x0029 button traffic works normally
+            receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x07, 0, 0, 0, 0, 0, 0, 0]));
+            receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, new byte[8]));
+            Assert.Equal([(RemoteButton.Ok, true), (RemoteButton.Ok, false)], edges);
+
+            string logText = File.ReadAllText(AppLogger.CurrentLogFilePath);
+            Assert.DoesNotContain("G9N9N ETW unrecognized notification [", logText);
+        }
+        finally
+        {
+            AppLogger.ResetForTesting();
+            try
+            {
+                if (Directory.Exists(tempLogDir)) Directory.Delete(tempLogDir, recursive: true);
+            }
+            catch { }
+        }
+    }
+
+    [Fact]
+    public void G9N9N_DiagnosticLogging_OmitsOversizedPayloads()
+    {
+        string tempLogDir = Path.Combine(Path.GetTempPath(), "RB_G9N9N_Privacy_" + Guid.NewGuid().ToString("N"));
+        AppLogger.ResetForTesting();
+        AppLogger.Initialize(tempLogDir);
+        try
+        {
+            using var receiver = new ChromecastEtwReceiver();
+            var source = new EtwButtonSource(
+                0xABCDEF123456,
+                Guid.NewGuid(),
+                EtwProtocolKind.GoogleG9N9N,
+                HidHandleStart: 0x001F,
+                HidHandleEnd: 0x002B,
+                ExcludedAttributes: [0x003C, 0x003F]);
+            receiver.SetSources([source]);
+            BindSource(receiver, source);
+
+            byte[] oversized = Enumerable.Range(0, 160).Select(i => (byte)(0xD0 + (i % 16))).ToArray();
+            receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x002A, oversized));
+
+            string logText = File.ReadAllText(AppLogger.CurrentLogFilePath);
+            Assert.Contains("G9N9N ETW unrecognized notification [UnknownPayload]: addr=0xABCDEF123456, attr=0x002A, opcode=0x1B, len=160, hex=<omitted> (hidRange=0x001F..0x002B)", logText);
+            Assert.DoesNotContain("D0D1D2D3D4D5", logText);
+        }
+        finally
+        {
+            AppLogger.ResetForTesting();
+            try
+            {
+                if (Directory.Exists(tempLogDir)) Directory.Delete(tempLogDir, recursive: true);
+            }
+            catch { }
+        }
     }
 }

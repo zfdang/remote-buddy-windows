@@ -47,6 +47,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
     private const ushort G9N9NShortReportAttribute = 0x0046;
     private const ushort XiaomiKeyboardAttribute = 0x0064;
     private const int MaxDiagnosticEntriesPerConnection = 32;
+    private const int MaxDiagnosticHexBytes = 16;
     public static readonly ushort[] G9N9NVerifiedAttributes = [G9N9NInputAttribute];
     public static readonly ushort[] XiaomiVerifiedAttributes = [0x002B, 0x0056, 0x0058, 0x0059, 0x005B, 0x005E];
     private static readonly HashSet<ushort> _g9n9nAttributesSet = [G9N9NInputAttribute];
@@ -679,7 +680,8 @@ public sealed class ChromecastEtwReceiver : IDisposable
     {
         if (source.DiagnosticCapLogged) return null;
 
-        string hex = FormatHex(report);
+        // Never log raw bytes for oversized notifications (e.g. 160-byte ADPCM audio frames).
+        string hex = report.Length > MaxDiagnosticHexBytes ? "<omitted>" : FormatHex(report);
         string key = $"{reason}:{attribute:X4}:{report.Length}:{hex}";
         if (!source.LoggedDiagnostics.Add(key)) return null;
 
