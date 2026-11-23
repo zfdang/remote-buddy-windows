@@ -4,6 +4,8 @@
 
 G9N9N 普通键属于 HID over GATT。Windows 提供 Consumer Control HID 接口，但在 2026-11-23 的测试中，应用能打开直接 HID 接口却未读到报告，WinRT 枚举 HID Report 特征返回 `AccessDenied`。本机可靠的补充路径是绑定到这只遥控器后的 BthPort ETW。
 
+## 普通键采集
+
 | 按键 | 八字节报告首字节 | Consumer Usage |
 | --- | --- | --- |
 | 电源 | `01` | `019E` |
@@ -16,11 +18,17 @@ G9N9N 普通键属于 HID over GATT。Windows 提供 Consumer Control HID 接口
 | YouTube、Netflix | `0E / 0F` | `0077 / 0078` |
 | 自定义、输入源 | `10 / 11` | `0079 / 0089`（输入源还接受 `0189`） |
 
-这张表列的是代码支持的键值。2026-11-23 在修复版真机确认了方向上、确认、返回、主页、静音、YouTube 和 Netflix 的按下与松开。
+这张表列的是代码支持的键值。2026-11-23 在 Windows 11 真机确认了方向上、确认、返回、主页、静音、YouTube 和 Netflix 的按下与松开。
 
 ETW 解码接受属性 `0x0029` 上首字节为索引、其余七字节为零的报告。例如 `07 00 00 00 00 00 00 00` 表示确认键按下，全零表示松开。属性 `0x0025`、`0x0028`、`0x0029`、`0x002D` 的两字节格式按小端 Consumer Usage 解码，例如 `24 02` 表示返回。同一白名单也接受代码支持的三字节格式，第一字节为报告 ID 1 或 2。两字节报告不能走索引猜测，否则语音停止相关的 `00 02` 可能被误读成播放／暂停。
 
 如果 ETW 只交付了 `0x0029` 的报告头，向导可提示检测到活动但没有键码。应用不会据此触发映射。语音键使用独立的 ATVV GATT 路径，普通键的 ETW 可用性不影响语音协议握手。
+
+## 语音键
+
+按下语音键时，设备可通过 ATVV Control 特征值发送 `StartSearch`（`0x08`）。应用取得语音占用后发送 `MIC_OPEN`，由 `AudioStart` 确认会话并提供 Session ID。普通按键报告缺失时，这条语音路径仍可工作。
+
+默认智能模式以 700 毫秒区分短按与长按。短按松开触发的 `AudioStop` 会让应用尝试重开麦克风，进入免提，之后再按一次结束。长按松开则收尾并结束会话。设备设置也可选择按住说话模式。免提期间也会持续占用语音输出。实现见 [智能语音键状态机](../src/RemoteBuddy.Core/Protocols/G9N9NSmartToggleSession.cs)。
 
 ## 默认单击动作
 
@@ -35,6 +43,6 @@ ETW 解码接受属性 `0x0029` 上首字节为索引、其余七字节为零的
 
 默认长按仅为方向上、下、左、右、确认、音量加、音量减和电源键启用连发。连发重复该键的单击动作，确认键重复发送 Enter，电源键重复发送 Backspace。其他键默认没有长按动作。
 
-新设备及「恢复默认」使用这套配置。已保存的映射可在「按键映射」中单独编辑。
+新设备及「恢复所有按键的默认映射」使用这套配置。已保存的映射可在「按键映射」中单独编辑。
 
-参见 [Windows 按键采集与隔离](windows-remote-input.md) 和 [G9N9N 历史排查](chromecast-g9n9n-button-handling.md)。实现见 [G9N9N 协议](../src/RemoteBuddy.Core/Protocols/G9N9NProtocol.cs) 和 [ETW 接收器](../src/RemoteBuddy.Platform.Windows/Input/ChromecastEtwReceiver.cs)。
+参见 [Windows 遥控器输入实现](windows-remote-input.md)。实现见 [G9N9N 协议](../src/RemoteBuddy.Core/Protocols/G9N9NProtocol.cs) 和 [ETW 接收器](../src/RemoteBuddy.Platform.Windows/Input/ChromecastEtwReceiver.cs)。

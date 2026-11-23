@@ -9,37 +9,18 @@ Remote Buddy for Windows 是面向 Windows 10/11 的纯软件版硬件语音桥�
 ## 一、系统工作流与运行拓扑
 
 ```text
-┌─────────────────────────────────┐
-│     蓝牙电视遥控器 (小米 / Google)  │
-└──────────────┬──────────────────┘
-               │ 电脑内置蓝牙 (BLE / HID)
-┌──────────────▼─────────────────────────────────────────────────┐
-│ Remote Buddy for Windows (C# / .NET 10 LTS 宿主进程)      │
-│                                                                │
-│ ┌──────────────────────┐      ┌──────────────────────────────┐ │
-│ │  WinRT BLE 管理器     │      │   HID / RawInput 监听器      │ │
-│ │  (GATT / ATVV 协议)   │      │   (按键按下/松开事件捕获)    │ │
-│ └──────────┬───────────┘      └──────────────┬───────────────┘ │
-│            │ 音频流 (ADPCM)                  │ 语音键触发/松开  │
-│ ┌──────────▼───────────┐      ┌──────────────▼───────────────┐ │
-│ │  IMA ADPCM 解码器    │      │   输入法快捷键注入器 (SendInput)│
-│ │  (解码为 16kHz PCM)   │      │   (时序保证: 首音预存/尾音排空)│
-│ └──────────┬───────────┘      └──────────────┬───────────────┘ │
-│            │ 16-bit Mono PCM                 │                 │
-│ ┌──────────▼───────────┐                     │                 │
-│ │  WASAPI 音频推流引擎  │                     │                 │
-│ └──────────┬───────────┘                     │                 │
-└────────────┼─────────────────────────────────┼─────────────────┘
-             │ 实时音频流 (低延迟写入)          │ 模拟热键 (UIPI 边界)
-┌────────────▼───────────┐      ┌──────────────▼───────────────┐
-│ 虚拟声卡 (VB-CABLE)    │      │ 当前活动窗口焦点 / 输入框     │
-│ CABLE Input (录制端点) │      │ (输入法弹出录音条开始识别)    │
-└────────────┬───────────┘      └──────────────────────────────┘
-             │ 系统音频路由 (独占配置 / 默认设备)
-┌────────────▼───────────┐
-│ 目标工具 (微信/豆包/系统)│
-└────────────────────────┘
+普通键 → Raw Input／直接 HID 或 BthPort ETW
+       → 匹配物理遥控器 → 该设备的手势与映射 → SendInput
+
+语音键 → WinRT GATT 的 ATVV 控制通知
+       → 共用语音占用仲裁 → 输入法快捷键（SendInput）
+
+麦克风 → ATVV 音频通知 → IMA ADPCM 解码 → WASAPI
+       → VB-CABLE 播放端（CABLE Input）
+       → VB-CABLE 录音端（CABLE Output）→ 目标输入法
 ```
+
+小米 RC003 的多数普通键走 Raw Input，返回和音量加减由 ETW 补取。G9N9N 实测主要依靠 ETW。连接和按键状态按物理设备隔离，多个设备共用一条语音输出。详细对照见 [Windows 遥控器输入实现](windows-remote-input.md)。
 
 ---
 
@@ -55,35 +36,22 @@ Remote Buddy for Windows 是面向 Windows 10/11 的纯软件版硬件语音桥�
 | **音频推流** | **NAudio (基于 WASAPI Render)** | 成熟的低延迟音频写入库，以共享模式（Shared Event-Driven）将解码后的 PCM 音频推入虚拟声卡端点。 |
 | **音频解码** | **纯 C# 实现 IMA ADPCM 解码器** | 纯内存计算，结合 `Span<byte>` 与查表法，实现 `AUDIO_SYNC` 状态同步与动态会话恢复。 |
 | **虚拟麦克风** | **VB-CABLE (用户独立安装)** | 规避 Windows 内核驱动签名限制（DSE）。初期版本严格遵守开源许可约束，**不随安装包私自重新打包分发闭源二进制**，向导中引导用户从官方网站独立下载安装。 |
-| **按键监控与注入** | **Win32 Raw Input + `SendInput`** | 监听遥控器全局 HID 报文；注入端使用完整 40 字节（x64）原生结构体，并严格处理 UIPI 权限边界与首尾音时序。 |
+| **按键监控与注入** | **Raw Input、直接 HID、BthPort ETW、`SendInput`** | 采集来源可确认的普通键，通过 `SendInput` 执行映射和输入法快捷键，受 UIPI 权限边界约束。 |
 | **打包与安装** | **Inno Setup** | 制作独立的轻量安装包，负责快捷方式生成、开机启动项注册与卸载清理。 |
 
 ---
 
 ## 三、核心模块与分层设计
 
-应用整体采用 MVVM 架构，业务引擎与 UI 解耦，核心分为以下 5 个逻辑层：
-
-```text
-RemoteBuddy.sln
-├── src/RemoteBuddy.Core/             # 纯业务核心库 (无 UI 依赖)
-│   ├── Bluetooth/                        # WinRT BLE 连接、扫描、重连与保活看门狗
-│   ├── Protocols/                        # ATVV 完整控制协议 (CAPS/START/STOP/SYNC)
-│   ├── Audio/                            # ADPCM 解码器、同步恢复、WASAPI 环形推流队列
-│   ├── Input/                            # Raw Input 监听、时序编排、SendInput 原生注入
-│   └── Config/                           # 用户设置持久化 (JSON)
-│
-├── src/RemoteBuddy.App/              # 桌面客户端 (WPF + WPF-UI)
-│   ├── Views/                            # 主界面、设置向导、按键映射视图、关于窗口
-│   ├── ViewModels/                       # MVVM 视图模型 (CommunityToolkit.Mvvm)
-│   ├── Tray/                             # 系统托盘图标、上下文菜单、后台运行管理
-│   └── Services/                         # 驱动就绪检查、转写验收验证、自启动管理
-│
-└── src/RemoteBuddy.Installer/        # Inno Setup 脚本与多语言资源
-```
+| 模块 | 职责 |
+| --- | --- |
+| [RemoteBuddy.Core](../src/RemoteBuddy.Core/) | ATVV 报文、IMA ADPCM 解码、按键手势、设备和映射模型 |
+| [RemoteBuddy.Platform.Windows](../src/RemoteBuddy.Platform.Windows/) | WinRT BLE、按设备连接管理、语音占用、Raw Input／HID／ETW、WASAPI 和快捷键注入 |
+| [RemoteBuddy.App](../src/RemoteBuddy.App/) | WPF 客户端、设备连接与向导、按地址分发按键和加载各设备映射、输入法联动 |
+| [RemoteBuddy.Tests](../src/RemoteBuddy.Tests/) | 报文解析、设备隔离、语音会话及映射回归测试 |
 
 ### 1. Bluetooth & Protocol Runtime
-* **职责**：维护与目标遥控器的 BLE 连接状态与 GATT 通信。
+* **职责**。按蓝牙地址维护独立 WinRT BLE、GATT 订阅与 ATVV 状态。扫描由连接管理器统一发起。
 * **状态机**：`Disconnected` -> `Connecting` -> `ServicesDiscovered` -> `CapabilitiesConfirmed` -> `Ready`。
 * **特性**：
   * 支持自动重连（遥控器休眠唤醒后自动恢复）；
@@ -105,12 +73,7 @@ RemoteBuddy.sln
 
 ## 四、线程模型与并发隔离
 
-为了杜绝 UI 卡顿与音频断续（Glitch），系统划分清晰的线程职责：
-
-1. **UI 线程 (Main Thread)**：仅负责 WPF 界面渲染、向导动画与用户交互响应。
-2. **BLE 事件回调队列 (WinRT ThreadPool)**：异步处理 GATT Notification 数据，接收 ADPCM 包后立即移交音频处理管线。
-3. **音频解码与推流线程 (Dedicated High-Priority Thread)**：专有高优先级线程，负责 ADPCM 解码与 WASAPI 缓冲泵（Pump），确保音频流不被主线程操作阻塞。
-4. **按键监听消息循环 (Raw Input Thread)**：专有消息窗口，后台接收 `WM_INPUT`，执行按键防抖与长按判定。
+Raw Input 由主窗口或当前向导窗口的 `WM_INPUT` 消息入口处理。ETW 和直接 HID 接收器在后台读取，采集到的按键事件交给 WPF 调度器执行按设备分发和手势识别。各设备的 WinRT GATT 回调分别处理 ATVV 控制与音频。共享语音仲裁在启动音频输出前取得占用，避免多个设备同时写入虚拟麦克风。
 
 ---
 
@@ -124,7 +87,7 @@ RemoteBuddy.sln
   * 进程生命周期与异常（未捕获异常、启动参数、平台信息）；
   * BLE 扫描发现、连接协商与 GATT 特征订阅状态；
   * ATVV 协议握手、会话状态流转（`Opening` -> `Streaming` -> `Draining` -> `Idle`）；
-  * Raw Input 设备注册、Container ID 匹配、遥控器按键与映射动作分发；
+  * Raw Input 设备注册、Container ID 匹配、ETW 会话及设备绑定、遥控器按键与映射动作分发；
   * 虚拟声卡驱动审计（VB-CABLE Ready / NotInstalled / RebootRequired）。
 * **严格隐私保护规范**：
   * **绝不**记录任何麦克风语音流、音频波形与原始音频文件；

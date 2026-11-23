@@ -13,25 +13,25 @@
 │     Level 1     │       │     Level 2     │       │     Level 3     │
 │   全局监听 (Sink)│  ──>  │   附加映射 (Add) │  ──>  │   替换屏蔽 (Block)│
 └─────────────────┘       └─────────────────┘       └─────────────────┘
- Raw Input (RIDEV)        触发自定动作 + 原始动作   彻底吞掉原始动作 (PoC目标)
+ Raw Input (RIDEV)        触发自定动作 + 原始动作   拦截原始系统动作
  (可区分遥控器设备)       (如音量键打字且调音量)     (低级钩子无法区分设备)
 ```
 
 ### 1. Level 1: 全局监听 (Passive Monitoring)
-* **技术实现**：通过 Win32 [Raw Input API](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-rawinputdevice) 注册 Consumer Control 页面（Page `0x0C`），启用 `RIDEV_INPUTSINK` 标志。
-* **特性**：即使当前窗口无焦点，后台也能稳定捕获事件；`RAWINPUT.header.hDevice` 能清晰区分按键是来自遥控器还是主键盘。
+* **技术实现**：通过 Win32 [Raw Input API](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-rawinputdevice) 注册键盘（`0x01/0x06`）及 Consumer Control（`0x0C/0x01`），启用 `RIDEV_INPUTSINK` 标志。
+* **特性**：窗口无焦点时也可接收 Windows 交付的报告。应用通过 `RAWINPUT.header.hDevice` 对应的设备标识匹配实体。参见 [Windows 遥控器输入实现](windows-remote-input.md)。
 * **边界**：**Raw Input 纯粹作为监听者（Sink），绝不能阻止原始按键继续传递给系统！**
 
 ### 2. Level 2: 附加映射 (Additive Mapping)
 * **行为**：捕获到遥控器按键后，触发用户配置的快捷键或文本注入，**但原始系统按键动作仍然会发生**。
 * **示例**：若将遥控器“音量加”键映射为常用语，按下时会在屏幕上输入文字，**同时系统的音量条也会增加**。
 
-### 3. Level 3: 替换原始动作 (Exclusive Replacement / Blocking) —— **Phase 1 验证目标**
+### 3. Level 3: 替换原始动作 (Exclusive Replacement / Blocking)
 * **难点与矛盾**：
   * 若要彻底“吞掉（Block）”原始按键，传统 Windows API 需要使用低级键盘钩子 `SetWindowsHookEx(WH_KEYBOARD_LL)`；
   * 但是，[KBDLLHOOKSTRUCT 结构体](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-kbdllhookstruct) **根本不包含设备句柄 `hDevice`**！
   * 如果在全局钩子中直接拦截并返回 1，会导致用户电脑自带的物理键盘对应按键也被误拦截。
-* **决策**：**在 Phase 1 阶段，将“区分遥控器设备句柄并彻底屏蔽原始动作”列为 PoC 预研与验证目标**，在初期版本中默认仅承诺 Level 2 附加映射，待真机验证无副作用后再开放独占替换。
+普通键当前采用附加映射。语音链路另有针对物理 F5 的防护，是否启用取决于目标输入法快捷键。
 
 ---
 
