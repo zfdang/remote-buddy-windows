@@ -65,12 +65,8 @@
                             </DockPanel>
                             <TextBlock Text="{Binding RemoteSummary}" FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,14" MinHeight="36"/>
                         </StackPanel>
-                        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal">
-                            <Button Content="管理设备 →" Margin="0,0,8,0" Padding="12,5" FontSize="12"
-                                    Command="{Binding GoToDevicesCommand}"/>
-                            <Button Content="➕ 添加向导" Padding="10,5" FontSize="12" Background="#007ACC"
-                                    Command="{Binding RunDeviceWizardCommand}"/>
-                        </StackPanel>
+                        <Button DockPanel.Dock="Bottom" Content="管理遥控器 →" HorizontalAlignment="Left" Padding="12,5" FontSize="12"
+                                Command="{Binding GoToDevicesCommand}"/>
                     </DockPanel>
                 </Border>
 
@@ -94,12 +90,8 @@
                             </DockPanel>
                             <TextBlock Text="{Binding IntegrationSummary}" FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,14" MinHeight="36"/>
                         </StackPanel>
-                        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal">
-                            <Button Content="配置快捷键 →" Margin="0,0,8,0" Padding="12,5" FontSize="12"
-                                    Command="{Binding GoToIntegrationsCommand}"/>
-                            <Button Content="🚀 集成向导" Padding="10,5" FontSize="12" Background="#007ACC"
-                                    Command="{Binding RunIntegrationWizardCommand}"/>
-                        </StackPanel>
+                        <Button DockPanel.Dock="Bottom" Content="配置输入法 →" HorizontalAlignment="Left" Padding="12,5" FontSize="12"
+                                Command="{Binding GoToIntegrationsCommand}"/>
                     </DockPanel>
                 </Border>
             </Grid>

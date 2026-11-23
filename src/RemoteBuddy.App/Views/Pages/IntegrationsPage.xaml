@@ -44,7 +44,7 @@
                     <StackPanel>
                         <TextBlock Text="语音触发方式" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,12"/>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                            <TextBlock Text="⌨️ 触发行为：" Foreground="{StaticResource SecondaryTextBrush}" FontSize="13"/>
+                            <TextBlock Text="⌨️ 语音键：" Foreground="{StaticResource SecondaryTextBrush}" FontSize="13"/>
                             <TextBlock Text="{Binding CurrentTriggerModeDisplay}" Foreground="#FFFFFF" FontWeight="Medium" FontSize="13"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
@@ -66,7 +66,7 @@
                         <TextBlock Text="当前集成工具" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,12"/>
                         <TextBlock Text="{Binding CurrentToolDisplayName}" FontSize="20" FontWeight="SemiBold" Foreground="#4DA6FF" Margin="0,0,0,10"/>
                         <Border Background="#25282E" CornerRadius="6" Padding="10,8">
-                            <TextBlock Text="💡 提示：输入法中的录音麦克风需指定为【CABLE Input (VB-Audio Virtual Cable)】"
+                            <TextBlock Text="💡 提示：输入法中的录音麦克风需指定为【CABLE Output (VB-Audio Virtual Cable)】"
                                        FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap"/>
                         </Border>
                     </StackPanel>
@@ -84,7 +84,7 @@
                 <Button Grid.Column="1" Margin="20,0" Padding="24,10" Background="#007ACC"
                         Command="{Binding RunWizardCommand}"
                         FontWeight="SemiBold" FontSize="14"
-                        Content="🚀 通过向导修改语音键与输入工具"/>
+                        Content="通过向导修改语音键与输入工具"/>
                 <Rectangle Grid.Column="2" Height="1" Fill="#3E3E42" VerticalAlignment="Center"/>
             </Grid>
 
@@ -118,8 +118,6 @@
                             </Border>
                         </DockPanel>
                         <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal">
-                            <Button Content="选择并应用" Padding="14,6" Background="#007ACC"
-                                    Command="{Binding ApplyPresetCommand}" CommandParameter="WeChatInput"/>
                             <TextBlock Text="✓ 正在生效" Foreground="#00CC66" FontSize="12" VerticalAlignment="Center" Margin="10,0,0,0"
                                        Visibility="{Binding SelectedTool, Converter={StaticResource EqualValueToVisibilityConverter}, ConverterParameter=WeChatInput}"/>
                         </StackPanel>
@@ -142,8 +140,6 @@
                             </Border>
                         </DockPanel>
                         <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal">
-                            <Button Content="选择并应用" Padding="14,6" Background="#007ACC"
-                                    Command="{Binding ApplyPresetCommand}" CommandParameter="DoubaoInput"/>
                             <TextBlock Text="✓ 正在生效" Foreground="#00CC66" FontSize="12" VerticalAlignment="Center" Margin="10,0,0,0"
                                        Visibility="{Binding SelectedTool, Converter={StaticResource EqualValueToVisibilityConverter}, ConverterParameter=DoubaoInput}"/>
                         </StackPanel>
@@ -166,8 +162,6 @@
                             </Border>
                         </DockPanel>
                         <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal">
-                            <Button Content="选择并应用" Padding="14,6" Background="#007ACC"
-                                    Command="{Binding ApplyPresetCommand}" CommandParameter="WindowsDictation"/>
                             <TextBlock Text="✓ 正在生效" Foreground="#00CC66" FontSize="12" VerticalAlignment="Center" Margin="10,0,0,0"
                                        Visibility="{Binding SelectedTool, Converter={StaticResource EqualValueToVisibilityConverter}, ConverterParameter=WindowsDictation}"/>
                         </StackPanel>
@@ -190,8 +184,6 @@
                             </Border>
                         </DockPanel>
                         <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal">
-                            <Button Content="选择并应用" Padding="14,6" Background="#007ACC"
-                                    Command="{Binding ApplyPresetCommand}" CommandParameter="Typeless"/>
                             <TextBlock Text="✓ 正在生效" Foreground="#00CC66" FontSize="12" VerticalAlignment="Center" Margin="10,0,0,0"
                                        Visibility="{Binding SelectedTool, Converter={StaticResource EqualValueToVisibilityConverter}, ConverterParameter=Typeless}"/>
                         </StackPanel>
@@ -201,34 +193,6 @@
                 </Border>
             </Grid>
 
-            <!-- Custom Tuning & Behavior Form -->
-            <Border Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="8" Padding="20">
-                <StackPanel>
-                    <TextBlock Text="语音触发行为微调" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,12"/>
-
-                    <!-- Trigger Mode -->
-                    <TextBlock Text="触发行为方式：" FontSize="13" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,8"/>
-                    <StackPanel Margin="0,0,0,16">
-                        <RadioButton Content="按住说话 (Hold to Talk) — 按住遥控器语音键说话，松开自动转写（推荐微信/豆包）"
-                                     IsChecked="{Binding IsHoldToTalk}" Foreground="#FFF" Margin="0,0,0,8"/>
-                        <RadioButton Content="单击切换 (Click to Toggle) — 按一下开始收音，再按一下结束收音（推荐 Win+H）"
-                                     IsChecked="{Binding IsClickToToggle}" Foreground="#FFF"/>
-                    </StackPanel>
-
-                    <!-- Shortcut Input -->
-                    <TextBlock Text="全局触发快捷键：" FontSize="13" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,6"/>
-                    <TextBox Text="{Binding ShortcutText, UpdateSourceTrigger=PropertyChanged}"
-                             Width="320" HorizontalAlignment="Left" Background="#1E1E1E" Foreground="#FFF" Padding="10,7" Margin="0,0,0,6"/>
-                    <TextBlock Text="支持组合键输入，如 'Ctrl+Win'、'F1'、'Win+H'、'Ctrl+Alt+V'、'F5' 等。"
-                               FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,16"/>
-
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <Button Content="💾 保存当前设置" Padding="20,9" Background="#007ACC" Command="{Binding SaveCommand}"/>
-                        <TextBlock Text="✅ 设置已保存" Foreground="#00CC66" VerticalAlignment="Center" Margin="14,0,0,0"
-                                   Visibility="{Binding SaveNoticeVisible, Converter={StaticResource BoolToVisibilityConverter}}"/>
-                    </StackPanel>
-                </StackPanel>
-            </Border>
         </StackPanel>
     </ScrollViewer>
 </UserControl>

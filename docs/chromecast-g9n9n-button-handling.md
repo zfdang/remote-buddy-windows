@@ -42,9 +42,9 @@ Chromecast 遥控器（型号 G9N9N）是一款广泛使用的低功耗蓝牙（
 | **工作原理** | 向 `WUDFHost.exe` 注入代码，Hook `hidovergatt.dll` 的 `OnReportValueChanged` | 监听 Windows 蓝牙驱动 ETW 会话，直接在内核层捕获 Event 402 ACL 数据包 | 监听窗口焦点消息、`WM_APPCOMMAND` 与原生键盘事件 | **ETW 双引擎（TDH + UserData）+ 截断自愈 + 窗口多级协同** |
 | **代码注入** | **是**（极高风险，需向驱动宿主注入） | **否**（纯净原生 Win32 API） | **否** | **否（纯净原生零注入）** |
 | **杀毒软件兼容** | 极易报毒（Defender/火绒常拦截为木马注入） | 绿色安全，不触碰任何安全防御线 | 绿色安全 | **完全合规，绝不触碰杀软告警** |
-| **按键覆盖范围** | 全部 15 个按键 | 全部 15 个按键（需配置生效） | 仅限部分已转换的系统键 | **全部 15 个按键精准区分** |
-| **系统版本兼容** | 脆弱（Windows 补丁更新会改变函数 RVA） | 稳定（Win 10 19041 ~ Win 11 全系标准事件） | 稳定 | **全 Windows 10/11 版本跨平台自愈稳定** |
-| **免重启友好度** | 免重启生效 | 需重启蓝牙适配器或电脑加载敏感日志 | 免重启 | **向导自愈兼容（未重启也能通过按键测试）** |
+| **按键覆盖范围** | 全部 15 个按键 | 全部 15 个按键（需配置生效） | 仅限部分已转换的系统键 | 完整报文可解码，截断时报键活动 |
+| **系统版本兼容** | 脆弱（Windows 补丁更新会改变函数 RVA） | 稳定（Win 10 19041 ~ Win 11 全系标准事件） | 稳定 | 取决于 Windows 是否提供完整报文 |
+| **免重启友好度** | 免重启生效 | 需重启蓝牙适配器或电脑加载敏感日志 | 免重启 | 向导可核实来源明确的普通按键活动 |
 
 ### 1. 方案一：Frida / DLL 注入 WUDFHost.exe
 - **实现原理**：通过提权辅助进程寻找加载了 `microsoft.bluetooth.profiles.hidovergatt.dll` 的 `WUDFHost.exe` 驱动宿主进程，使用 Frida Gadget 或原生 CreateRemoteThread 注入 DLL，挂钩 `HogpGattAdapter::OnReportValueChanged`，从输入参数中读取 8 字节 HID 原始报表并通过 IPC 命名管道传回应用。
@@ -102,36 +102,17 @@ Chromecast 遥控器（型号 G9N9N）是一款广泛使用的低功耗蓝牙（
 Remote Buddy 绝不向 Windows 系统核心驱动注入任何外部代码，绝不打包未知来源的二进制注入器。所有的操作均基于微软官方公开的 Win32 API（`advapi32.dll` / `tdh.dll` / `user32.dll`）与 WinRT 运行时完成，从根本上杜绝蓝屏、驱动崩溃与杀毒软件误杀。
 
 ### 2. 双解析引擎（TDH + UserData Raw Buffer）
-在 `ChromecastEtwReceiver.cs` 中实现双解析引擎：
-```csharp
-// 1. 优先尝试系统 TDH 属性提取
-byte[]? typeBytes = GetEventProperty(pEventRecord, "BIP_Type");
-if (typeBytes != null && typeBytes.Length >= 1 && typeBytes[0] == 3 /* ACL RX */)
-{
-    aclData = GetEventProperty(pEventRecord, "BIP_Data");
-}
+接收器只处理 BthPort Event 402。BIP 类型 2 是 HCI 事件，3 是 ACL 接收，4 是 ACL 发送。先读取 TDH 属性并校验长度，必要时按 Event 402 版本 0 的固定元数据格式解析。
 
-// 2. 若系统缺失 TDH 模式，直接下沉解析 EVENT_RECORD.UserData 原始内存
-if (aclData == null || aclData.Length == 0)
-{
-    var record = Marshal.PtrToStructure<EVENT_RECORD>(pEventRecord);
-    if (record.UserDataLength >= 4 && record.UserData != IntPtr.Zero)
-    {
-        // 自动提取 BIP_Type、BIP_DataLen 并切分出标准 L2CAP/ATT ACL 数据帧
-        ...
-    }
-}
-```
+应用使用 WinRT 对已连接的遥控器发起一次带随机服务 UUID 的查询。在同一个 ACL 连接句柄上观察到匹配的发送请求和接收响应后，才会把该连接上的 ATT 通知交给按键解析。收到该连接的断开事件时即清除绑定。
 
-### 3. 截断报文丢弃与向导重启提示机制
-在首次配置注册表参数 `EtwLogSensitiveData=1` 之后、重启电脑或蓝牙适配器之前，Windows `bthport.sys` 可能会对 ACL 数据包进行脱敏截断（保留 7 字节报头，剥除 HID 载荷）。
-缺少载荷时既无法判断按键种类，也无法区分按下和松开状态。Remote Buddy 坚持严格正确性原则：
-- **安全丢弃截断报文**：绝不随意生成伪按键（如误判为 OK 键），避免向导误判测试通过或在运行时误触 Enter 映射；
-- **向导友好引导**：捕获到截断特征（L2CAP CID == 4, ATT Handle == 0x0029 但无载荷）后，在向导界面高亮提示用户“在 Windows 设置中关闭并重新打开一次蓝牙（或重启电脑）使驱动参数生效”；
-- **连接句柄绑定隔离**：通过设备握手与 ATVV 专属 GATT 通讯（TX/Audio/Control）自动捕获并绑定当前遥控器的 ACL 连接句柄（ConnectionHandle），严格过滤其他蓝牙外设的同类 ATT 句柄报文，彻底杜绝跨设备误触。
+运行时每 100 毫秒主动刷新本应用的 ETW 会话，保留 Windows 的自动刷新作为后备。对同一只 G9N9N 的 45 份按下报告做并行对照，事件时间戳到解码的延迟从约 1.03–2.01 秒降到约 94–201 毫秒。
+
+### 3. 驱动截断普通按键报文
+对来源已经确认的 G9N9N，如果属性 0x0029 的通知保留了完整 ATT 报头、但缺失所声明的 8 字节按键报表，向导显示“检测到普通按键活动”，并提示 Windows 未提供键码。映射只处理完整、可解码的报文。本机 Windows 11（26100）实测，多次重启蓝牙适配器后仍只收到报头。整机重启后，ETW 收到了完整的 8 字节报表，方向上键、OK 和返回键的按下、松开均进入了主应用的按键映射。同样的配置在其他 Windows 版本和蓝牙适配器上仍需真机验证。
 
 ### 4. 首次向导多级消息协同
-在 `OnboardingWindow.xaml.cs` 中，除了后台 ETW 监听外，还注入了：
+在 `OnboardingWindow.xaml.cs` 中，使用以下输入路径：
 - **`WM_APPCOMMAND` 拦截器**：捕获 Windows 转换的 `APPCOMMAND_BROWSER_BACK`、`APPCOMMAND_VOLUME_MUTE`、`APPCOMMAND_VOLUME_DOWN`、`APPCOMMAND_VOLUME_UP`、`APPCOMMAND_MEDIA_PLAY_PAUSE`；
 - **WPF 全局键盘穿透**：捕获方向键（Up/Down/Left/Right）、确认键（Return/Enter/Select）、主页键等，防止 WPF 控件焦点（如“下一步”按钮）吞掉回车键，确保按键测试即按即验。
 

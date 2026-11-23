@@ -63,43 +63,36 @@ public class ConvertersAndViewModelTests
     }
 
     [Fact]
-    public void IntegrationsViewModel_ApplyPreset_UpdatesShortcutAndMode()
+    public void IntegrationWizard_UpdatesTriggerModeAndShortcut_WhenContinuingToVerification()
     {
         string path = Path.Combine(Path.GetTempPath(), $"vib-int-{Guid.NewGuid():N}.json");
         var config = new ConfigService(path);
-        var vm = new IntegrationsViewModel(config);
+        using var wizard = new OnboardingViewModel(config, new DummyBluetoothManager(), WizardMode.Integration);
+        var overview = new IntegrationsViewModel(config);
 
-        // Apply WeChat
-        vm.ApplyPreset("WeChatInput");
-        Assert.Equal(TargetInputTool.WeChatInput, vm.SelectedTool);
-        Assert.Equal("Ctrl+F5", vm.ShortcutText);
-        Assert.Equal(VoiceTriggerMode.HoldToTalk, vm.TriggerMode);
-        Assert.True(vm.IsHoldToTalk);
-        Assert.False(vm.IsClickToToggle);
-        Assert.Equal("微信输入法", vm.CurrentToolDisplayName);
+        wizard.ApplyPreset("WindowsDictation");
+        Assert.Equal("Win+H", wizard.ShortcutText);
+        Assert.True(wizard.IsClickToToggle);
+        Assert.NotEqual(TargetInputTool.WindowsDictation, config.Current.InputTool.Tool);
 
-        // Apply Windows Dictation
-        vm.ApplyPreset("WindowsDictation");
-        Assert.Equal(TargetInputTool.WindowsDictation, vm.SelectedTool);
-        Assert.Equal("Win+H", vm.ShortcutText);
-        Assert.Equal(VoiceTriggerMode.ClickToToggle, vm.TriggerMode);
-        Assert.False(vm.IsHoldToTalk);
-        Assert.True(vm.IsClickToToggle);
-        Assert.Equal("Windows 语音听写 (Win+H)", vm.CurrentToolDisplayName);
+        wizard.IsHoldToTalk = true;
+        wizard.ShortcutText = "Ctrl+F5";
+        wizard.NextStep();
 
-        // Apply Doubao
-        vm.ApplyPreset("DoubaoInput");
-        Assert.Equal(TargetInputTool.DoubaoInput, vm.SelectedTool);
-        Assert.Equal("F1", vm.ShortcutText);
-        Assert.Equal(VoiceTriggerMode.HoldToTalk, vm.TriggerMode);
+        Assert.Equal(WizardStep.TranscriptionVerify, wizard.CurrentWizardStep);
+        Assert.Equal("按住说话", overview.CurrentTriggerModeDisplay);
+        Assert.Equal("Ctrl+F5", overview.CurrentShortcutDisplay);
 
-        // Save
-        vm.Save();
-        Assert.True(vm.SaveNoticeVisible);
+        wizard.PreviousStep();
+        wizard.IsClickToToggle = true;
+        wizard.NextStep();
+        overview.Reload();
 
-        var reloaded = new ConfigService(path);
-        Assert.Equal(TargetInputTool.DoubaoInput, reloaded.Current.InputTool.Tool);
-        Assert.Equal("F1", reloaded.Current.InputTool.Shortcut);
+        var saved = new ConfigService(path).Current.InputTool;
+        Assert.Equal(TargetInputTool.WindowsDictation, saved.Tool);
+        Assert.Equal(VoiceTriggerMode.ClickToToggle, saved.TriggerMode);
+        Assert.Equal("Ctrl+F5", saved.Shortcut);
+        Assert.Equal("单击切换", overview.CurrentTriggerModeDisplay);
     }
 
     [Fact]

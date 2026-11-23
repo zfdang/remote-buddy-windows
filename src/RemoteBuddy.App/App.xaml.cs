@@ -25,10 +25,11 @@ public partial class App : Application
 
         for (int i = 0; i < e.Args.Length; i++)
         {
-            if (string.Equals(e.Args[i], "--chromecast-worker", StringComparison.OrdinalIgnoreCase) && i + 1 < e.Args.Length)
+            if (string.Equals(e.Args[i], "--chromecast-worker", StringComparison.OrdinalIgnoreCase) &&
+                i + 2 < e.Args.Length && Guid.TryParse(e.Args[i + 2], out var marker))
             {
                 string pipeName = e.Args[i + 1];
-                ChromecastWorkerHost.RunWorker(pipeName);
+                ChromecastWorkerHost.RunWorker(pipeName, marker);
                 Shutdown(0);
                 return;
             }

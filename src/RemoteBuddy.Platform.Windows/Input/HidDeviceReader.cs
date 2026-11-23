@@ -52,43 +52,11 @@ public sealed class HidDeviceReader : IDisposable
         public ushort NumberFeatureDataIndices;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct OVERLAPPED
-    {
-        public IntPtr Internal;
-        public IntPtr InternalHigh;
-        public uint Offset;
-        public uint OffsetHigh;
-        public IntPtr hEvent;
-    }
-
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern SafeFileHandle CreateFile(
         string lpFileName, uint dwDesiredAccess, uint dwShareMode,
         IntPtr lpSecurityAttributes, uint dwCreationDisposition,
         uint dwFlagsAndAttributes, IntPtr hTemplateFile);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool ReadFile(
-        SafeFileHandle hFile, [Out] byte[] lpBuffer, uint nNumberOfBytesToRead,
-        out uint lpNumberOfBytesRead, ref OVERLAPPED lpOverlapped);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr CreateEvent(IntPtr lpEventAttributes, bool bManualReset, bool bInitialState, string? lpName);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool GetOverlappedResult(
-        SafeFileHandle hFile, ref OVERLAPPED lpOverlapped,
-        out uint lpNumberOfBytesTransferred, bool bWait);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool CancelIo(SafeFileHandle hFile);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool CloseHandle(IntPtr hObject);
 
     [DllImport("setupapi.dll", SetLastError = true)]
     private static extern IntPtr SetupDiGetClassDevs(ref Guid ClassGuid, IntPtr Enumerator, IntPtr hwndParent, uint Flags);
@@ -289,7 +257,7 @@ public sealed class HidDeviceReader : IDisposable
             ActivePath = path;
 
             var ct = _cts.Token;
-            _readTask = Task.Run(() => ReadLoopNative(handle, effectiveReportLen, ct), ct);
+            _readTask = Task.Run(() => ReadLoopAsync(handle, effectiveReportLen, ct), ct);
             AppLogger.Info($"HidDeviceReader started successfully for: {path} (ReportLen={effectiveReportLen})", "HidDeviceReader");
             return true;
         }
@@ -312,90 +280,37 @@ public sealed class HidDeviceReader : IDisposable
         return Start(best.Path, best.InputReportByteLength);
     }
 
-    private void ReadLoopNative(SafeFileHandle handle, int reportLen, CancellationToken ct)
+    private async Task ReadLoopAsync(SafeFileHandle handle, int reportLength, CancellationToken cancellationToken)
     {
-        IntPtr hEvent = CreateEvent(IntPtr.Zero, true, false, null);
-        if (hEvent == IntPtr.Zero)
-        {
-            AppLogger.Error("HidDeviceReader: Failed to create event for overlapped I/O", component: "HidDeviceReader");
-            return;
-        }
-
         try
         {
-            byte[] buffer = new byte[reportLen];
-            var ov = new OVERLAPPED { hEvent = hEvent };
-
-            while (!ct.IsCancellationRequested && !handle.IsClosed && !handle.IsInvalid)
+            // Keep the report buffer pinned until the OS completes the overlapped read.
+            // Disable stream buffering so each read requests one HID report.
+            using var stream = new FileStream(handle, FileAccess.Read, bufferSize: 1, isAsync: true);
+            byte[] buffer = new byte[reportLength];
+            while (!cancellationToken.IsCancellationRequested)
             {
-                uint bytesRead = 0;
-                bool ok = ReadFile(handle, buffer, (uint)reportLen, out bytesRead, ref ov);
-                if (!ok)
+                int bytesRead = await stream.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+                if (bytesRead == 0 || cancellationToken.IsCancellationRequested) break;
+
+                var report = buffer.AsSpan(0, bytesRead);
+                if (G9N9NProtocol.TryParseReport(report, out var buttons) ||
+                    T1RemoteProtocol.TryParseReport(report, out buttons, out _) ||
+                    XiaomiProtocol.TryParseReport(report, out buttons))
                 {
-                    int err = Marshal.GetLastWin32Error();
-                    if (err == 997 /* ERROR_IO_PENDING */)
-                    {
-                        // Wait for read or cancellation in 100ms chunks to check ct
-                        bool completed = false;
-                        while (!ct.IsCancellationRequested && !handle.IsClosed)
-                        {
-                            uint waitRes = WaitForSingleObject(hEvent, 100);
-                            if (waitRes == 0 /* WAIT_OBJECT_0 */)
-                            {
-                                completed = true;
-                                break;
-                            }
-                        }
-
-                        if (!completed || ct.IsCancellationRequested)
-                        {
-                            CancelIo(handle);
-                            break;
-                        }
-
-                        if (!GetOverlappedResult(handle, ref ov, out bytesRead, false))
-                        {
-                            int gerr = Marshal.GetLastWin32Error();
-                            if (gerr != 995 /* ERROR_OPERATION_ABORTED */ && !ct.IsCancellationRequested)
-                            {
-                                AppLogger.Warn($"HidDeviceReader: GetOverlappedResult error {gerr}", "HidDeviceReader");
-                            }
-                            break;
-                        }
-                    }
-                    else
-                    {
-                        if (err != 995 /* ERROR_OPERATION_ABORTED */ && !ct.IsCancellationRequested)
-                        {
-                            AppLogger.Warn($"HidDeviceReader: ReadFile error {err}", "HidDeviceReader");
-                        }
-                        break;
-                    }
-                }
-
-                if (bytesRead > 0)
-                {
-                    var slice = buffer.AsSpan(0, (int)bytesRead);
-                    List<RemoteButton> currentButtons;
-                    if (G9N9NProtocol.TryParseReport(slice, out currentButtons) ||
-                        T1RemoteProtocol.TryParseReport(slice, out currentButtons, out _) ||
-                        XiaomiProtocol.TryParseReport(slice, out currentButtons))
-                    {
-                        DispatchButtons(currentButtons);
-                    }
+                    DispatchButtons(buttons);
                 }
             }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
-            if (!ct.IsCancellationRequested)
+            if (!cancellationToken.IsCancellationRequested)
             {
                 AppLogger.Warn($"HidDeviceReader read loop exception: {ex.Message}", "HidDeviceReader");
             }
-        }
-        finally
-        {
-            CloseHandle(hEvent);
         }
     }
 
@@ -434,20 +349,7 @@ public sealed class HidDeviceReader : IDisposable
     public void Stop()
     {
         _cts?.Cancel();
-        if (_handle != null && !_handle.IsClosed && !_handle.IsInvalid)
-        {
-            try
-            {
-                CancelIo(_handle);
-            }
-            catch { }
-            try
-            {
-                _handle.Dispose();
-            }
-            catch { }
-        }
-
+        _handle?.Dispose();
         _handle = null;
         _cts?.Dispose();
         _cts = null;

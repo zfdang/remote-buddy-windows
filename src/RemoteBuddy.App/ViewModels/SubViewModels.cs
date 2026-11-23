@@ -566,8 +566,7 @@ public partial class MappingViewModel : ObservableObject
     [ObservableProperty]
     private bool _customMappingEnabled = true;
 
-    [ObservableProperty]
-    private RemoteButton _activeHardwareButton = RemoteButton.None;
+    internal event Action<RemoteButton>? HardwareButtonPressed;
 
     public bool IsG9N9N => SelectedDevice?.ModelType is RemoteModelType.GoogleG9N9N or RemoteModelType.GoogleGY3LE;
     public bool IsT1 => SelectedDevice?.ModelType == RemoteModelType.T1Remote;
@@ -606,6 +605,12 @@ public partial class MappingViewModel : ObservableObject
                 SelectedMapping = match;
             }
         }
+    }
+
+    internal void NotifyHardwarePress(RemoteButton button)
+    {
+        if (!IsMappingSelectionLocked) SelectButton(button.ToString());
+        HardwareButtonPressed?.Invoke(button);
     }
 
     [RelayCommand]
@@ -710,25 +715,7 @@ public partial class IntegrationsViewModel : ObservableObject
 {
     private readonly ConfigService _config;
 
-    [ObservableProperty]
-    private TargetInputTool _selectedTool;
-
-    [ObservableProperty]
-    private VoiceTriggerMode _triggerMode;
-
-    public Action? OnConfigurationSaved { get; set; }
-
-    [ObservableProperty]
-    private string _shortcutText = string.Empty;
-
-    partial void OnShortcutTextChanged(string value)
-    {
-        SaveNoticeVisible = false;
-        OnPropertyChanged(nameof(CurrentShortcutDisplay));
-    }
-
-    [ObservableProperty]
-    private bool _saveNoticeVisible;
+    public TargetInputTool SelectedTool => _config.Current.InputTool.Tool;
 
     public string CurrentToolDisplayName => SelectedTool switch
     {
@@ -739,9 +726,9 @@ public partial class IntegrationsViewModel : ObservableObject
         _ => "自定义快捷键"
     };
 
-    public string CurrentShortcutDisplay => string.IsNullOrWhiteSpace(ShortcutText) ? "未配置" : ShortcutText;
+    public string CurrentShortcutDisplay => string.IsNullOrWhiteSpace(_config.Current.InputTool.Shortcut) ? "未配置" : _config.Current.InputTool.Shortcut;
 
-    public string CurrentTriggerModeDisplay => TriggerMode == VoiceTriggerMode.HoldToTalk ? "按住说话 (Hold to Talk)" : "点按切换 (Click to Toggle)";
+    public string CurrentTriggerModeDisplay => _config.Current.InputTool.TriggerMode == VoiceTriggerMode.HoldToTalk ? "按住说话" : "单击切换";
 
     public string VirtualCableStatusDescription
     {
@@ -755,38 +742,6 @@ public partial class IntegrationsViewModel : ObservableObject
                 DriverReadinessStatus.RebootRequired => "VB-CABLE 需要重启系统完成初始化",
                 _ => "虚拟音频设备未就绪"
             };
-        }
-    }
-
-    public bool IsHoldToTalk
-    {
-        get => TriggerMode == VoiceTriggerMode.HoldToTalk;
-        set
-        {
-            if (value && TriggerMode != VoiceTriggerMode.HoldToTalk)
-            {
-                TriggerMode = VoiceTriggerMode.HoldToTalk;
-                OnPropertyChanged(nameof(IsHoldToTalk));
-                OnPropertyChanged(nameof(IsClickToToggle));
-                OnPropertyChanged(nameof(CurrentTriggerModeDisplay));
-                Save();
-            }
-        }
-    }
-
-    public bool IsClickToToggle
-    {
-        get => TriggerMode == VoiceTriggerMode.ClickToToggle;
-        set
-        {
-            if (value && TriggerMode != VoiceTriggerMode.ClickToToggle)
-            {
-                TriggerMode = VoiceTriggerMode.ClickToToggle;
-                OnPropertyChanged(nameof(IsHoldToTalk));
-                OnPropertyChanged(nameof(IsClickToToggle));
-                OnPropertyChanged(nameof(CurrentTriggerModeDisplay));
-                Save();
-            }
         }
     }
 
@@ -804,60 +759,7 @@ public partial class IntegrationsViewModel : ObservableObject
 
     public void Reload()
     {
-        SelectedTool = _config.Current.InputTool.Tool;
-        TriggerMode = _config.Current.InputTool.TriggerMode;
-        ShortcutText = _config.Current.InputTool.Shortcut;
-        SaveNoticeVisible = false;
-        OnPropertyChanged(nameof(IsHoldToTalk));
-        OnPropertyChanged(nameof(IsClickToToggle));
-        OnPropertyChanged(nameof(CurrentToolDisplayName));
-        OnPropertyChanged(nameof(CurrentShortcutDisplay));
-        OnPropertyChanged(nameof(CurrentTriggerModeDisplay));
-        OnPropertyChanged(nameof(VirtualCableStatusDescription));
-    }
-
-    [RelayCommand]
-    public void ApplyPreset(string toolName)
-    {
-        if (Enum.TryParse<TargetInputTool>(toolName, out var tool))
-        {
-            SelectedTool = tool;
-            ShortcutText = tool switch
-            {
-                TargetInputTool.WeChatInput => InputToolConfig.DefaultWeChatShortcut,
-                TargetInputTool.DoubaoInput => "F1",
-                TargetInputTool.WindowsDictation => "Win+H",
-                TargetInputTool.Typeless => "Ctrl+Alt+V",
-                _ => "Ctrl+Shift+V"
-            };
-            TriggerMode = (tool == TargetInputTool.WindowsDictation)
-                ? VoiceTriggerMode.ClickToToggle
-                : VoiceTriggerMode.HoldToTalk;
-            OnPropertyChanged(nameof(IsHoldToTalk));
-            OnPropertyChanged(nameof(IsClickToToggle));
-            OnPropertyChanged(nameof(CurrentToolDisplayName));
-            OnPropertyChanged(nameof(CurrentShortcutDisplay));
-            OnPropertyChanged(nameof(CurrentTriggerModeDisplay));
-            Save();
-        }
-    }
-
-    partial void OnTriggerModeChanged(VoiceTriggerMode value)
-    {
-        OnPropertyChanged(nameof(IsHoldToTalk));
-        OnPropertyChanged(nameof(IsClickToToggle));
-        OnPropertyChanged(nameof(CurrentTriggerModeDisplay));
-    }
-
-    [RelayCommand]
-    public void Save()
-    {
-        _config.Current.InputTool.Tool = SelectedTool;
-        _config.Current.InputTool.TriggerMode = TriggerMode;
-        _config.Current.InputTool.Shortcut = ShortcutText;
-        _config.Save();
-        SaveNoticeVisible = true;
-        OnConfigurationSaved?.Invoke();
+        OnPropertyChanged(nameof(SelectedTool));
         OnPropertyChanged(nameof(CurrentToolDisplayName));
         OnPropertyChanged(nameof(CurrentShortcutDisplay));
         OnPropertyChanged(nameof(CurrentTriggerModeDisplay));
@@ -1145,12 +1047,6 @@ public partial class GeneralViewModel : ObservableObject
 
     [RelayCommand]
     public void RerunWizard() => _openWizard(WizardMode.Full);
-
-    [RelayCommand]
-    public void RunDeviceWizard() => _openWizard(WizardMode.DeviceOnly);
-
-    [RelayCommand]
-    public void RunIntegrationWizard() => _openWizard(WizardMode.Integration);
 
     [RelayCommand]
     public void GoToPermissions() => _navigate("Permissions");

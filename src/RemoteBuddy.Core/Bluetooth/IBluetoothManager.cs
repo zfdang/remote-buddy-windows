@@ -25,7 +25,6 @@ public interface IBluetoothManager : IDisposable
     ulong ConnectedDeviceAddress { get; }
     Guid? ConnectedDeviceContainerId { get; }
     G9N9NVoiceButtonMode VoiceButtonMode { get; set; }
-    IReadOnlyList<ushort> AttvAttributeHandles => Array.Empty<ushort>();
 
     event Action<RemoteDevice>? DeviceDiscovered;
     event Action<bool, string>? ConnectionStatusChanged;
@@ -43,5 +42,5 @@ public interface IBluetoothManager : IDisposable
     void Disconnect();
     Task<bool> StartVoiceSessionAsync();
     Task<bool> StopVoiceSessionAsync();
-    Task TriggerAttvSyncAsync() => Task.CompletedTask;
+    Task ProbeButtonSourceAsync(Guid marker) => Task.CompletedTask;
 }

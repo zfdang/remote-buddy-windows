@@ -76,6 +76,35 @@ public class OnboardingConnectionTests
         Assert.False(manager.IsReady);
     }
 
+    [Fact]
+    public void ChromecastButtonTest_DistinguishesVoiceFromOrdinaryButtonActivity()
+    {
+        using var manager = new WinRtBluetoothManager();
+        var config = CreateConfig();
+        config.Current.Devices[0].ModelType = RemoteModelType.GoogleG9N9N;
+        using var vm = new OnboardingViewModel(config, manager) { CurrentStep = 4, IsDeviceConnected = true };
+
+        vm.NotifyButtonPressed(RemoteButton.Voice);
+        Assert.Equal("语音键正常，普通键尚未确认", vm.LastPressedButtonName);
+        Assert.True(vm.HasButtonTested);
+
+        vm.NotifyTruncatedPacketDetected();
+        Assert.True(vm.HasButtonTested);
+        Assert.Equal("检测到普通按键活动", vm.LastPressedButtonName);
+        Assert.Contains("未提供键码", vm.TruncationWarningMessage);
+
+        vm.NotifyButtonPressed(RemoteButton.Left);
+        Assert.Contains("方向左键", vm.LastPressedButtonName);
+        Assert.Empty(vm.TruncationWarningMessage);
+        vm.NextStep();
+        Assert.Equal(WizardStep.AudioTest, vm.CurrentWizardStep);
+
+        vm.PreviousStep();
+        vm.NotifyButtonPressed(RemoteButton.Voice);
+        vm.NextStep();
+        Assert.Equal(WizardStep.AudioTest, vm.CurrentWizardStep);
+    }
+
     private static ConfigService CreateConfig()
     {
         var config = new ConfigService(Path.Combine(Path.GetTempPath(), $"vib-test-{Guid.NewGuid():N}.json"));

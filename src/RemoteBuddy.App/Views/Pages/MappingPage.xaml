@@ -3,6 +3,24 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:model="clr-namespace:RemoteBuddy.Core.Models;assembly=RemoteBuddy.Core"
              xmlns:vm="clr-namespace:RemoteBuddy.App.ViewModels">
+    <UserControl.Resources>
+        <Storyboard x:Key="RemoteButtonPress" FillBehavior="Stop">
+            <DoubleAnimationUsingKeyFrames Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleX)">
+                <DiscreteDoubleKeyFrame KeyTime="0:0:0" Value="0.88"/>
+                <LinearDoubleKeyFrame KeyTime="0:0:0.12" Value="0.88"/>
+                <LinearDoubleKeyFrame KeyTime="0:0:0.26" Value="1"/>
+            </DoubleAnimationUsingKeyFrames>
+            <DoubleAnimationUsingKeyFrames Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)">
+                <DiscreteDoubleKeyFrame KeyTime="0:0:0" Value="0.88"/>
+                <LinearDoubleKeyFrame KeyTime="0:0:0.12" Value="0.88"/>
+                <LinearDoubleKeyFrame KeyTime="0:0:0.26" Value="1"/>
+            </DoubleAnimationUsingKeyFrames>
+            <ColorAnimationUsingKeyFrames Storyboard.TargetProperty="(Control.BorderBrush).(SolidColorBrush.Color)">
+                <DiscreteColorKeyFrame KeyTime="0:0:0" Value="#4DA6FF"/>
+                <DiscreteColorKeyFrame KeyTime="0:0:0.26" Value="#4DA6FF"/>
+            </ColorAnimationUsingKeyFrames>
+        </Storyboard>
+    </UserControl.Resources>
     <DockPanel>
         <!-- Page Header -->
         <Grid DockPanel.Dock="Top" Margin="0,0,0,14">
@@ -26,7 +44,7 @@
             <DockPanel LastChildFill="False">
                 <StackPanel Orientation="Horizontal" DockPanel.Dock="Left" VerticalAlignment="Center">
                     <TextBlock Text="⌨️ " FontSize="13"/>
-                    <TextBlock Text="硬件按键接收: RawInput 监听中" Foreground="{StaticResource SecondaryTextBrush}" FontSize="13" Margin="0,0,18,0"/>
+                    <TextBlock Text="按实体遥控器查看按键反馈" Foreground="{StaticResource SecondaryTextBrush}" FontSize="13" Margin="0,0,18,0"/>
                     <CheckBox Content="锁定当前按键 (按实体遥控器时不自动切换选择)" IsChecked="{Binding IsMappingSelectionLocked}" Foreground="{StaticResource SecondaryTextBrush}" VerticalAlignment="Center"/>
                 </StackPanel>
                 <Button Content="🔄 恢复默认映射" DockPanel.Dock="Right" Padding="12,6" Background="Transparent" BorderBrush="{StaticResource BorderColorBrush}" Foreground="{StaticResource SecondaryTextBrush}"
@@ -49,7 +67,17 @@
 
                     <!-- Visual Remote Control Body -->
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
-                        <StackPanel HorizontalAlignment="Center">
+                        <StackPanel x:Name="RemoteButtons" HorizontalAlignment="Center">
+                            <StackPanel.Resources>
+                                <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                    <Setter Property="RenderTransformOrigin" Value="0.5,0.5"/>
+                                    <Setter Property="RenderTransform">
+                                        <Setter.Value>
+                                            <ScaleTransform/>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </StackPanel.Resources>
                             <!-- 1. Xiaomi Remote Control Body -->
                             <Border Background="#242629" BorderBrush="#3E4249" BorderThickness="1" CornerRadius="28" Padding="14,10" Width="210"
                                     Visibility="{Binding IsXiaomi, Converter={StaticResource BoolToVisibilityConverter}}">

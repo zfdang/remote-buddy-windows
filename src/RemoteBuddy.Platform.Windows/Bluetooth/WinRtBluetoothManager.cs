@@ -70,42 +70,21 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
     public ulong ConnectedDeviceAddress => _connectedDevice?.BluetoothAddress ?? 0;
     public Guid? ConnectedDeviceContainerId { get; private set; }
 
-    public IReadOnlyList<ushort> AttvAttributeHandles
+    public async Task ProbeButtonSourceAsync(Guid marker)
     {
-        get
-        {
-            lock (_stateLock)
-            {
-                var handles = new List<ushort>();
-                if (_txCharacteristic != null) handles.Add(_txCharacteristic.AttributeHandle);
-                if (_audioCharacteristic != null) handles.Add(_audioCharacteristic.AttributeHandle);
-                if (_controlCharacteristic != null) handles.Add(_controlCharacteristic.AttributeHandle);
-                return handles;
-            }
-        }
-    }
+        BluetoothLEDevice? device;
+        lock (_stateLock) device = _connectedDevice;
+        if (device == null) return;
 
-    public async Task TriggerAttvSyncAsync()
-    {
         try
         {
-            GattCharacteristic? control;
-            lock (_stateLock)
-            {
-                control = _controlCharacteristic;
-            }
-
-            if (control != null)
-            {
-                // Reading the control characteristic triggers an ATT Read transaction on its attribute handle,
-                // causing bthport.sys to emit an ACL event containing the connection handle for binding.
-                var res = await control.ReadValueAsync(BluetoothCacheMode.Uncached);
-                AppLogger.Debug($"TriggerAttvSyncAsync executed: status={res.Status}", "BluetoothManager");
-            }
+            var result = await device.GetGattServicesForUuidAsync(marker, BluetoothCacheMode.Uncached);
+            foreach (var service in result.Services) service.Dispose();
+            AppLogger.Debug($"Chromecast button source query finished: {result.Status}", "BluetoothManager");
         }
         catch (Exception ex)
         {
-            AppLogger.Debug($"TriggerAttvSyncAsync benign exception: {ex.Message}", "BluetoothManager");
+            AppLogger.Debug($"Chromecast button source query failed: {ex.Message}", "BluetoothManager");
         }
     }
 

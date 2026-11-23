@@ -93,8 +93,8 @@
             <!-- Step 4: Button Test -->
             <StackPanel x:Name="Step4Panel" Visibility="Collapsed">
                 <TextBlock Text="遥控器按键响应测试" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,10"/>
-                <TextBlock Text="请按方向键、OK 或语音键，确认下方显示对应名称。测试后请用鼠标点击“下一步”。部分小米遥控器的返回和音量键暂不支持。" TextWrapping="Wrap" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,16"/>
-                <Border Background="{StaticResource CardBackgroundBrush}" Padding="20" CornerRadius="6" HorizontalAlignment="Left" Width="300">
+                <TextBlock Text="请按方向键或 OK，查看普通按键是否响应。仅识别到语音键时，也可以继续测试麦克风。" TextWrapping="Wrap" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,16"/>
+                <Border Background="{StaticResource CardBackgroundBrush}" Padding="20" CornerRadius="6" HorizontalAlignment="Left" MinWidth="300">
                     <TextBlock Text="{Binding LastPressedButtonName}" FontSize="18" FontWeight="Bold" Foreground="#00CC66" HorizontalAlignment="Center"/>
                 </Border>
                 <Border Visibility="{Binding TruncationWarningVisibility}" Background="#2B1D00" BorderBrush="#FF9900" BorderThickness="1" CornerRadius="6" Padding="14,12" Margin="0,12,0,0">
@@ -144,6 +144,11 @@
 
                 <Border Background="{StaticResource CardBackgroundBrush}" Padding="14" CornerRadius="6" Margin="0,0,0,14">
                     <StackPanel>
+                        <TextBlock Text="语音键触发方式" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,6"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                            <RadioButton Content="按住说话" GroupName="VoiceTrigger" IsChecked="{Binding IsHoldToTalk}" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,20,0"/>
+                            <RadioButton Content="单击切换" GroupName="VoiceTrigger" IsChecked="{Binding IsClickToToggle}" Foreground="{StaticResource PrimaryTextBrush}"/>
+                        </StackPanel>
                         <TextBlock Text="当前语音触发快捷键：" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,6"/>
                         <TextBox Text="{Binding ShortcutText, UpdateSourceTrigger=PropertyChanged}" Width="250" HorizontalAlignment="Left" Background="#1E1E1E" Foreground="#FFF" Padding="8,4" Margin="0,0,0,10"/>
                         <TextBlock Text="麦克风输入端点要求：" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,4"/>
@@ -155,7 +160,7 @@
             <!-- Step 7: Live Transcription Verification -->
             <StackPanel x:Name="Step7Panel" Visibility="Collapsed">
                 <TextBlock Text="真实输入法转写验收" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,10"/>
-                <TextBlock Text="点击下方输入框使其获得焦点，按住遥控器语音键说一句：「今天天气真好」，核对文字是否成功上屏：" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,14"/>
+                <TextBlock Text="{Binding TranscriptionInstructions}" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,14"/>
                 <TextBox Text="{Binding TranscriptionTestText, UpdateSourceTrigger=PropertyChanged}" Height="70" Background="#111" Foreground="#FFF" FontSize="14" Padding="10" TextWrapping="Wrap" Margin="0,0,0,14"/>
                 <CheckBox Content="我已确认上述输入法转写结果正确" IsChecked="{Binding IsTranscriptionVerified}" Foreground="#FFF"/>
             </StackPanel>

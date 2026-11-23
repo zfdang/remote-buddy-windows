@@ -74,9 +74,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (isChromecast && !_chromecastButtonReceiver.IsRunning)
                 {
                     AppLogger.Info("Activating Chromecast ETW receiver for active onboarding session", "MainViewModel");
-                    _chromecastButtonReceiver.SetKnownGattHandles(_bluetoothManager.AttvAttributeHandles);
-                    _chromecastButtonReceiver.Start();
-                    _ = _bluetoothManager.TriggerAttvSyncAsync();
+                    StartChromecastButtons();
                 }
             }
         }
@@ -101,7 +99,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         DevicesVm = new DevicesViewModel(_configService, _bluetoothManager, mode => RequestOpenWizard?.Invoke(mode));
         MappingVm = new MappingViewModel(_configService);
         IntegrationsVm = new IntegrationsViewModel(_configService, mode => RequestOpenWizard?.Invoke(mode));
-        IntegrationsVm.OnConfigurationSaved = UpdateVoiceKeyGuard;
         EnvironmentVm = new EnvironmentViewModel();
         AppIntegrationVm = new AppIntegrationViewModel(_configService);
         AboutVm = new AboutViewModel();
@@ -121,9 +118,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _chromecastButtonReceiver.TruncatedPacketDetected += OnChromecastTruncatedPacketDetected;
     }
 
+    private void StartChromecastButtons()
+    {
+        if (_bluetoothManager.ConnectedDeviceAddress == 0 || _chromecastButtonReceiver.IsRunning) return;
+        var marker = Guid.NewGuid();
+        if (_chromecastButtonReceiver.Start(marker))
+            _ = _bluetoothManager.ProbeButtonSourceAsync(marker);
+    }
+
     private void OnChromecastTruncatedPacketDetected()
     {
-        AppLogger.Warn("MainViewModel: Chromecast truncated packet detected (restart required)", "MainViewModel");
         if (System.Windows.Application.Current?.Dispatcher != null && !System.Windows.Application.Current.Dispatcher.CheckAccess())
         {
             System.Windows.Application.Current.Dispatcher.BeginInvoke(new Action(() =>
@@ -178,7 +182,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 _rawInputReceiver.ResetDeviceState();
                 _hidDeviceReader.Stop();
                 _chromecastButtonReceiver.Stop();
-                _chromecastButtonReceiver.ResetConnectionBinding();
             }
             else
             {
@@ -202,9 +205,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (isChromecast)
                 {
                     AppLogger.Info($"Activating Chromecast ETW receiver for device '{name}'", "MainViewModel");
-                    _chromecastButtonReceiver.SetKnownGattHandles(_bluetoothManager.AttvAttributeHandles);
-                    _chromecastButtonReceiver.Start();
-                    _ = _bluetoothManager.TriggerAttvSyncAsync();
+                    StartChromecastButtons();
                 }
 
                 if (addr != 0)
@@ -333,6 +334,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             if (ActiveOnboardingVm?.CurrentWizardStep == WizardStep.ButtonTest)
                 ActiveOnboardingVm.NotifyButtonPressed(RemoteButton.Voice);
+            else if (ActiveOnboardingVm == null)
+                ShowMappingPress(RemoteButton.Voice);
         }));
     }
 
@@ -435,6 +438,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 return;
         }
 
+        if (isDown && ActiveOnboardingVm == null)
+            ShowMappingPress(button);
+
         if (button == RemoteButton.Voice)
         {
             var currentMode = _configService.Current.InputTool.TriggerMode;
@@ -476,12 +482,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         if (isDown)
         {
-            if (!MappingVm.IsMappingSelectionLocked)
-            {
-                MappingVm.SelectButton(button.ToString());
-            }
-            MappingVm.ActiveHardwareButton = button;
-
             StopRepeatTimer();
             ExecuteButtonAction(mapping.ClickAction, mapping.ClickShortcut, mapping.ClickMedia, mapping.ClickText);
 
@@ -530,11 +530,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         else
         {
-            if (MappingVm.ActiveHardwareButton == button)
-            {
-                MappingVm.ActiveHardwareButton = RemoteButton.None;
-            }
-
             lock (_repeatLock)
             {
                 if (button == _heldButton)
@@ -542,6 +537,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     StopRepeatTimer();
                 }
             }
+        }
+    }
+
+    private void ShowMappingPress(RemoteButton button)
+    {
+        if (ActivePageName == "Mapping" && MappingVm.SelectedDevice is { BluetoothAddress: not 0 } device &&
+            device.BluetoothAddress == _bluetoothManager.ConnectedDeviceAddress)
+        {
+            MappingVm.NotifyHardwarePress(button);
         }
     }
 
