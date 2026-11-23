@@ -489,6 +489,133 @@ public class MainViewModelTests
     }
 
     [Fact]
+    public void HandleAppCommandButton_ExecutesCustomMapping_WithoutSelfSuppression()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-mvm-appcmd-map-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var dev = new RemoteDevice
+            {
+                Id = "DEV_01",
+                Name = "Xiaomi Remote",
+                BluetoothAddress = 0xA4C138123456,
+            };
+            dev.Mappings.Clear();
+            dev.Mappings.Add(new ButtonMapping
+            {
+                Button = RemoteButton.Back,
+                ClickAction = ButtonActionType.KeyboardShortcut,
+                ClickShortcut = "Ctrl+W"
+            });
+            config.Current.Devices.Add(dev);
+            config.Current.SelectedDeviceId = dev.Id;
+
+            var bt = new TestBluetoothManager
+            {
+                IsConnected = true,
+                IsReady = true,
+                ConnectedDeviceAddress = 0xA4C138123456
+            };
+
+            using var vm = new MainViewModel(config, bt);
+            vm.Navigate("General");
+            vm.MappingVm.CustomMappingEnabled = true;
+
+            var executed = new List<ButtonAssignment>();
+            vm.ActionExecutedForTesting = a => executed.Add(a);
+
+            // WM_APPCOMMAND arrives for Back
+            bool handled = vm.HandleAppCommandButton(RemoteButton.Back);
+            Assert.True(handled);
+            Assert.Single(executed);
+            Assert.Equal(ButtonActionType.KeyboardShortcut, executed[0].Action);
+            Assert.Equal("Ctrl+W", executed[0].Shortcut);
+
+            // Subsequent physical ETW event arrives within 500ms
+            vm.HandleRawButtonEvent(IntPtr.Zero, RemoteButton.Back, true);
+            vm.HandleRawButtonEvent(IntPtr.Zero, RemoteButton.Back, false);
+
+            // Action must not execute a second time
+            Assert.Single(executed);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void HandleAppCommandButton_DoesNotSuppressNextClickRelease()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-mvm-appcmd-rel-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var dev = new RemoteDevice
+            {
+                Id = "DEV_01",
+                Name = "Xiaomi Remote",
+                BluetoothAddress = 0xA4C138123456,
+            };
+            dev.Mappings.Clear();
+            dev.Mappings.Add(new ButtonMapping
+            {
+                Button = RemoteButton.Back,
+                ClickAction = ButtonActionType.KeyboardShortcut,
+                ClickShortcut = "Ctrl+W",
+                LongPressAction = ButtonActionType.ContinuousRepeat
+            });
+            config.Current.Devices.Add(dev);
+            config.Current.SelectedDeviceId = dev.Id;
+
+            var bt = new TestBluetoothManager
+            {
+                IsConnected = true,
+                IsReady = true,
+                ConnectedDeviceAddress = 0xA4C138123456
+            };
+
+            using var vm = new MainViewModel(config, bt);
+            vm.Navigate("General");
+            vm.MappingVm.CustomMappingEnabled = true;
+
+            var executed = new List<ButtonAssignment>();
+            vm.ActionExecutedForTesting = a => executed.Add(a);
+
+            // 1. Initial AppCommand arrives
+            bool handled = vm.HandleAppCommandButton(RemoteButton.Back);
+            Assert.True(handled);
+            Assert.Single(executed);
+
+            // Physical down arrives within 500ms and is suppressed
+            vm.HandleRawButtonEvent(IntPtr.Zero, RemoteButton.Back, true);
+
+            // 2. Simulate subsequent click >500ms later by aging the AppCommand timestamp
+            var field = typeof(MainViewModel).GetField("_lastAppCommandTimeMs", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            var appCmdDict = (Dictionary<RemoteButton, long>)field!.GetValue(vm)!;
+            appCmdDict[RemoteButton.Back] = Environment.TickCount64 - 1000;
+
+            // Physical down of next click arrives outside 500ms window
+            vm.HandleRawButtonEvent(IntPtr.Zero, RemoteButton.Back, true);
+
+            // Physical up of next click arrives; must NOT be suppressed by lingering flags
+            vm.HandleRawButtonEvent(IntPtr.Zero, RemoteButton.Back, false);
+
+            // Verify gesture state: the release was NOT dropped, so _presses is cleared and not stuck in held state
+            var gesturesField = typeof(MainViewModel).GetField("_buttonGestures", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            var gestures = gesturesField!.GetValue(vm)!;
+            var pressesField = typeof(RemoteButtonGestures).GetField("_presses", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            var presses = (System.Collections.IDictionary)pressesField!.GetValue(gestures)!;
+            Assert.Empty(presses);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void DeviceSwitching_UpdatesActiveRemoteAndSyncsMapping()
     {
         string path = Path.Combine(Path.GetTempPath(), $"vib-mvm-switch-{Guid.NewGuid():N}.json");

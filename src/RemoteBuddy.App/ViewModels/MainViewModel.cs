@@ -84,7 +84,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private long _lastDedupTimeMs = 0;
     private readonly Dictionary<RemoteButton, (long TimestampMs, bool IsDown)> _lastPhysicalEventTimeMs = new();
     private readonly Dictionary<RemoteButton, long> _lastAppCommandTimeMs = new();
-    private readonly Dictionary<RemoteButton, bool> _suppressNextPhysicalUp = new();
+    private readonly Dictionary<RemoteButton, bool> _physicalDownSuppressedByAppCmd = new();
+
+    internal Action<ButtonAssignment>? ActionExecutedForTesting { get; set; }
 
     public event Action<WizardMode>? RequestOpenWizard;
 
@@ -231,7 +233,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 _lastPhysicalEventTimeMs.Clear();
                 _lastAppCommandTimeMs.Clear();
-                _suppressNextPhysicalUp.Clear();
+                _physicalDownSuppressedByAppCmd.Clear();
                 _lastDedupButton = RemoteButton.None;
             }
 
@@ -502,7 +504,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
 
             _lastAppCommandTimeMs[button] = now;
-            _suppressNextPhysicalUp[button] = true;
         }
 
         AppLogger.Debug($"WM_APPCOMMAND admitted and dispatched for button: {button}", "MainViewModel");
@@ -530,11 +531,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (MappingVm.CustomMappingEnabled)
         {
             var mapping = sourceDevice?.Mappings?.FirstOrDefault(m => m.Button == button);
-            if (mapping != null && (mapping.ClickAction != ButtonActionType.None || mapping.LongPressAction != ButtonActionType.None || mapping.DoubleClickAction != ButtonActionType.None))
+            if (mapping != null)
             {
-                OnRawButtonEvent(IntPtr.Zero, button, true);
-                OnRawButtonEvent(IntPtr.Zero, button, false);
-                return true;
+                var assignment = mapping.GetAssignment(ButtonTrigger.SingleClick);
+                if (assignment.Action != ButtonActionType.None)
+                {
+                    ExecuteButtonAction(assignment);
+                    return true;
+                }
             }
         }
 
@@ -594,18 +598,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // Check correlation against recent AppCommand execution (within 500ms)
             if (_lastAppCommandTimeMs.TryGetValue(button, out long lastAppCmd) && (now - lastAppCmd) < 500)
             {
+                if (isDown)
+                {
+                    _physicalDownSuppressedByAppCmd[button] = true;
+                }
                 AppLogger.Debug($"Suppressing physical {button} isDown={isDown} because AppCommand handled it {now - lastAppCmd}ms ago", "MainViewModel");
                 return;
             }
 
-            if (_suppressNextPhysicalUp.TryGetValue(button, out bool suppressUp) && suppressUp)
+            if (isDown)
             {
-                if (!isDown)
-                {
-                    _suppressNextPhysicalUp[button] = false;
-                    AppLogger.Debug($"Suppressing physical up for {button} correlated with AppCommand", "MainViewModel");
-                    return;
-                }
+                _physicalDownSuppressedByAppCmd[button] = false;
+            }
+            else if (_physicalDownSuppressedByAppCmd.TryGetValue(button, out bool wasSuppressed) && wasSuppressed)
+            {
+                _physicalDownSuppressedByAppCmd[button] = false;
+                AppLogger.Debug($"Suppressing physical up for {button} whose down was suppressed by AppCommand", "MainViewModel");
+                return;
             }
 
             if (button == _lastDedupButton && isDown == _lastDedupIsDown && (now - _lastDedupTimeMs) < 60)
@@ -798,6 +807,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void ExecuteButtonAction(ButtonAssignment assignment)
     {
+        ActionExecutedForTesting?.Invoke(assignment);
         if (!_bluetoothManager.IsConnected || ActiveOnboardingVm != null || !MappingVm.CustomMappingEnabled) return;
 
         switch (assignment.Action)

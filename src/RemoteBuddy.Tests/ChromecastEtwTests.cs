@@ -10,15 +10,15 @@ namespace RemoteBuddy.Tests;
 
 public class ChromecastEtwTests
 {
-    private static byte[] CreateAclPacket(byte opcode, ushort attrHandle, byte[] payload)
+    private static byte[] CreateAclPacket(byte opcode, ushort attrHandle, byte[] payload, ushort connectionHandle = 0x0040)
     {
         ushort l2capLen = (ushort)(3 + payload.Length);
         ushort aclDataLen = (ushort)(4 + l2capLen);
 
         byte[] packet = new byte[4 + 4 + 3 + payload.Length];
-        // ACL Header: handle (0x0040) | PB=2 (first non-flushable) = 0x2040
-        packet[0] = 0x40;
-        packet[1] = 0x20;
+        // ACL Header: handle | PB=2 (first non-flushable) = 0x2000 | handle
+        packet[0] = (byte)(connectionHandle & 0xFF);
+        packet[1] = (byte)(0x20 | ((connectionHandle >> 8) & 0x0F));
         // Total ACL Data Length
         packet[2] = (byte)(aclDataLen & 0xFF);
         packet[3] = (byte)((aclDataLen >> 8) & 0xFF);
@@ -368,6 +368,38 @@ public class ChromecastEtwTests
         receiver.ProcessPacket(2, [0x05, 0x04, 0x00, 0x40, 0x00, 0x13]);
         receiver.ProcessPacket(3, press);
         Assert.Equal(2, edges.Count);
+    }
+
+    [Fact]
+    public void ProcessPacket_ProbeIsolation_RejectsOtherConnections()
+    {
+        using var receiver = new ChromecastEtwReceiver();
+        receiver.SetSourceProbe(new Guid("00112233-4455-6677-8899-aabbccddeeff"));
+        var edges = new List<(RemoteButton, bool)>();
+        receiver.ButtonEvent += (button, isDown) => edges.Add((button, isDown));
+
+        // Probing target device on connection 0x0040
+        byte[] request = CreateAclPacket(0x06, 0x0001,
+            [0xFF, 0xFF, 0x00, 0x28, 0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0x00],
+            connectionHandle: 0x0040);
+        byte[] response = CreateAclPacket(0x01, 0x0106, [0x00, 0x0A], connectionHandle: 0x0040);
+
+        receiver.ProcessPacket(4, request);
+        receiver.ProcessPacket(3, response);
+
+        // A button press arrives from a DIFFERENT connection (0x0041)
+        byte[] otherPress = CreateAclPacket(0x1B, 0x0029, [0x07, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0041);
+        receiver.ProcessPacket(3, otherPress);
+
+        // Must NOT bind or dispatch from connection 0x0041
+        Assert.Empty(edges);
+
+        // A button press arrives from the PROBED connection (0x0040)
+        byte[] matchingPress = CreateAclPacket(0x1B, 0x0029, [0x07, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0040);
+        receiver.ProcessPacket(3, matchingPress);
+
+        // Must bind and dispatch from connection 0x0040
+        Assert.Equal(new[] { (RemoteButton.Ok, true) }, edges);
     }
 
     [Fact]

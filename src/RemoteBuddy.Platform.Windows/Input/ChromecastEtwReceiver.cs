@@ -387,8 +387,12 @@ public sealed class ChromecastEtwReceiver : IDisposable
 
     private bool CanAutoBind(ushort connection, ReadOnlySpan<byte> att, bool incomplete)
     {
-        if (_sourceRequest.Length > 0 && (Environment.TickCount64 - _probeTimestamp) < 1000)
-            return false;
+        // When a source probe is configured for a specific remote, strictly require matching the probed connection handle
+        if (_sourceRequest.Length > 0)
+        {
+            if (!_probeConnection.HasValue || connection != _probeConnection.Value)
+                return false;
+        }
 
         return TryParseButtonReport(att, incomplete, _protocolKind, out var btn, out _, out _, _verifiedAttributes) &&
                btn != RemoteButton.None;
