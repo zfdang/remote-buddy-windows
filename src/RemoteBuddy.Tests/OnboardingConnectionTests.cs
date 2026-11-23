@@ -85,7 +85,7 @@ public class OnboardingConnectionTests
         using var vm = new OnboardingViewModel(config, manager) { CurrentStep = 4, IsDeviceConnected = true };
 
         vm.NotifyButtonPressed(RemoteButton.Voice);
-        Assert.Equal("语音键正常，普通键尚未确认", vm.LastPressedButtonName);
+        Assert.Equal("已按下: 语音键", vm.LastPressedButtonName);
         Assert.True(vm.HasButtonTested);
 
         vm.NotifyTruncatedPacketDetected();
@@ -93,9 +93,17 @@ public class OnboardingConnectionTests
         Assert.Equal("检测到普通按键活动", vm.LastPressedButtonName);
         Assert.Contains("未提供键码", vm.TruncationWarningMessage);
 
+        vm.NotifyButtonPressed(RemoteButton.Voice);
+        Assert.Equal("已按下: 语音键", vm.LastPressedButtonName);
+        Assert.Contains("未提供键码", vm.TruncationWarningMessage);
+
         vm.NotifyButtonPressed(RemoteButton.Left);
         Assert.Contains("方向左键", vm.LastPressedButtonName);
         Assert.Empty(vm.TruncationWarningMessage);
+
+        vm.NotifyButtonPressed(RemoteButton.Voice);
+        Assert.Equal("已按下: 语音键", vm.LastPressedButtonName);
+        Assert.True(vm.HasButtonTested);
         vm.NextStep();
         Assert.Equal(WizardStep.AudioTest, vm.CurrentWizardStep);
 

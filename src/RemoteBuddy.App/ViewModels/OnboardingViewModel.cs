@@ -500,19 +500,14 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     {
         AppLogger.Info($"OnboardingViewModel: NotifyButtonPressed: button={button}, step={CurrentWizardStep}", "OnboardingViewModel");
         if (CurrentWizardStep != WizardStep.ButtonTest || button == RemoteButton.None) return;
-        if (IsTestingChromecast)
-        {
-            if (!IsDeviceConnected) return;
-            if (button == RemoteButton.Voice)
-            {
-                if (!HasButtonTested) LastPressedButtonName = "语音键正常，普通键尚未确认";
-                HasButtonTested = true;
-                ValidationError = string.Empty;
-                return;
-            }
-        }
+        if (IsTestingChromecast && !IsDeviceConnected) return;
+
         LastPressedButtonName = $"已按下: {GetButtonFriendlyName(button)}";
         HasButtonTested = true;
+        ValidationError = string.Empty;
+
+        if (IsTestingChromecast && button == RemoteButton.Voice) return;
+
         TruncationWarningMessage = string.Empty;
         RestartBluetoothStatusText = string.Empty;
         OnPropertyChanged(nameof(TruncationWarningVisibility));
