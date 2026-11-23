@@ -1,4 +1,4 @@
-﻿<UserControl x:Class="RemoteBuddy.App.Views.Pages.MappingPage"
+<UserControl x:Class="RemoteBuddy.App.Views.Pages.MappingPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:model="clr-namespace:RemoteBuddy.Core.Models;assembly=RemoteBuddy.Core"
@@ -20,6 +20,60 @@
                 <DiscreteColorKeyFrame KeyTime="0:0:0.26" Value="#4DA6FF"/>
             </ColorAnimationUsingKeyFrames>
         </Storyboard>
+
+        <DataTemplate x:Key="GestureEditor">
+            <StackPanel Margin="0,14,0,0">
+                <TextBlock Text="{Binding Help}" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,12"/>
+                <ComboBox ItemsSource="{Binding AvailableActions}" SelectedItem="{Binding Action, Mode=TwoWay}"
+                          AutomationProperties.Name="动作类型" Margin="0,0,0,12">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Converter={StaticResource EnumToDisplayNameConverter}}"/>
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+                <StackPanel Visibility="{Binding Action, Converter={StaticResource EqualValueToVisibilityConverter}, ConverterParameter=KeyboardShortcut}">
+                    <TextBlock Text="键盘快捷键" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,6"/>
+                    <DockPanel Margin="0,0,0,8">
+                        <ToggleButton DockPanel.Dock="Right" Margin="8,0,0,0" Padding="8,5" ToolTip="按 Esc 取消录制"
+                                      InputMethod.IsInputMethodEnabled="False"
+                                      PreviewKeyDown="RecordShortcut" LostKeyboardFocus="StopRecordingShortcut">
+                            <ToggleButton.Style>
+                                <Style TargetType="ToggleButton">
+                                    <Setter Property="Content" Value="录制"/>
+                                    <Style.Triggers>
+                                        <Trigger Property="IsChecked" Value="True">
+                                            <Setter Property="Content" Value="请按快捷键"/>
+                                        </Trigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ToggleButton.Style>
+                        </ToggleButton>
+                        <TextBox Text="{Binding Shortcut, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                 AutomationProperties.Name="键盘快捷键" Padding="8,5"/>
+                    </DockPanel>
+                    <TextBlock Text="常用快捷键" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,4"/>
+                    <ComboBox ItemsSource="{x:Static vm:MappingGestureViewModel.ShortcutPresets}" DisplayMemberPath="Key"
+                              SelectionChanged="ApplyShortcutPreset" AutomationProperties.Name="常用快捷键"/>
+                </StackPanel>
+                <StackPanel Visibility="{Binding Action, Converter={StaticResource EqualValueToVisibilityConverter}, ConverterParameter=MediaControl}">
+                    <TextBlock Text="媒体操作" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,6"/>
+                    <ComboBox ItemsSource="{x:Static vm:MappingGestureViewModel.AvailableMediaCommands}"
+                              SelectedItem="{Binding Media, Mode=TwoWay}" AutomationProperties.Name="媒体操作">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Converter={StaticResource EnumToDisplayNameConverter}}"/>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                </StackPanel>
+                <StackPanel Visibility="{Binding Action, Converter={StaticResource EqualValueToVisibilityConverter}, ConverterParameter=TextSnippet}">
+                    <TextBlock Text="常用短语" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,6"/>
+                    <TextBox Text="{Binding Text, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                             AutomationProperties.Name="常用短语" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="65" Padding="8,5"/>
+                </StackPanel>
+            </StackPanel>
+        </DataTemplate>
     </UserControl.Resources>
     <DockPanel>
         <!-- Page Header -->
@@ -33,7 +87,7 @@
                 <TextBlock Text="{Binding DeviceNote}" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,4,0,0" TextWrapping="Wrap"/>
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="正在编辑：" Foreground="{StaticResource SecondaryTextBrush}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <TextBlock Text="遥控器" Foreground="{StaticResource SecondaryTextBrush}" VerticalAlignment="Center" Margin="0,0,8,0"/>
                 <ComboBox ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}" DisplayMemberPath="Name" Width="170" Margin="0,0,14,0"/>
                 <CheckBox Content="启用自定义按键" IsChecked="{Binding CustomMappingEnabled}" Foreground="{StaticResource PrimaryTextBrush}" VerticalAlignment="Center"/>
             </StackPanel>
@@ -132,7 +186,6 @@
                                     </Grid>
                                 </StackPanel>
                             </Border>
-
                             <!-- 2. Google Chromecast G9N9N Remote Body -->
                             <Border Background="#242629" BorderBrush="#3E4249" BorderThickness="1" CornerRadius="28" Padding="14,10" Width="210"
                                     Visibility="{Binding IsG9N9N, Converter={StaticResource BoolToVisibilityConverter}}">
@@ -265,93 +318,40 @@
                                 </StackPanel>
                             </Border>
 
-                            <!-- Button Quick Picker Dropdown -->
-                            <StackPanel Margin="0,8,0,0">
-                                <TextBlock Text="按键快速选择：" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,4"/>
-                                <ComboBox ItemsSource="{Binding CurrentMappings}" SelectedItem="{Binding SelectedMapping}" DisplayMemberPath="ButtonName"/>
-                            </StackPanel>
                         </StackPanel>
                     </ScrollViewer>
                 </DockPanel>
             </Border>
 
-            <!-- Right Column: Mapping Inspector / Editor -->
-            <Border Grid.Column="2" Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="8" Padding="24"
-                    DataContext="{Binding SelectedMapping}">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel>
-                        <!-- Inspector Header -->
-                        <DockPanel LastChildFill="False" Margin="0,0,0,20">
-                            <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBlock Text="{Binding ButtonName, TargetNullValue='请选择按键'}" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
-                                <Border Background="#007ACC" CornerRadius="10" Padding="8,2" Margin="12,0,0,0" VerticalAlignment="Center">
-                                    <TextBlock Text="正在配置" FontSize="11" Foreground="#FFF"/>
-                                </Border>
-                            </StackPanel>
-                            <Button DockPanel.Dock="Right" Content="清除按键设置" Padding="12,6" Background="Transparent" BorderBrush="{StaticResource BorderColorBrush}" Foreground="{StaticResource SecondaryTextBrush}"
-                                    Command="{Binding DataContext.ClearSelectedMappingCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"/>
+            <Border Grid.Column="2" Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="8" Padding="16">
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
+                        <TextBlock Text="按键快速选择" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,6"/>
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Content="清除设置" Padding="8,6" Margin="8,0,0,0"
+                                    Command="{Binding ClearSelectedMappingCommand}"/>
+                            <ComboBox ItemsSource="{Binding CurrentMappings}" SelectedItem="{Binding SelectedMapping}"
+                                      AutomationProperties.Name="正在编辑的按键" DisplayMemberPath="ButtonName"/>
                         </DockPanel>
-
-                        <!-- Single Click Section -->
-                        <Border Background="#25272B" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="6" Padding="18" Margin="0,0,0,16">
-                            <StackPanel>
-                                <TextBlock Text="单击动作 (Single Click)" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,6"/>
-                                <TextBlock Text="按一下立即触发的动作类型：" FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,10"/>
-                                <ComboBox ItemsSource="{x:Static vm:MappingItemViewModel.AvailableActions}" SelectedItem="{Binding ClickAction, Mode=TwoWay}" Margin="0,0,0,14">
-                                    <ComboBox.ItemTemplate>
-                                        <DataTemplate>
-                                            <TextBlock Text="{Binding Converter={StaticResource EnumToDisplayNameConverter}}"/>
-                                        </DataTemplate>
-                                    </ComboBox.ItemTemplate>
-                                </ComboBox>
-
-                                <!-- Keyboard Shortcut Input -->
-                                <StackPanel Visibility="{Binding TextOrShortcutVisibility}">
-                                    <TextBlock Text="{Binding ParameterLabel}" FontSize="13" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,6"/>
-                                    <TextBox Text="{Binding ParameterText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
-                                             Background="#1E1E1E" Foreground="#FFF" Padding="10,7" Margin="0,0,0,6"/>
-                                    <TextBlock Text="{Binding ParameterHint}" TextWrapping="Wrap"
-                                               FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,10"/>
-                                </StackPanel>
-
-                                <!-- Media Command Dropdown -->
-                                <StackPanel Visibility="{Binding MediaVisibility}">
-                                    <TextBlock Text="系统多媒体控制：" FontSize="13" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,6"/>
-                                    <ComboBox ItemsSource="{x:Static vm:MappingItemViewModel.AvailableMediaCommands}" SelectedItem="{Binding ClickMedia, Mode=TwoWay}" Margin="0,0,0,10">
-                                        <ComboBox.ItemTemplate>
-                                            <DataTemplate>
-                                                <TextBlock Text="{Binding Converter={StaticResource EnumToDisplayNameConverter}}"/>
-                                            </DataTemplate>
-                                        </ComboBox.ItemTemplate>
-                                    </ComboBox>
-                                </StackPanel>
-                            </StackPanel>
-                        </Border>
-
-                        <!-- Long Press Section -->
-                        <Border Background="#25272B" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="6" Padding="18" Margin="0,0,0,24">
-                            <StackPanel>
-                                <TextBlock Text="长按动作 (Long Press)" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,6"/>
-                                <TextBlock Text="按住遥控器按键不放时的行为方式：" FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,10"/>
-                                <ComboBox ItemsSource="{x:Static vm:MappingItemViewModel.AvailableLongPressActions}" SelectedItem="{Binding LongPressAction, Mode=TwoWay}" Margin="0,0,0,8">
-                                    <ComboBox.ItemTemplate>
-                                        <DataTemplate>
-                                            <TextBlock Text="{Binding Converter={StaticResource EnumToDisplayNameConverter}}"/>
-                                        </DataTemplate>
-                                    </ComboBox.ItemTemplate>
-                                </ComboBox>
-                                <TextBlock Text="选择【持续连发】时，按住约 0.4 秒后开始以 100ms 间隔连发单击动作，松开即停。"
-                                           FontSize="11" Foreground="{StaticResource SecondaryTextBrush}"/>
-                            </StackPanel>
-                        </Border>
-
-                        <!-- Save & Confirm Buttons -->
-                        <StackPanel Orientation="Horizontal">
-                            <Button Content="💾 保存当前设置" Padding="20,10" Background="#007ACC"
-                                    Command="{Binding DataContext.SaveMappingsCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"/>
-                        </StackPanel>
                     </StackPanel>
-                </ScrollViewer>
+                    <TabControl DataContext="{Binding SelectedMapping}" Background="Transparent" BorderThickness="0">
+                        <TabItem Header="单击">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <ContentControl Content="{Binding SingleClick}" ContentTemplate="{StaticResource GestureEditor}"/>
+                            </ScrollViewer>
+                        </TabItem>
+                        <TabItem Header="长按">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <ContentControl Content="{Binding LongPress}" ContentTemplate="{StaticResource GestureEditor}"/>
+                            </ScrollViewer>
+                        </TabItem>
+                        <TabItem Header="双击">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <ContentControl Content="{Binding DoubleClick}" ContentTemplate="{StaticResource GestureEditor}"/>
+                            </ScrollViewer>
+                        </TabItem>
+                    </TabControl>
+                </DockPanel>
             </Border>
         </Grid>
     </DockPanel>

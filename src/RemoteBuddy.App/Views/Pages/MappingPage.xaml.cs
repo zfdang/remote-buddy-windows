@@ -3,9 +3,12 @@
 
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media.Animation;
 using RemoteBuddy.App.ViewModels;
 using RemoteBuddy.Core.Models;
+using RemoteBuddy.Platform.Windows.Input;
 
 namespace RemoteBuddy.App.Views.Pages;
 
@@ -59,8 +62,50 @@ public partial class MappingPage : UserControl
 
     private void SelectRemoteButton(object sender, RoutedEventArgs e)
     {
-        if (DataContext is MappingViewModel vm && sender is Button { Tag: string tag } &&
-            Enum.TryParse<RemoteButton>(tag, out var button))
-            vm.SelectedMapping = vm.CurrentMappings.FirstOrDefault(item => item.Button == button);
+        if (DataContext is MappingViewModel vm && sender is Button { Tag: string tag })
+            vm.SelectButton(tag);
+    }
+
+    private void RecordShortcut(object sender, KeyEventArgs e)
+    {
+        if (sender is not ToggleButton { IsChecked: true, DataContext: MappingGestureViewModel gesture } recorder) return;
+        e.Handled = true;
+
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (key == Key.Escape && Keyboard.Modifiers == ModifierKeys.None)
+        {
+            recorder.IsChecked = false;
+            return;
+        }
+
+        if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt or Key.LeftShift or Key.RightShift or Key.LWin or Key.RWin)
+            return;
+
+        var modifiers = Keyboard.Modifiers;
+        var parts = new List<string>();
+        if (modifiers.HasFlag(ModifierKeys.Control)) parts.Add("Ctrl");
+        if (modifiers.HasFlag(ModifierKeys.Alt)) parts.Add("Alt");
+        if (modifiers.HasFlag(ModifierKeys.Shift)) parts.Add("Shift");
+        if (modifiers.HasFlag(ModifierKeys.Windows)) parts.Add("Win");
+        parts.Add(key is >= Key.D0 and <= Key.D9 ? ((int)(key - Key.D0)).ToString() : key.ToString());
+
+        var shortcut = string.Join("+", parts);
+        if (!NativeInputSender.TryParseShortcut(shortcut, out _, out _)) return;
+        gesture.Shortcut = shortcut;
+        recorder.IsChecked = false;
+    }
+
+    private void StopRecordingShortcut(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is ToggleButton recorder) recorder.IsChecked = false;
+    }
+
+    private void ApplyShortcutPreset(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is ComboBox { SelectedItem: KeyValuePair<string, string> preset, DataContext: MappingGestureViewModel gesture } picker)
+        {
+            gesture.Shortcut = preset.Value;
+            picker.SelectedIndex = -1;
+        }
     }
 }

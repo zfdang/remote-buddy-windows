@@ -201,6 +201,12 @@
                                             <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
                                         </Grid.RowDefinitions>
 
                                         <TextBlock Text="型号" Style="{StaticResource DetailLabel}"/>
@@ -211,6 +217,30 @@
                                                    Visibility="{Binding BatteryLevel, Converter={StaticResource BatteryVisibilityConverter}}"/>
                                         <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding BatteryLevel, StringFormat='{}{0}%'}" Style="{StaticResource DetailValue}" Margin="0,8,0,0"
                                                    Visibility="{Binding BatteryLevel, Converter={StaticResource BatteryVisibilityConverter}}"/>
+                                        <TextBlock Grid.Row="3" Text="硬件型号" Style="{StaticResource DetailLabel}" Margin="0,8,16,0"
+                                                   Visibility="{Binding HardwareInformation.ModelNumber, Converter={StaticResource StringToVisibilityConverter}, FallbackValue=Collapsed}"/>
+                                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding HardwareInformation.ModelNumber}" Style="{StaticResource DetailValue}" Margin="0,8,0,0"
+                                                   Visibility="{Binding HardwareInformation.ModelNumber, Converter={StaticResource StringToVisibilityConverter}, FallbackValue=Collapsed}"/>
+                                        <TextBlock Grid.Row="4" Text="厂商 / 产品 ID" Style="{StaticResource DetailLabel}" Margin="0,8,16,0"
+                                                   Visibility="{Binding HardwareInformation.VendorProductId, Converter={StaticResource StringToVisibilityConverter}, FallbackValue=Collapsed}"/>
+                                        <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding HardwareInformation.VendorProductId}" Style="{StaticResource DetailValue}" Margin="0,8,0,0"
+                                                   Visibility="{Binding HardwareInformation.VendorProductId, Converter={StaticResource StringToVisibilityConverter}, FallbackValue=Collapsed}"/>
+                                        <TextBlock Grid.Row="5" Text="固件版本" Style="{StaticResource DetailLabel}" Margin="0,8,16,0"
+                                                   Visibility="{Binding HardwareInformation.FirmwareRevision, Converter={StaticResource StringToVisibilityConverter}, FallbackValue=Collapsed}"/>
+                                        <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding HardwareInformation.FirmwareRevision}" Style="{StaticResource DetailValue}" Margin="0,8,0,0"
+                                                   Visibility="{Binding HardwareInformation.FirmwareRevision, Converter={StaticResource StringToVisibilityConverter}, FallbackValue=Collapsed}"/>
+                                        <TextBlock Grid.Row="6" Text="语音协议" Style="{StaticResource DetailLabel}" Margin="0,8,16,0"
+                                                   Visibility="{Binding HardwareInformation.VoiceProtocol, Converter={StaticResource StringToVisibilityConverter}, FallbackValue=Collapsed}"/>
+                                        <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding HardwareInformation.VoiceProtocol}" Style="{StaticResource DetailValue}" Margin="0,8,0,0"
+                                                   Visibility="{Binding HardwareInformation.VoiceProtocol, Converter={StaticResource StringToVisibilityConverter}, FallbackValue=Collapsed}"/>
+                                        <TextBlock Grid.Row="7" Text="音频格式" Style="{StaticResource DetailLabel}" Margin="0,8,16,0"
+                                                   Visibility="{Binding HardwareInformation.AudioFormat, Converter={StaticResource StringToVisibilityConverter}, FallbackValue=Collapsed}"/>
+                                        <TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding HardwareInformation.AudioFormat}" Style="{StaticResource DetailValue}" Margin="0,8,0,0"
+                                                   Visibility="{Binding HardwareInformation.AudioFormat, Converter={StaticResource StringToVisibilityConverter}, FallbackValue=Collapsed}"/>
+                                        <TextBlock Grid.Row="8" Text="音频帧大小" Style="{StaticResource DetailLabel}" Margin="0,8,16,0"
+                                                   Visibility="{Binding HardwareInformation.AudioFrameSize, Converter={StaticResource StringToVisibilityConverter}, FallbackValue=Collapsed}"/>
+                                        <TextBlock Grid.Row="8" Grid.Column="1" Text="{Binding HardwareInformation.AudioFrameSize}" Style="{StaticResource DetailValue}" Margin="0,8,0,0"
+                                                   Visibility="{Binding HardwareInformation.AudioFrameSize, Converter={StaticResource StringToVisibilityConverter}, FallbackValue=Collapsed}"/>
                                     </Grid>
                                 </StackPanel>
                             </Grid>

@@ -1,4 +1,4 @@
-﻿// Copyright (C) 2026 Remote Buddy Contributors
+// Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
 using System.Globalization;
@@ -25,16 +25,23 @@ public class ConvertersAndViewModelTests
         public string ConnectedDeviceName => string.Empty;
         public ulong ConnectedDeviceAddress => 0;
         public Guid? ConnectedDeviceContainerId => null;
+        public RemoteDeviceInformation? ConnectedDeviceInformation { get; private set; }
         public G9N9NVoiceButtonMode VoiceButtonMode { get; set; } = G9N9NVoiceButtonMode.SmartToggle;
 
         public event Action<RemoteDevice>? DeviceDiscovered;
         public event Action<bool, string>? ConnectionStatusChanged { add { } remove { } }
+        public event Action? ConnectedDeviceInformationChanged;
         public event Action<float>? AudioLevelChanged { add { } remove { } }
         public event Action? VoiceButtonPressed { add { } remove { } }
         public event Action? VoiceSessionStarted { add { } remove { } }
         public event Action? VoiceSessionEnded;
 
         public void RaiseDeviceDiscovered(RemoteDevice dev) => DeviceDiscovered?.Invoke(dev);
+        public void SetConnectedDeviceInformation(RemoteDeviceInformation? information)
+        {
+            ConnectedDeviceInformation = information;
+            ConnectedDeviceInformationChanged?.Invoke();
+        }
         public void RaiseVoiceSessionEnded() => VoiceSessionEnded?.Invoke();
 
         public void StartScanning() => IsScanning = true;
@@ -119,14 +126,35 @@ public class ConvertersAndViewModelTests
 
         // Clear Home button
         vm.ClearSelectedMapping();
-        Assert.Equal(ButtonActionType.None, vm.SelectedMapping.ClickAction);
-        Assert.Empty(vm.SelectedMapping.ParameterText);
+        Assert.Equal(ButtonActionType.None, vm.SelectedMapping.SingleClick.Action);
+        Assert.Empty(vm.SelectedMapping.SingleClick.Shortcut);
 
         // Reset to Defaults
         vm.ResetToDefaults();
         vm.SelectButton("Home");
-        Assert.Equal(ButtonActionType.KeyboardShortcut, vm.SelectedMapping.ClickAction);
-        Assert.Equal("Win+Tab", vm.SelectedMapping.ParameterText);
+        Assert.Equal(ButtonActionType.KeyboardShortcut, vm.SelectedMapping.SingleClick.Action);
+        Assert.Equal("Win+Tab", vm.SelectedMapping.SingleClick.Shortcut);
+    }
+
+    [Fact]
+    public void DevicesViewModel_AssignsLiveHardwareReadingsOnlyToTheMatchingAddress()
+    {
+        var config = new ConfigService(Path.Combine(Path.GetTempPath(), $"rb-device-info-{Guid.NewGuid():N}.json"));
+        var first = new RemoteDevice { Id = "first", BluetoothAddress = 1, Name = "Chromecast Remote" };
+        var second = new RemoteDevice { Id = "second", BluetoothAddress = 2, Name = "Chromecast Remote" };
+        config.Current.Devices.AddRange([first, second]);
+        var bluetooth = new DummyBluetoothManager();
+        using var vm = new DevicesViewModel(config, bluetooth);
+
+        var readings = new RemoteDeviceInformation(2, FirmwareRevision: "1.0");
+        bluetooth.SetConnectedDeviceInformation(readings);
+        Assert.Null(first.HardwareInformation);
+        Assert.Equal(readings, second.HardwareInformation);
+
+        vm.Reload();
+        Assert.Equal(readings, second.HardwareInformation);
+        bluetooth.SetConnectedDeviceInformation(null);
+        Assert.Null(second.HardwareInformation);
     }
 
     [Fact]

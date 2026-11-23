@@ -22,10 +22,12 @@ public class MainViewModelTests
         public string ConnectedDeviceName => string.Empty;
         public ulong ConnectedDeviceAddress => 0;
         public Guid? ConnectedDeviceContainerId => null;
+        public RemoteDeviceInformation? ConnectedDeviceInformation => null;
         public G9N9NVoiceButtonMode VoiceButtonMode { get; set; } = G9N9NVoiceButtonMode.SmartToggle;
 
         public event Action<RemoteDevice>? DeviceDiscovered { add { } remove { } }
         public event Action<bool, string>? ConnectionStatusChanged;
+        public event Action? ConnectedDeviceInformationChanged { add { } remove { } }
         public event Action<float>? AudioLevelChanged { add { } remove { } }
         public event Action? VoiceButtonPressed { add { } remove { } }
         public event Action? VoiceSessionStarted { add { } remove { } }

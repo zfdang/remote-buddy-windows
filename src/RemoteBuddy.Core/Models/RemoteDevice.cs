@@ -1,6 +1,7 @@
 ﻿// Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
+using System.Text.Json.Serialization;
 using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace RemoteBuddy.Core.Models;
@@ -46,6 +47,10 @@ public partial class RemoteDevice : ObservableObject
 
     [ObservableProperty]
     private int _batteryLevel = -1;
+
+    [ObservableProperty]
+    [property: JsonIgnore]
+    private RemoteDeviceInformation? _hardwareInformation;
 
     [ObservableProperty]
     private float _gain = 1.0f;

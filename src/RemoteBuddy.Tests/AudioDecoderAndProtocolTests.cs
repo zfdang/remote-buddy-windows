@@ -76,6 +76,27 @@ public class AudioDecoderAndProtocolTests
     }
 
     [Fact]
+    public void G9N9NDetails_RepresentObservedGattAndAtvvReadings()
+    {
+        var pnp = RemoteDeviceInformation.DecodePnpId([0x02, 0xD1, 0x18, 0x50, 0x94, 0x00, 0x01]);
+        var caps = ATVVProtocol.ParseCapabilities([0x0B, 0x01, 0x00, 0x02, 0x03, 0, 160]);
+        var information = new RemoteDeviceInformation(1, caps, PnpId: pnp,
+            FirmwareRevision: RemoteDeviceInformation.DecodeDeviceString([0x20, 0x31, 0x2E, 0x30, 0x00]));
+
+        Assert.Equal("18D1 / 9450", information.VendorProductId);
+        Assert.Equal("1.0", information.FirmwareRevision);
+        Assert.Equal("ATVV 1.0", information.VoiceProtocol);
+        Assert.Equal("16 kHz · IMA ADPCM", information.AudioFormat);
+        Assert.Equal("160 字节", information.AudioFrameSize);
+        Assert.Null(RemoteDeviceInformation.DecodePnpId([0x02, 0xD1, 0x18]));
+        Assert.Null(RemoteDeviceInformation.DecodeDeviceString([0xFF]));
+
+        var missingFrame = ATVVProtocol.ParseCapabilities([0x0B, 0x01, 0x00, 0x02, 0x03, 0, 0]);
+        Assert.Equal(120, missingFrame!.FrameSize);
+        Assert.Null((information with { VoiceCapabilities = missingFrame }).AudioFrameSize);
+    }
+
+    [Fact]
     public void AtvvProtocol_ParseAudioStart_ExtractsSessionId()
     {
         byte[] packet = [0x04, 0x01, 0x02, 0x7F];

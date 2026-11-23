@@ -1,4 +1,4 @@
-﻿// Copyright (C) 2026 Remote Buddy Contributors
+// Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
 using RemoteBuddy.App.ViewModels;
@@ -123,15 +123,44 @@ public class MappingDeviceTests
     }
 
     [Fact]
-    public void TextSnippetMapping_LabelsItsParameterAsCommonPhrase()
+    public void SwitchingActionTypesPreservesDraftShortcutAndTextIndependently()
     {
         var mapping = new ButtonMapping { Button = RemoteButton.Menu, ClickAction = ButtonActionType.TextSnippet };
         var vm = new MappingItemViewModel(mapping);
-        Assert.Equal("常用短语：", vm.ParameterLabel);
-        vm.ParameterText = "你好";
+        vm.SingleClick.Text = "你好";
+        vm.SingleClick.Shortcut = "Win+D";
         Assert.Equal("你好", mapping.ClickText);
-        vm.ClickAction = ButtonActionType.KeyboardShortcut;
-        Assert.Equal("目标键盘快捷键：", vm.ParameterLabel);
+        vm.SingleClick.Action = ButtonActionType.KeyboardShortcut;
+        Assert.Equal("Win+D", mapping.ClickShortcut);
+    }
+
+    [Fact]
+    public void MappingGestureEditorsSaveIndependentActionsAndClearAllThree()
+    {
+        var configPath = Path.Combine(Path.GetTempPath(), $"rb-gestures-{Guid.NewGuid():N}.json");
+        var config = new ConfigService(configPath);
+        var device = new RemoteDevice { Id = "g9n9n", ModelType = RemoteModelType.GoogleG9N9N,
+            Mappings = RemoteDevice.CreateDefaultMappings(RemoteModelType.GoogleG9N9N) };
+        config.Current.Devices.Add(device);
+        config.Current.SelectedDeviceId = device.Id;
+        var vm = new MappingViewModel(config);
+        vm.SelectButton("Up");
+        var up = vm.SelectedMapping!;
+        up.SingleClick.Action = ButtonActionType.KeyboardShortcut;
+        up.SingleClick.Shortcut = "Ctrl+C";
+        up.LongPress.Action = ButtonActionType.MediaControl;
+        up.LongPress.Media = MediaCommand.Mute;
+        up.DoubleClick.Action = ButtonActionType.TextSnippet;
+        up.DoubleClick.Text = "你好";
+
+        var reloaded = new ConfigService(configPath).Current.Devices.Single().Mappings.Single(mapping => mapping.Button == RemoteButton.Up);
+        Assert.Equal("Ctrl+C", reloaded.ClickShortcut);
+        Assert.Equal(MediaCommand.Mute, reloaded.LongPressMedia);
+        Assert.Equal("你好", reloaded.DoubleClickText);
+
+        vm.ClearSelectedMapping();
+        reloaded = new ConfigService(configPath).Current.Devices.Single().Mappings.Single(mapping => mapping.Button == RemoteButton.Up);
+        Assert.All(Enum.GetValues<ButtonTrigger>(), trigger => Assert.Equal(ButtonActionType.None, reloaded.GetAssignment(trigger).Action));
     }
 
     [Fact]
@@ -144,10 +173,10 @@ public class MappingDeviceTests
         config.Current.SelectedDeviceId = first.Id;
         var vm = new MappingViewModel(config) { SelectedDevice = second };
         var up = vm.CurrentMappings.Single(m => m.Button == RemoteButton.Up);
-        up.ParameterText = "F2";
+        up.SingleClick.Shortcut = "F2";
         vm.SelectedDevice = first;
         vm.SelectedDevice = second;
-        Assert.Equal("F2", vm.CurrentMappings.Single(m => m.Button == RemoteButton.Up).ParameterText);
+        Assert.Equal("F2", vm.CurrentMappings.Single(m => m.Button == RemoteButton.Up).SingleClick.Shortcut);
         vm.SaveMappings();
 
         Assert.Equal("F2", second.Mappings.Single(m => m.Button == RemoteButton.Up).ClickShortcut);
@@ -159,8 +188,8 @@ public class MappingDeviceTests
         Assert.DoesNotContain(vm.CurrentMappings, m => m.Button == RemoteButton.Mute);
         Assert.Contains(second.Mappings, m => m.Button == RemoteButton.Mute);
         vm.SelectedDevice = first;
-        Assert.Equal("Up", vm.CurrentMappings.Single(m => m.Button == RemoteButton.Up).ParameterText);
+        Assert.Equal("Up", vm.CurrentMappings.Single(m => m.Button == RemoteButton.Up).SingleClick.Shortcut);
         vm.SelectedDevice = second;
-        Assert.Equal("F2", vm.CurrentMappings.Single(m => m.Button == RemoteButton.Up).ParameterText);
+        Assert.Equal("F2", vm.CurrentMappings.Single(m => m.Button == RemoteButton.Up).SingleClick.Shortcut);
     }
 }

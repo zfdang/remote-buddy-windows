@@ -1,7 +1,6 @@
 ﻿// Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
-using System.Text;
 using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.Advertisement;
 using Windows.Devices.Bluetooth.GenericAttributeProfile;
@@ -17,6 +16,11 @@ namespace RemoteBuddy.Platform.Windows.Bluetooth;
 
 public sealed class WinRtBluetoothManager : IBluetoothManager
 {
+    private static readonly Guid DeviceInformationServiceUuid = new("0000180A-0000-1000-8000-00805F9B34FB");
+    private static readonly Guid ModelNumberUuid = new("00002A24-0000-1000-8000-00805F9B34FB");
+    private static readonly Guid FirmwareRevisionUuid = new("00002A26-0000-1000-8000-00805F9B34FB");
+    private static readonly Guid PnpIdUuid = new("00002A50-0000-1000-8000-00805F9B34FB");
+
     private readonly BluetoothLEAdvertisementWatcher _watcher;
     private BluetoothLEDevice? _connectedDevice;
     private GattDeviceService? _gattService;
@@ -43,7 +47,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
     private int _sessionGeneration = 0;
     private int _audioGeneration = 0;
     private int _activeOpeningOperationId = 0;
-    private TaskCompletionSource<bool>? _capabilitiesTcs;
+    private TaskCompletionSource<ATVVCapabilities?>? _capabilitiesTcs;
     private TaskCompletionSource<bool>? _audioStopTcs;
     private System.Threading.Timer? _keepaliveTimer;
     private readonly G9N9NSmartToggleSession _smartToggle = new();
@@ -54,6 +58,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
 
     public event Action<RemoteDevice>? DeviceDiscovered;
     public event Action<bool, string>? ConnectionStatusChanged;
+    public event Action? ConnectedDeviceInformationChanged;
     public event Action<float>? AudioLevelChanged;
     public event Action? VoiceSessionStarted;
     public event Action? VoiceSessionEnded;
@@ -69,6 +74,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
     public string ConnectedDeviceName => ConnectedDeviceNameOverride ?? _connectedDevice?.Name ?? string.Empty;
     public ulong ConnectedDeviceAddress => _connectedDevice?.BluetoothAddress ?? 0;
     public Guid? ConnectedDeviceContainerId { get; private set; }
+    public RemoteDeviceInformation? ConnectedDeviceInformation { get; private set; }
 
     public async Task ProbeButtonSourceAsync(Guid marker)
     {
@@ -304,6 +310,8 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 return false;
             }
 
+            bool isChromecast = G9N9NProtocol.IsCandidate(device.Name);
+            var capabilitiesTcs = new TaskCompletionSource<ATVVCapabilities?>(TaskCreationOptions.RunContinuationsAsynchronously);
             lock (_stateLock)
             {
                 if (targetConnGen != _connectionGeneration)
@@ -317,44 +325,27 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 _txCharacteristic = tx;
                 _audioCharacteristic = audio;
                 _controlCharacteristic = control;
+                _capabilitiesTcs = capabilitiesTcs;
                 _decoder.LowNibbleFirst = device.Name.Contains("arn9", StringComparison.OrdinalIgnoreCase);
             }
 
-            try
+            // Keep the DIS model check before audio setup for Xiaomi ARN9 decoding.
+            var information = new RemoteDeviceInformation(bluetoothAddress);
+            if (!isChromecast)
             {
-                var disResult = await device.GetGattServicesForUuidAsync(new Guid("0000180A-0000-1000-8000-00805F9B34FB"));
-                if (disResult.Status == GattCommunicationStatus.Success && disResult.Services.Count > 0)
+                var deviceInformation = await ReadDeviceInformationAsync(device, information, includeHardwareDetails: false);
+                lock (_stateLock)
                 {
-                    using var disService = disResult.Services[0];
-                    var charResult = await disService.GetCharacteristicsForUuidAsync(new Guid("00002A24-0000-1000-8000-00805F9B34FB"));
-                    if (charResult.Status == GattCommunicationStatus.Success && charResult.Characteristics.Count > 0)
+                    if (targetConnGen != _connectionGeneration) return false;
+                    if (deviceInformation.ModelNumber?.Contains("ARN9", StringComparison.OrdinalIgnoreCase) == true)
                     {
-                        var modelChar = charResult.Characteristics[0];
-                        var readResult = await modelChar.ReadValueAsync();
-                        if (readResult.Status == GattCommunicationStatus.Success && readResult.Value != null)
-                        {
-                            CryptographicBuffer.CopyToByteArray(readResult.Value, out var modelBytes);
-                            string modelStr = Encoding.UTF8.GetString(modelBytes);
-                            if (modelStr.Contains("ARN9", StringComparison.OrdinalIgnoreCase))
-                            {
-                                lock (_stateLock)
-                                {
-                                    _decoder.LowNibbleFirst = true;
-                                }
-                                AppLogger.Info($"Detected ARN9 hardware model string via DIS: '{modelStr.Trim()}' (LowNibbleFirst=true)", "BluetoothManager");
-                            }
-                        }
+                        _decoder.LowNibbleFirst = true;
+                        AppLogger.Info("Detected ARN9 hardware model via DIS (LowNibbleFirst=true)", "BluetoothManager");
                     }
                 }
             }
-            catch (Exception ex)
-            {
-                AppLogger.Debug($"DIS model query exception: {ex.Message}", "BluetoothManager");
-            }
 
-            // Prepare capabilities waiter and attach listeners prior to CCCD activation
-            // to avoid missing initial notifications or 0x0B capabilities packet.
-            _capabilitiesTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            // Listen before CCCD activation so the initial capabilities notification is captured.
             audio.ValueChanged += OnAudioValueChanged;
             control.ValueChanged += OnControlValueChanged;
 
@@ -427,7 +418,8 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
             }
 
             AppLogger.Info("ATVV GetCapabilities sent, awaiting remote response...", "BluetoothManager");
-            var completedTask = await Task.WhenAny(_capabilitiesTcs.Task, Task.Delay(5000));
+            var completedTask = await Task.WhenAny(capabilitiesTcs.Task, Task.Delay(5000));
+            ATVVCapabilities? capabilities;
             lock (_stateLock)
             {
                 if (targetConnGen != _connectionGeneration)
@@ -436,7 +428,8 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                     return false;
                 }
 
-                if (completedTask != _capabilitiesTcs.Task || !_capabilitiesTcs.Task.Result)
+                capabilities = completedTask == capabilitiesTcs.Task ? capabilitiesTcs.Task.Result : null;
+                if (capabilities == null)
                 {
                     AppLogger.Warn("ATVV capabilities negotiation timed out or failed 16kHz validation", "BluetoothManager");
                     CleanupAttempt(device);
@@ -475,11 +468,20 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 }
 
                 ConnectedDeviceContainerId = foundContainerId;
+                if (isChromecast)
+                {
+                    information = information with { VoiceCapabilities = capabilities };
+                    ConnectedDeviceInformation = information;
+                }
                 IsReady = true;
             }
 
             AppLogger.Info($"Bluetooth remote connected and ready: '{device.Name}', FrameSize={_frameSize}, ContainerId={ConnectedDeviceContainerId}", "BluetoothManager");
             ConnectionStatusChanged?.Invoke(true, device.Name);
+            if (isChromecast)
+            {
+                _ = LoadChromecastHardwareDetailsAsync(device, targetConnGen, information);
+            }
             return true;
         }
         catch (Exception ex)
@@ -494,6 +496,75 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 }
             }
             return false;
+        }
+    }
+
+    private async Task LoadChromecastHardwareDetailsAsync(BluetoothLEDevice device, int generation, RemoteDeviceInformation information)
+    {
+        var updated = await ReadDeviceInformationAsync(device, information, includeHardwareDetails: true).ConfigureAwait(false);
+        if (updated == information) return;
+
+        lock (_stateLock)
+        {
+            if (generation != _connectionGeneration) return;
+            ConnectedDeviceInformation = updated;
+        }
+        ConnectedDeviceInformationChanged?.Invoke();
+    }
+
+    private static async Task<RemoteDeviceInformation> ReadDeviceInformationAsync(
+        BluetoothLEDevice device, RemoteDeviceInformation information, bool includeHardwareDetails)
+    {
+        try
+        {
+            var result = await device.GetGattServicesForUuidAsync(DeviceInformationServiceUuid).AsTask().ConfigureAwait(false);
+            if (result.Services.Count == 0) return information;
+
+            try
+            {
+                if (result.Status != GattCommunicationStatus.Success) return information;
+                var service = result.Services[0];
+                var model = await ReadDeviceInformationValueAsync(service, ModelNumberUuid).ConfigureAwait(false);
+                information = information with { ModelNumber = RemoteDeviceInformation.DecodeDeviceString(model) };
+                if (!includeHardwareDetails) return information;
+
+                var firmware = await ReadDeviceInformationValueAsync(service, FirmwareRevisionUuid).ConfigureAwait(false);
+                var pnpId = await ReadDeviceInformationValueAsync(service, PnpIdUuid).ConfigureAwait(false);
+                return information with
+                {
+                    FirmwareRevision = RemoteDeviceInformation.DecodeDeviceString(firmware),
+                    PnpId = RemoteDeviceInformation.DecodePnpId(pnpId),
+                };
+            }
+            finally
+            {
+                foreach (var service in result.Services) service.Dispose();
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Debug($"DIS query failed: {ex.Message}", "BluetoothManager");
+            return information;
+        }
+    }
+
+    private static async Task<byte[]?> ReadDeviceInformationValueAsync(GattDeviceService service, Guid uuid)
+    {
+        try
+        {
+            var characteristics = await service.GetCharacteristicsForUuidAsync(uuid).AsTask().ConfigureAwait(false);
+            if (characteristics.Status != GattCommunicationStatus.Success || characteristics.Characteristics.Count == 0)
+                return null;
+
+            var value = await characteristics.Characteristics[0].ReadValueAsync().AsTask().ConfigureAwait(false);
+            if (value.Status != GattCommunicationStatus.Success || value.Value == null) return null;
+            CryptographicBuffer.CopyToByteArray(value.Value, out var bytes);
+            return bytes;
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Debug($"DIS characteristic {uuid} read failed: {ex.Message}", "BluetoothManager");
+            return null;
         }
     }
 
@@ -934,24 +1005,20 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
         switch (opcode)
         {
             case ATVVProtocol.OpcodeCapabilitiesResp: // 0x0B
+                var caps = ATVVProtocol.ParseCapabilities(data);
+                AppLogger.Info($"ATVV response CapabilitiesResp (0x0B): Version=0x{caps?.Version:X4}, Codecs=0x{caps?.Codecs:X2}, FrameSize={caps?.FrameSize}", "BluetoothManager");
                 lock (_stateLock)
                 {
                     if (capturedConnGen != _connectionGeneration) return;
-                }
-                var caps = ATVVProtocol.ParseCapabilities(data);
-                AppLogger.Info($"ATVV response CapabilitiesResp (0x0B): Version=0x{caps?.Version:X4}, Codecs=0x{caps?.Codecs:X2}, FrameSize={caps?.FrameSize}", "BluetoothManager");
-                if (caps != null && caps.SampleRate == 16000 && (caps.Codecs & 0x02) != 0)
-                {
-                    lock (_stateLock)
+                    if (caps != null && caps.SampleRate == 16000 && (caps.Codecs & 0x02) != 0)
                     {
-                        if (capturedConnGen != _connectionGeneration) return;
-                        _frameSize = caps.FrameSize > 0 ? caps.FrameSize : 120;
+                        _frameSize = caps.FrameSize;
+                        _capabilitiesTcs?.TrySetResult(caps);
                     }
-                    _capabilitiesTcs?.TrySetResult(true);
-                }
-                else
-                {
-                    _capabilitiesTcs?.TrySetResult(false);
+                    else
+                    {
+                        _capabilitiesTcs?.TrySetResult(null);
+                    }
                 }
                 break;
 
@@ -1243,6 +1310,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
             _lastEndedSessionId = null;
             _audioStopReceived = false;
             ConnectedDeviceContainerId = null;
+            ConnectedDeviceInformation = null;
             _capabilitiesTcs?.TrySetCanceled();
             _audioStopTcs?.TrySetCanceled();
         }

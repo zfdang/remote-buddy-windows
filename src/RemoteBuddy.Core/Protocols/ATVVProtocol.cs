@@ -7,10 +7,13 @@ public record ATVVCapabilities(
     ushort Version,
     byte Codecs,
     byte Interaction,
-    int FrameSize,
+    int? ReportedFrameSize,
     byte SelectedCodec,
     double SampleRate
-);
+)
+{
+    public int FrameSize => ReportedFrameSize ?? 120;
+}
 
 public static class ATVVProtocol
 {
@@ -86,7 +89,7 @@ public static class ATVVProtocol
         }
 
         int rawFrameSize = (bytes[5] << 8) | bytes[6];
-        int frameSize = (rawFrameSize <= 0 || rawFrameSize > 512) ? 120 : rawFrameSize;
+        int? reportedFrameSize = rawFrameSize is > 0 and <= 512 ? rawFrameSize : null;
         byte selectedCodec = (codecs & 0x02) != 0 ? (byte)0x02 : (byte)0x01;
         double sampleRate = (selectedCodec == 0x02) ? 16000.0 : 8000.0;
 
@@ -94,7 +97,7 @@ public static class ATVVProtocol
             Version: version,
             Codecs: codecs,
             Interaction: interaction,
-            FrameSize: frameSize,
+            ReportedFrameSize: reportedFrameSize,
             SelectedCodec: selectedCodec,
             SampleRate: sampleRate
         );

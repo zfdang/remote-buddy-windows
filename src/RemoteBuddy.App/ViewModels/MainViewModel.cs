@@ -1,4 +1,4 @@
-﻿// Copyright (C) 2026 Remote Buddy Contributors
+// Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -26,11 +26,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly Dictionary<IntPtr, (Guid? Target, bool Accepted)> _deviceAdmissionLog = new();
     private ActiveVoiceSession? _activeVoiceSession;
 
-    private readonly object _repeatLock = new();
-    private System.Threading.Timer? _repeatTimer;
-    private int _repeatGeneration = 0;
-    private RemoteButton _heldButton = RemoteButton.None;
-    private ButtonMapping? _activeRepeatMapping;
+    private readonly RemoteButtonGestures _buttonGestures;
 
     [ObservableProperty]
     private string _currentTitle = "Remote Buddy (Windows)";
@@ -66,7 +62,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         set
         {
             _activeOnboardingVm = value;
-            StopRepeatTimer();
+            _buttonGestures.Reset();
             if (value != null && IsConnected)
             {
                 bool isChromecast = G9N9NProtocol.IsCandidate(ConnectedDeviceName) ||
@@ -91,6 +87,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         _configService = configService;
         _bluetoothManager = bluetoothManager;
+        _buttonGestures = new RemoteButtonGestures(ScheduleButtonGesture, ExecuteButtonAction);
         _voiceKeyGuard = new RemoteVoiceKeyGuard(() =>
             _bluetoothManager.SessionState is BluetoothSessionState.Opening or BluetoothSessionState.Streaming or BluetoothSessionState.Draining);
         _rawInputReceiver.PhysicalVoiceKeyPressed += _voiceKeyGuard.Arm;
@@ -98,6 +95,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         GeneralVm = new GeneralViewModel(_configService, _bluetoothManager, mode => RequestOpenWizard?.Invoke(mode), Navigate);
         DevicesVm = new DevicesViewModel(_configService, _bluetoothManager, mode => RequestOpenWizard?.Invoke(mode));
         MappingVm = new MappingViewModel(_configService);
+        MappingVm.PropertyChanged += OnMappingSettingsChanged;
         IntegrationsVm = new IntegrationsViewModel(_configService, mode => RequestOpenWizard?.Invoke(mode));
         EnvironmentVm = new EnvironmentViewModel();
         AppIntegrationVm = new AppIntegrationViewModel(_configService);
@@ -178,7 +176,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 CurrentAudioLevel = 0f;
                 ReleaseHeldVoiceShortcut();
                 _voiceKeyGuard.Clear();
-                StopRepeatTimer();
+                _buttonGestures.Reset();
                 _rawInputReceiver.ResetDeviceState();
                 _hidDeviceReader.Stop();
                 _chromecastButtonReceiver.Stop();
@@ -341,7 +339,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     partial void OnActivePageNameChanged(string value)
     {
-        StopRepeatTimer();
+        _buttonGestures.Reset();
         if (value == "General")
         {
             GeneralVm.RefreshState();
@@ -429,7 +427,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         if (ActiveOnboardingVm != null)
         {
-            StopRepeatTimer();
+            _buttonGestures.Reset();
             if (isDown)
             {
                 ActiveOnboardingVm.NotifyButtonPressed(button);
@@ -473,71 +471,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
 
         if (!MappingVm.CustomMappingEnabled) return;
-
-        var selectedDev = _configService.Current.Devices.FirstOrDefault(d => d.Id == _configService.Current.SelectedDeviceId);
-        var mapping = selectedDev?.Mappings?.FirstOrDefault(m => m.Button == button);
-        if (mapping == null) return;
-
-        AppLogger.Info($"Button mapping event: {button} isDown={isDown}, Action={mapping.ClickAction}", "MainViewModel");
-
-        if (isDown)
+        if (!isDown)
         {
-            StopRepeatTimer();
-            ExecuteButtonAction(mapping.ClickAction, mapping.ClickShortcut, mapping.ClickMedia, mapping.ClickText);
-
-            if (mapping.LongPressAction == ButtonActionType.ContinuousRepeat)
-            {
-                lock (_repeatLock)
-                {
-                    _heldButton = button;
-                    _activeRepeatMapping = mapping;
-                    var capturedMapping = mapping;
-                    int currentGen = _repeatGeneration;
-                    _repeatTimer = new System.Threading.Timer(_ =>
-                    {
-                        try
-                        {
-                            if (Volatile.Read(ref _repeatGeneration) != currentGen) return;
-                            if (!_bluetoothManager.IsConnected || ActiveOnboardingVm != null)
-                            {
-                                StopRepeatTimer();
-                                return;
-                            }
-
-                            lock (_repeatLock)
-                            {
-                                if (_repeatGeneration != currentGen || _heldButton != capturedMapping.Button) return;
-                            }
-
-                            AppLogger.Debug($"Repeating button action: {capturedMapping.Button} ({capturedMapping.ClickAction})", "MainViewModel");
-                            ExecuteButtonAction(capturedMapping.ClickAction, capturedMapping.ClickShortcut, capturedMapping.ClickMedia, capturedMapping.ClickText);
-
-                            lock (_repeatLock)
-                            {
-                                if (_repeatGeneration == currentGen && _heldButton == capturedMapping.Button)
-                                {
-                                    _repeatTimer?.Change(100, Timeout.Infinite);
-                                }
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            AppLogger.Error("Exception in button repeat timer", ex, "MainViewModel");
-                        }
-                    }, null, 400, Timeout.Infinite);
-                }
-            }
+            _buttonGestures.HandleUp(button);
+            return;
         }
-        else
-        {
-            lock (_repeatLock)
-            {
-                if (button == _heldButton)
-                {
-                    StopRepeatTimer();
-                }
-            }
-        }
+
+        var selectedDevice = _configService.Current.Devices.FirstOrDefault(d => d.Id == _configService.Current.SelectedDeviceId);
+        var mapping = selectedDevice?.Mappings?.FirstOrDefault(m => m.Button == button);
+        if (mapping != null) _buttonGestures.HandleDown(mapping);
     }
 
     private void ShowMappingPress(RemoteButton button)
@@ -573,42 +515,51 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         AppLogger.Info($"Device removal notification received for hDevice=0x{hDevice:X}", "MainViewModel");
         _rawInputReceiver.ResetDeviceState(hDevice);
-        StopRepeatTimer();
+        _buttonGestures.Reset();
     }
 
-    private void StopRepeatTimer()
+    private static Action ScheduleButtonGesture(int delayMilliseconds, Action callback)
     {
-        lock (_repeatLock)
+        var timer = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Input)
         {
-            Interlocked.Increment(ref _repeatGeneration);
-            _repeatTimer?.Dispose();
-            _repeatTimer = null;
-            _heldButton = RemoteButton.None;
-            _activeRepeatMapping = null;
+            Interval = TimeSpan.FromMilliseconds(delayMilliseconds)
+        };
+        timer.Tick += OnTick;
+        timer.Start();
+        return Cancel;
+
+        void OnTick(object? sender, EventArgs args)
+        {
+            Cancel();
+            callback();
+        }
+
+        void Cancel()
+        {
+            timer.Stop();
+            timer.Tick -= OnTick;
         }
     }
 
-    private static void ExecuteButtonAction(ButtonActionType actionType, string? shortcut, MediaCommand media, string? text)
+    private void OnMappingSettingsChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
     {
-        switch (actionType)
+        if (args.PropertyName == nameof(MappingViewModel.CustomMappingEnabled)) _buttonGestures.Reset();
+    }
+
+    private void ExecuteButtonAction(ButtonAssignment assignment)
+    {
+        if (!_bluetoothManager.IsConnected || ActiveOnboardingVm != null || !MappingVm.CustomMappingEnabled) return;
+
+        switch (assignment.Action)
         {
-            case ButtonActionType.KeyboardShortcut:
-                if (!string.IsNullOrEmpty(shortcut))
-                {
-                    NativeInputSender.SendShortcutClick(shortcut);
-                }
+            case ButtonActionType.KeyboardShortcut when !string.IsNullOrEmpty(assignment.Shortcut):
+                NativeInputSender.SendShortcutClick(assignment.Shortcut);
                 break;
-            case ButtonActionType.MediaControl:
-                if (media != MediaCommand.None)
-                {
-                    NativeInputSender.SendMedia(media);
-                }
+            case ButtonActionType.MediaControl when assignment.Media != MediaCommand.None:
+                NativeInputSender.SendMedia(assignment.Media);
                 break;
-            case ButtonActionType.TextSnippet:
-                if (!string.IsNullOrEmpty(text))
-                {
-                    NativeInputSender.SendUnicodeText(text);
-                }
+            case ButtonActionType.TextSnippet when !string.IsNullOrEmpty(assignment.Text):
+                NativeInputSender.SendUnicodeText(assignment.Text);
                 break;
         }
     }
@@ -636,7 +587,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         ReleaseHeldVoiceShortcut();
         _voiceKeyGuard.Dispose();
-        StopRepeatTimer();
+        _buttonGestures.Reset();
+        MappingVm.PropertyChanged -= OnMappingSettingsChanged;
         DevicesVm.Dispose();
         _rawInputReceiver.Dispose();
     }
