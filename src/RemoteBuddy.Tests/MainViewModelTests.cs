@@ -5,6 +5,7 @@ using RemoteBuddy.App.ViewModels;
 using RemoteBuddy.Core.Bluetooth;
 using RemoteBuddy.Core.Config;
 using RemoteBuddy.Core.Models;
+using RemoteBuddy.Platform.Windows.Input;
 using Xunit;
 
 namespace RemoteBuddy.Tests;
@@ -19,6 +20,9 @@ public class MainViewModelTests
         public bool IsStreaming => VoiceDeviceAddress != 0;
         public HashSet<ulong> ReadyAddresses { get; } = [];
         public ulong VoiceDeviceAddress { get; set; }
+        public IReadOnlyCollection<ulong> ConnectedDeviceAddresses => ReadyAddresses.Count > 0
+            ? ReadyAddresses.ToArray()
+            : (IsConnected && ConnectedDeviceAddress != 0 ? [ConnectedDeviceAddress] : []);
         public bool IsDeviceReady(ulong address) => ReadyAddresses.Contains(address) ||
             (IsReady && IsConnected && address != 0 && address == ConnectedDeviceAddress);
         public Task<bool> StartVoiceSessionAsync(ulong address)
@@ -42,17 +46,31 @@ public class MainViewModelTests
         public G9N9NVoiceButtonMode VoiceButtonMode { get; set; } = G9N9NVoiceButtonMode.SmartToggle;
 
         public event Action<RemoteDevice>? DeviceDiscovered { add { } remove { } }
-        public event Action<bool, string>? ConnectionStatusChanged;
-        public event Action? ConnectedDeviceInformationChanged { add { } remove { } }
-        public event Action<float>? AudioLevelChanged { add { } remove { } }
-        public event Action? VoiceButtonPressed { add { } remove { } }
-        public event Action? VoiceSessionStarted { add { } remove { } }
-        public event Action? VoiceSessionEnded { add { } remove { } }
+        public event Action<ulong, bool, string>? ConnectionStatusChanged;
+        public event Action<ulong>? ConnectedDeviceInformationChanged { add { } remove { } }
+        public event Action<ulong, float>? AudioLevelChanged { add { } remove { } }
+        public event Action<ulong>? VoiceButtonPressed;
+        public event Action<ulong>? VoiceSessionStarted;
+        public event Action<ulong>? VoiceSessionEnded;
+        public event Action<ulong, string>? AudioOutputFailed;
 
         public int StartVoiceSessionCount { get; private set; }
         public int StopVoiceSessionCount { get; private set; }
 
-        public void RaiseConnectionStatusChanged(bool connected, string name) => ConnectionStatusChanged?.Invoke(connected, name);
+        public void RaiseConnectionStatusChanged(bool connected, string name, ulong address = 0) =>
+            ConnectionStatusChanged?.Invoke(address != 0 ? address : ConnectedDeviceAddress, connected, name);
+        public void RaiseVoiceButtonPressed(ulong address) => VoiceButtonPressed?.Invoke(address);
+        public void RaiseVoiceSessionStarted(ulong address)
+        {
+            VoiceDeviceAddress = address;
+            VoiceSessionStarted?.Invoke(address);
+        }
+        public void RaiseVoiceSessionEnded(ulong address)
+        {
+            if (VoiceDeviceAddress == address) VoiceDeviceAddress = 0;
+            VoiceSessionEnded?.Invoke(address);
+        }
+        public void RaiseAudioOutputFailed(ulong address, string reason) => AudioOutputFailed?.Invoke(address, reason);
 
         public void StartScanning() => IsScanning = true;
         public void StopScanning() => IsScanning = false;
@@ -573,6 +591,574 @@ public class MainViewModelTests
 
             // G9N9N does not deliver native Windows keyboard arrow keys, so synthetic injection is required
             Assert.Equal(new[] { "Left" }, executedShortcuts);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void CrossDevice_StaleVoiceSessionEnded_DoesNotCancelActiveRemoteSession()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"cross-voice-end-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new TestBluetoothManager { IsConnected = true, IsReady = true };
+            const ulong remoteA = 0x111111111111;
+            const ulong remoteB = 0x222222222222;
+            bt.ReadyAddresses.Add(remoteA);
+            bt.ReadyAddresses.Add(remoteB);
+            config.Current.Devices.Add(new RemoteDevice { Id = "A", BluetoothAddress = remoteA, Name = "Remote A" });
+            config.Current.Devices.Add(new RemoteDevice { Id = "B", BluetoothAddress = remoteB, Name = "Remote B" });
+
+            using var vm = new MainViewModel(config, bt);
+
+            bt.RaiseVoiceSessionStarted(remoteB);
+            Assert.True(vm.IsVoiceActive);
+
+            // Spurious or delayed end notification for Remote A must NOT cancel Remote B
+            bt.RaiseVoiceSessionEnded(remoteA);
+            Assert.True(vm.IsVoiceActive);
+
+            // Matching end for Remote B terminates it cleanly
+            bt.RaiseVoiceSessionEnded(remoteB);
+            Assert.False(vm.IsVoiceActive);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void SingleRemoteDisconnect_WhileAnotherRemainsConnected_PreservesOtherRemoteVoiceSession()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"single-disc-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new TestBluetoothManager
+            {
+                IsConnected = true,
+                IsReady = true,
+                ConnectedDeviceAddress = 0x222222222222,
+                ConnectedDeviceName = "Remote B"
+            };
+            const ulong remoteA = 0x111111111111;
+            const ulong remoteB = 0x222222222222;
+            bt.ReadyAddresses.Add(remoteA);
+            bt.ReadyAddresses.Add(remoteB);
+            config.Current.Devices.Add(new RemoteDevice { Id = "A", BluetoothAddress = remoteA, Name = "Remote A" });
+            config.Current.Devices.Add(new RemoteDevice { Id = "B", BluetoothAddress = remoteB, Name = "Remote B" });
+
+            using var vm = new MainViewModel(config, bt);
+            bt.RaiseVoiceSessionStarted(remoteB);
+            Assert.True(vm.IsVoiceActive);
+
+            bt.ReadyAddresses.Remove(remoteA);
+            bt.RaiseConnectionStatusChanged(false, "Remote A", remoteA);
+
+            Assert.True(vm.IsConnected);
+            Assert.True(vm.IsVoiceActive);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void VoiceButtonPressed_WithDeviceAddress_ReachesOnboardingWithoutActiveVoiceStream()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"voice-btn-onb-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new TestBluetoothManager { IsConnected = true, IsReady = true, VoiceDeviceAddress = 0 };
+            const ulong remoteB = 0x222222222222;
+            var devB = new RemoteDevice { Id = "B", BluetoothAddress = remoteB, Name = "Remote B" };
+            config.Current.Devices.Add(devB);
+
+            using var vm = new MainViewModel(config, bt);
+            using var onboarding = new OnboardingViewModel(config, bt, WizardMode.DeviceOnly)
+            {
+                SelectedDevice = devB,
+                CurrentStep = 2
+            };
+            vm.ActiveOnboardingVm = onboarding;
+
+            bt.RaiseVoiceButtonPressed(remoteB);
+
+            Assert.True(onboarding.HasButtonTested);
+            Assert.Contains("语音键", onboarding.LastPressedButtonName);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void OnboardingConnectionChanged_IgnoresUnrelatedRemoteStatus()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"onb-filter-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new TestBluetoothManager();
+            var devB = new RemoteDevice { Id = "B", BluetoothAddress = 0x222222222222, Name = "Remote B" };
+            using var onboarding = new OnboardingViewModel(config, bt, WizardMode.DeviceOnly)
+            {
+                SelectedDevice = devB
+            };
+
+            bt.RaiseConnectionStatusChanged(false, "Remote A", 0x111111111111);
+            Assert.DoesNotContain("Remote A", onboarding.DeviceConnectionStatus);
+
+            bt.ReadyAddresses.Add(devB.BluetoothAddress);
+            bt.RaiseConnectionStatusChanged(true, "Remote B", devB.BluetoothAddress);
+            Assert.True(onboarding.IsDeviceConnected);
+            Assert.Contains("Remote B", onboarding.DeviceConnectionStatus);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void MultiRemoteBluetoothManager_DisposeIsIdempotentAndRemoveDeviceSafe()
+    {
+        var manager = new RemoteBuddy.Platform.Windows.Bluetooth.MultiRemoteBluetoothManager();
+        manager.RemoveDevice(0x112233445566);
+        manager.Dispose();
+        manager.Dispose();
+        // SetDeviceVoiceSettings after Dispose must not re-populate state or throw
+        manager.SetDeviceVoiceSettings(new RemoteDevice { Id = "X", BluetoothAddress = 0x112233445566 });
+        Assert.Empty(manager.ConnectedDeviceAddresses);
+    }
+
+    [Fact]
+    public void TryRunChromecastWorker_ParsesBothParentPidAndLegacyFormats()
+    {
+        var sources = new[]
+        {
+            new RemoteBuddy.Platform.Windows.Input.EtwButtonSource(0x112233445566, Guid.NewGuid(), RemoteBuddy.Platform.Windows.Input.EtwProtocolKind.GoogleG9N9N)
+        };
+        string encoded = Convert.ToBase64String(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(sources));
+
+        string? capturedPipe = null;
+        int capturedPid = -1;
+        RemoteBuddy.Platform.Windows.Input.EtwButtonSource[]? capturedSources = null;
+
+        bool handled4Arg = RemoteBuddy.App.App.TryRunChromecastWorker(
+            ["--chromecast-worker", "pipeA", "12345", encoded],
+            (pipe, pid, s) => { capturedPipe = pipe; capturedPid = pid; capturedSources = s; });
+        Assert.True(handled4Arg);
+        Assert.Equal("pipeA", capturedPipe);
+        Assert.Equal(12345, capturedPid);
+        Assert.Single(capturedSources!);
+
+        bool handled3Arg = RemoteBuddy.App.App.TryRunChromecastWorker(
+            ["--chromecast-worker", "pipeB", encoded],
+            (pipe, pid, s) => { capturedPipe = pipe; capturedPid = pid; capturedSources = s; });
+        Assert.True(handled3Arg);
+        Assert.Equal("pipeB", capturedPipe);
+        Assert.Equal(0, capturedPid);
+        Assert.Single(capturedSources!);
+    }
+
+    [Fact]
+    public void EtwUnexpectedDisconnect_ResetsHeldGestures()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"etw-disc-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new TestBluetoothManager { IsConnected = true, IsReady = true };
+            const ulong addr = 0x4754514C6FCC;
+            bt.ReadyAddresses.Add(addr);
+            var executed = new List<RemoteButton>();
+            var g9n9n = new RemoteDevice
+            {
+                Id = "g9",
+                BluetoothAddress = addr,
+                Name = "Chromecast Remote",
+                ModelType = RemoteModelType.GoogleG9N9N,
+                Mappings =
+                [
+                    new ButtonMapping
+                    {
+                        Button = RemoteButton.Home,
+                        ClickAction = ButtonActionType.TextSnippet,
+                        ClickText = "home",
+                        LongPressAction = ButtonActionType.TextSnippet,
+                        LongPressText = "home-long"
+                    }
+                ]
+            };
+            config.Current.Devices.Add(g9n9n);
+            config.Current.SelectedDeviceId = g9n9n.Id;
+
+            using var vm = new MainViewModel(config, bt, _ => executed.Add(RemoteButton.Home));
+            vm.HandleDeviceButton(addr, RemoteButton.Home, true);
+            vm.TriggerEtwUnexpectedDisconnectForTest();
+            vm.HandleDeviceButton(addr, RemoteButton.Home, false);
+
+            // Releasing after UnexpectedDisconnect must NOT fire Click because active gestures were reset
+            Assert.Empty(executed);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void HandleDeviceButton_DualStreamShortClickInterleave_ExecutesOnlyOnce()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"dedup-interleave-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new TestBluetoothManager { IsConnected = true, IsReady = true };
+            const ulong addr = 0x4754514C6FCC;
+            bt.ReadyAddresses.Add(addr);
+            var executed = new List<string?>();
+            var device = new RemoteDevice
+            {
+                Id = "g9",
+                BluetoothAddress = addr,
+                Name = "Chromecast Remote",
+                ModelType = RemoteModelType.GoogleG9N9N,
+                Mappings =
+                [
+                    new ButtonMapping
+                    {
+                        Button = RemoteButton.Home,
+                        ClickAction = ButtonActionType.TextSnippet,
+                        ClickText = "home"
+                    }
+                ]
+            };
+            config.Current.Devices.Add(device);
+            config.Current.SelectedDeviceId = device.Id;
+
+            using var vm = new MainViewModel(config, bt, a => executed.Add(a.Text));
+            vm.HandleDeviceButton(addr, RemoteButton.Home, true, MainViewModel.InputSource.RawInput);
+            vm.HandleDeviceButton(addr, RemoteButton.Home, false, MainViewModel.InputSource.RawInput);
+            vm.HandleDeviceButton(addr, RemoteButton.Home, true, MainViewModel.InputSource.Etw);
+            vm.HandleDeviceButton(addr, RemoteButton.Home, false, MainViewModel.InputSource.Etw);
+
+            Assert.Equal(["home"], executed);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void HandleDeviceButton_CrossButtonInterleave_DedupsBothButtonsWithoutClobbering()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"dedup-crossbtn-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new TestBluetoothManager { IsConnected = true, IsReady = true };
+            const ulong addr = 0x4754514C6FCC;
+            bt.ReadyAddresses.Add(addr);
+            var executed = new List<string?>();
+            var device = new RemoteDevice
+            {
+                Id = "g9",
+                BluetoothAddress = addr,
+                Name = "Chromecast Remote",
+                ModelType = RemoteModelType.GoogleG9N9N,
+                Mappings =
+                [
+                    new ButtonMapping
+                    {
+                        Button = RemoteButton.Home,
+                        ClickAction = ButtonActionType.TextSnippet,
+                        ClickText = "home"
+                    },
+                    new ButtonMapping
+                    {
+                        Button = RemoteButton.Back,
+                        ClickAction = ButtonActionType.TextSnippet,
+                        ClickText = "back"
+                    }
+                ]
+            };
+            config.Current.Devices.Add(device);
+            config.Current.SelectedDeviceId = device.Id;
+
+            using var vm = new MainViewModel(config, bt, a => executed.Add(a.Text));
+            vm.HandleDeviceButton(addr, RemoteButton.Home, true, MainViewModel.InputSource.RawInput);
+            vm.HandleDeviceButton(addr, RemoteButton.Back, true, MainViewModel.InputSource.RawInput);
+            vm.HandleDeviceButton(addr, RemoteButton.Home, true, MainViewModel.InputSource.Etw);
+
+            Assert.Equal(["home", "back"], executed);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void HandleDeviceButton_FastSameSourceDoubleClick_Preserved()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"dedup-dbl-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new TestBluetoothManager { IsConnected = true, IsReady = true };
+            const ulong addr = 0x4754514C6FCC;
+            bt.ReadyAddresses.Add(addr);
+            var executed = new List<string?>();
+            var device = new RemoteDevice
+            {
+                Id = "g9",
+                BluetoothAddress = addr,
+                Name = "Chromecast Remote",
+                ModelType = RemoteModelType.GoogleG9N9N,
+                Mappings =
+                [
+                    new ButtonMapping
+                    {
+                        Button = RemoteButton.Home,
+                        ClickAction = ButtonActionType.TextSnippet,
+                        ClickText = "home-single",
+                        DoubleClickAction = ButtonActionType.TextSnippet,
+                        DoubleClickText = "home-double"
+                    }
+                ]
+            };
+            config.Current.Devices.Add(device);
+            config.Current.SelectedDeviceId = device.Id;
+
+            using var vm = new MainViewModel(config, bt, a => executed.Add(a.Text));
+            vm.HandleDeviceButton(addr, RemoteButton.Home, true, MainViewModel.InputSource.Direct);
+            vm.HandleDeviceButton(addr, RemoteButton.Home, false, MainViewModel.InputSource.Direct);
+            vm.HandleDeviceButton(addr, RemoteButton.Home, true, MainViewModel.InputSource.Direct);
+            vm.HandleDeviceButton(addr, RemoteButton.Home, false, MainViewModel.InputSource.Direct);
+
+            Assert.Equal(["home-double"], executed);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void AudioOutputFailed_RaisesWarningBanner_AndVoiceSessionStartedClearsIt()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"banner-audio-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new TestBluetoothManager { IsConnected = true, IsReady = true, ConnectedDeviceAddress = 0x112233445566 };
+            bt.ReadyAddresses.Add(bt.ConnectedDeviceAddress);
+            using var vm = new MainViewModel(config, bt);
+
+            Assert.False(vm.HasWarningBanner);
+            bt.RaiseAudioOutputFailed(bt.ConnectedDeviceAddress, "CABLE Input unavailable");
+
+            Assert.True(vm.HasWarningBanner);
+            Assert.Contains("CABLE Input unavailable", vm.WarningBannerMessage);
+            Assert.Equal("查看驱动", vm.WarningBannerActionText);
+
+            bt.RaiseVoiceSessionStarted(bt.ConnectedDeviceAddress);
+            Assert.False(vm.HasWarningBanner);
+            Assert.Equal(string.Empty, vm.WarningBannerMessage);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void EtwStatusChanges_UpdateSidebarEnvironmentAndWarningBanner_AndRunningClearsBanner()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"banner-etw-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new TestBluetoothManager();
+            using var vm = new MainViewModel(config, bt);
+
+            Assert.False(vm.HasWarningBanner);
+            Assert.Equal(EtwCaptureStatus.Idle, vm.EtwCaptureStatus);
+
+            vm.SimulateEtwStatusForTest(EtwCaptureStatus.ElevationDeclined);
+            Assert.True(vm.HasWarningBanner);
+            Assert.Equal("重新提权", vm.WarningBannerActionText);
+            Assert.Equal(EtwCaptureStatus.ElevationDeclined, vm.EnvironmentVm.EtwStatus);
+            Assert.True(vm.EnvironmentVm.CanRetryEtwCapture);
+
+            vm.SimulateEtwStatusForTest(EtwCaptureStatus.Disconnected);
+            Assert.True(vm.HasWarningBanner);
+            Assert.Equal("重新启动", vm.WarningBannerActionText);
+
+            vm.SimulateEtwStatusForTest(EtwCaptureStatus.Failed);
+            Assert.True(vm.HasWarningBanner);
+            Assert.Equal("重试启动", vm.WarningBannerActionText);
+
+            vm.SimulateEtwStatusForTest(EtwCaptureStatus.RunningElevatedWorker);
+            Assert.False(vm.HasWarningBanner);
+            Assert.Equal(EtwCaptureStatus.RunningElevatedWorker, vm.EtwCaptureStatus);
+            Assert.False(vm.EnvironmentVm.CanRetryEtwCapture);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void DevicesVmRemoveDevice_SynchronizesMappingViewModelViaDevicesChanged()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"sync-rm-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var dev1 = new RemoteDevice { Id = "dev1", Name = "First", BluetoothAddress = 0x1111, ModelType = RemoteModelType.XiaomiRC003 };
+            var dev2 = new RemoteDevice { Id = "dev2", Name = "Second", BluetoothAddress = 0x2222, ModelType = RemoteModelType.GoogleG9N9N };
+            config.Current.Devices.AddRange([dev1, dev2]);
+            config.Current.SelectedDeviceId = dev1.Id;
+
+            var bt = new TestBluetoothManager();
+            using var vm = new MainViewModel(config, bt);
+            Assert.Equal(2, vm.MappingVm.Devices.Count);
+            Assert.Equal("dev1", vm.MappingVm.SelectedDevice?.Id);
+
+            vm.DevicesVm.RemoveDevice(dev1);
+
+            Assert.Single(vm.MappingVm.Devices);
+            Assert.Equal("dev2", vm.MappingVm.SelectedDevice?.Id);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void MappingPageActiveForeground_XiaomiHomePress_ShowsFeedbackWithoutExecutingWinTab()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"mapping-suppress-active-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var xiaomi = new RemoteDevice
+            {
+                Id = "xiaomi_rc003",
+                BluetoothAddress = 0xC05D39F86E0C,
+                Name = "MI RC",
+                ModelType = RemoteModelType.XiaomiRC003,
+                Mappings = RemoteDevice.CreateDefaultMappings(RemoteModelType.XiaomiRC003)
+            };
+            config.Current.Devices.Add(xiaomi);
+            config.Current.SelectedDeviceId = xiaomi.Id;
+
+            var bt = new TestBluetoothManager();
+            bt.ReadyAddresses.Add(xiaomi.BluetoothAddress);
+
+            var executed = new List<string?>();
+            using var vm = new MainViewModel(config, bt, action => executed.Add(action.Shortcut));
+            vm.IsMainWindowActive = true;
+            vm.Navigate("Mapping");
+            vm.MappingVm.IsMappingSelectionLocked = false;
+
+            var animatedButtons = new List<RemoteButton>();
+            vm.MappingVm.HardwareButtonPressed += button => animatedButtons.Add(button);
+
+            vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Home, true);
+            vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Home, false);
+
+            Assert.Equal([RemoteButton.Home], animatedButtons);
+            Assert.Equal(RemoteButton.Home, vm.MappingVm.SelectedMapping?.Button);
+            Assert.Empty(executed);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void MappingPageWindowInactive_XiaomiHomePress_ExecutesMappedShortcut()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"mapping-suppress-inactive-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var xiaomi = new RemoteDevice
+            {
+                Id = "xiaomi_rc003",
+                BluetoothAddress = 0xC05D39F86E0C,
+                Name = "MI RC",
+                ModelType = RemoteModelType.XiaomiRC003,
+                Mappings = RemoteDevice.CreateDefaultMappings(RemoteModelType.XiaomiRC003)
+            };
+            config.Current.Devices.Add(xiaomi);
+            config.Current.SelectedDeviceId = xiaomi.Id;
+
+            var bt = new TestBluetoothManager();
+            bt.ReadyAddresses.Add(xiaomi.BluetoothAddress);
+
+            var executed = new List<string?>();
+            using var vm = new MainViewModel(config, bt, action => executed.Add(action.Shortcut));
+            vm.IsMainWindowActive = false;
+            vm.Navigate("Mapping");
+
+            vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Home, true);
+            vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Home, false);
+
+            Assert.Equal(["Win+Tab"], executed);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void GeneralPageActiveForeground_XiaomiHomePress_ExecutesMappedShortcut()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"mapping-suppress-general-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var xiaomi = new RemoteDevice
+            {
+                Id = "xiaomi_rc003",
+                BluetoothAddress = 0xC05D39F86E0C,
+                Name = "MI RC",
+                ModelType = RemoteModelType.XiaomiRC003,
+                Mappings = RemoteDevice.CreateDefaultMappings(RemoteModelType.XiaomiRC003)
+            };
+            config.Current.Devices.Add(xiaomi);
+            config.Current.SelectedDeviceId = xiaomi.Id;
+
+            var bt = new TestBluetoothManager();
+            bt.ReadyAddresses.Add(xiaomi.BluetoothAddress);
+
+            var executed = new List<string?>();
+            using var vm = new MainViewModel(config, bt, action => executed.Add(action.Shortcut));
+            vm.IsMainWindowActive = true;
+            vm.Navigate("General");
+
+            vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Home, true);
+            vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Home, false);
+
+            Assert.Equal(["Win+Tab"], executed);
         }
         finally
         {

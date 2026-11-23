@@ -22,8 +22,8 @@
                 <StackPanel>
                     <DockPanel LastChildFill="False" Margin="0,0,0,12">
                         <TextBlock Text="VB-CABLE 虚拟麦克风音频驱动" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" DockPanel.Dock="Left"/>
-                        <Border Background="#1C3827" BorderBrush="#2D6A42" BorderThickness="1" CornerRadius="10" Padding="10,3" DockPanel.Dock="Right">
-                            <TextBlock Text="{Binding DriverStatusBadgeText}" Foreground="#44FF88" FontSize="12" FontWeight="Medium"/>
+                        <Border Background="{Binding DriverStatusBadgeBgColor}" BorderBrush="{Binding DriverStatusBadgeBorderColor}" BorderThickness="1" CornerRadius="10" Padding="10,3" DockPanel.Dock="Right">
+                            <TextBlock Text="{Binding DriverStatusBadgeText}" Foreground="{Binding DriverStatusBadgeColor}" FontSize="12" FontWeight="Medium"/>
                         </Border>
                     </DockPanel>
 
@@ -109,6 +109,24 @@
                         <TextBlock Text="✅ 当前已具有管理员特权，内核 ETW 事件流捕获已处于最优工作状态" Foreground="#00CC66" FontSize="13" VerticalAlignment="Center"
                                    Visibility="{Binding IsAdministrator, Converter={StaticResource BoolToVisibilityConverter}}"/>
                     </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- Card 4: ETW Button Capture Service -->
+            <Border Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="8" Padding="20" Margin="0,18,0,0">
+                <StackPanel>
+                    <DockPanel LastChildFill="False" Margin="0,0,0,12">
+                        <TextBlock Text="ETW 底层按键捕获服务 (Chromecast / T1)" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" DockPanel.Dock="Left"/>
+                        <Border Background="{Binding EtwStatusBadgeBgColor}" BorderBrush="{Binding EtwStatusBadgeBorderColor}" BorderThickness="1" CornerRadius="10" Padding="10,3" DockPanel.Dock="Right">
+                            <TextBlock Text="{Binding EtwStatusBadgeText}" Foreground="{Binding EtwStatusBadgeColor}" FontSize="12" FontWeight="Medium"/>
+                        </Border>
+                    </DockPanel>
+
+                    <TextBlock Text="{Binding EtwStatusDescription}" Foreground="{StaticResource SecondaryTextBrush}" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,14"/>
+
+                    <Button Content="🔄 重试启动捕获" Padding="16,8" Background="#007ACC" Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Left"
+                            Command="{Binding RetryEtwCaptureCommand}"
+                            Visibility="{Binding CanRetryEtwCapture, Converter={StaticResource BoolToVisibilityConverter}}"/>
                 </StackPanel>
             </Border>
         </StackPanel>

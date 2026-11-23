@@ -192,14 +192,14 @@ public sealed class HidDeviceReader : IDisposable
 
     public static HidDeviceInfo? FindBestDevice(ulong bluetoothAddress, ushort vendorId = 0)
     {
-        string addrHex = bluetoothAddress != 0 ? bluetoothAddress.ToString("X").ToUpperInvariant() : string.Empty;
+        string addrHex = bluetoothAddress != 0 ? bluetoothAddress.ToString("X12").ToUpperInvariant() : string.Empty;
 
         var paths = EnumerateHidDevicePaths();
         var matching = new List<HidDeviceInfo>();
         foreach (var p in paths)
         {
             string upper = p.ToUpperInvariant();
-            bool match = (!string.IsNullOrEmpty(addrHex) && addrHex.Length >= 6 && upper.Contains(addrHex))
+            bool match = (!string.IsNullOrEmpty(addrHex) && upper.Contains(addrHex, StringComparison.OrdinalIgnoreCase))
                 || PathMatchesVendorId(upper, vendorId);
 
             if (match)
@@ -230,7 +230,7 @@ public sealed class HidDeviceReader : IDisposable
         return FindBestDevice(bluetoothAddress, vendorId)?.Path;
     }
 
-    public bool Start(string path, int reportLength = 0)
+    public bool Start(string path, int reportLength = 0, RemoteModelType modelType = RemoteModelType.Unknown)
     {
         Stop();
 
@@ -257,8 +257,8 @@ public sealed class HidDeviceReader : IDisposable
             ActivePath = path;
 
             var ct = _cts.Token;
-            _readTask = Task.Run(() => ReadLoopAsync(handle, effectiveReportLen, ct), ct);
-            AppLogger.Info($"HidDeviceReader started successfully for: {path} (ReportLen={effectiveReportLen})", "HidDeviceReader");
+            _readTask = Task.Run(() => ReadLoopAsync(handle, effectiveReportLen, modelType, ct), ct);
+            AppLogger.Info($"HidDeviceReader started successfully for: {path} (ReportLen={effectiveReportLen}, Model={modelType})", "HidDeviceReader");
             return true;
         }
         catch (Exception ex)
@@ -269,7 +269,7 @@ public sealed class HidDeviceReader : IDisposable
         }
     }
 
-    public bool StartForRemote(ulong bluetoothAddress, ushort vendorId = 0)
+    public bool StartForRemote(ulong bluetoothAddress, ushort vendorId = 0, RemoteModelType modelType = RemoteModelType.Unknown)
     {
         var best = FindBestDevice(bluetoothAddress, vendorId);
         if (best == null)
@@ -277,10 +277,10 @@ public sealed class HidDeviceReader : IDisposable
             AppLogger.Warn($"HidDeviceReader: No matching HID device path found for address 0x{bluetoothAddress:X12}", "HidDeviceReader");
             return false;
         }
-        return Start(best.Path, best.InputReportByteLength);
+        return Start(best.Path, best.InputReportByteLength, modelType);
     }
 
-    private async Task ReadLoopAsync(SafeFileHandle handle, int reportLength, CancellationToken cancellationToken)
+    private async Task ReadLoopAsync(SafeFileHandle handle, int reportLength, RemoteModelType modelType, CancellationToken cancellationToken)
     {
         try
         {
@@ -294,9 +294,20 @@ public sealed class HidDeviceReader : IDisposable
                 if (bytesRead == 0 || cancellationToken.IsCancellationRequested) break;
 
                 var report = buffer.AsSpan(0, bytesRead);
-                if (G9N9NProtocol.TryParseReport(report, out var buttons) ||
-                    T1RemoteProtocol.TryParseReport(report, out buttons, out _) ||
-                    XiaomiProtocol.TryParseReport(report, out buttons))
+                List<RemoteButton> buttons = [];
+                bool parsed = modelType switch
+                {
+                    RemoteModelType.GoogleG9N9N or RemoteModelType.GoogleGY3LE =>
+                        G9N9NProtocol.TryParseReport(report, out buttons),
+                    RemoteModelType.T1Remote =>
+                        T1RemoteProtocol.TryParseReport(report, out buttons, out _),
+                    RemoteModelType.XiaomiRC003 or RemoteModelType.XiaomiRC001 =>
+                        XiaomiProtocol.TryParseReport(report, out buttons),
+                    _ => G9N9NProtocol.TryParseReport(report, out buttons) ||
+                         T1RemoteProtocol.TryParseReport(report, out buttons, out _) ||
+                         XiaomiProtocol.TryParseReport(report, out buttons)
+                };
+                if (parsed)
                 {
                     DispatchButtons(buttons);
                 }

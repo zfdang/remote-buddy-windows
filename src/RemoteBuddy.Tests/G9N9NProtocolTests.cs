@@ -55,4 +55,52 @@ public class G9N9NProtocolTests
         Assert.True(G9N9NProtocol.TryParseReport(releaseNoId, out var buttonsNoId));
         Assert.Empty(buttonsNoId);
     }
+
+    [Fact]
+    public void TryParseReport_RejectsXiaomiNineByteAndMousePackets()
+    {
+        byte[] xiaomiNineByte = [0x01, 0x00, 0x00, 0x52, 0x00, 0x00, 0x00, 0x00, 0x00];
+        Assert.False(G9N9NProtocol.TryParseReport(xiaomiNineByte, out _));
+
+        byte[] xiaomiMouse = [0x03, 0x01, 0x00, 0x00];
+        Assert.False(G9N9NProtocol.TryParseReport(xiaomiMouse, out _));
+
+        byte[] t1Mouse = [0x04, 0x01, 0x00, 0x00, 0x00];
+        Assert.False(G9N9NProtocol.TryParseReport(t1Mouse, out _));
+
+        // T1 SystemControl Power [0x03, 0x01] is parsed cleanly when dispatched to T1RemoteProtocol
+        byte[] t1SystemPower = [0x03, 0x01];
+        Assert.True(T1RemoteProtocol.TryParseReport(t1SystemPower, out var t1Buttons, out _));
+        Assert.Equal([RemoteButton.Power], t1Buttons);
+    }
+
+    [Fact]
+    public void XiaomiTryParseReport_ParsesMultiKeyAndOddSlotBootKeyboardAndIgnoresModifiersAndF8ToF12()
+    {
+        // 8-byte boot keyboard: key in odd slot slice[3] = 0x52 (Up)
+        byte[] oddSlot8 = [0x00, 0x00, 0x00, 0x52, 0x00, 0x00, 0x00, 0x00];
+        Assert.True(XiaomiProtocol.TryParseReport(oddSlot8, out var oddButtons));
+        Assert.Equal([RemoteButton.Up], oddButtons);
+
+        // 9-byte boot keyboard with Report ID 1 + multi-key combo: 0x52 (Up) + 0x28 (Ok)
+        byte[] combo9 = [0x01, 0x00, 0x00, 0x52, 0x28, 0x00, 0x00, 0x00, 0x00];
+        Assert.True(XiaomiProtocol.TryParseReport(combo9, out var comboButtons));
+        Assert.Equal([RemoteButton.Up, RemoteButton.Ok], comboButtons);
+
+        // All-zero release (9-byte Report ID 1)
+        byte[] release9 = [0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        Assert.True(XiaomiProtocol.TryParseReport(release9, out var releaseButtons));
+        Assert.Empty(releaseButtons);
+
+        // Modifier-only (slice[0] = LeftCtrl) does not falsely trigger buttons
+        byte[] modifierOnly = [0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        Assert.False(XiaomiProtocol.TryParseReport(modifierOnly, out _));
+
+        // Keyboard F8..F12 (0x41..0x45) in boot keyboard must NOT map to Consumer Ok/Up/Down/Left/Right
+        for (byte fKey = 0x41; fKey <= 0x45; fKey++)
+        {
+            byte[] fReport = [0x01, 0x00, 0x00, fKey, 0x00, 0x00, 0x00, 0x00, 0x00];
+            Assert.False(XiaomiProtocol.TryParseReport(fReport, out _));
+        }
+    }
 }

@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media.Animation;
+using System.Windows.Threading;
 using RemoteBuddy.App.ViewModels;
 using RemoteBuddy.Core.Models;
 using RemoteBuddy.Platform.Windows.Input;
@@ -60,8 +61,71 @@ public partial class MappingPage : UserControl
         return null;
     }
 
+    private static void FlushFocusedTextBoxBinding()
+    {
+        if (Keyboard.FocusedElement is TextBox tb)
+        {
+            tb.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+        }
+    }
+
+    private void FlushFocusedInput(object sender, MouseButtonEventArgs e)
+    {
+        FlushFocusedTextBoxBinding();
+    }
+
+    private void OnDeviceSelectorPreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        FlushFocusedTextBoxBinding();
+        Keyboard.ClearFocus();
+    }
+
+    private void OnDeviceSelectorPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (sender is ComboBox selector && e.Key == Key.Escape && selector.IsDropDownOpen)
+        {
+            selector.IsDropDownOpen = false;
+        }
+
+        // Prevent keyboard/remote arrow or character keys from switching remotes via the selector.
+        e.Handled = true;
+    }
+
+    private void OnDeviceSelectorSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        ClearDeviceSelectorFocus(sender as ComboBox);
+    }
+
+    private void OnDeviceSelectorDropDownClosed(object sender, EventArgs e)
+    {
+        ClearDeviceSelectorFocus(sender as ComboBox);
+    }
+
+    private void ClearDeviceSelectorFocus(ComboBox? selector)
+    {
+        if (selector == null) return;
+
+        void ReleaseFocus()
+        {
+            if (FocusManager.GetFocusScope(selector) is { } scope &&
+                (ReferenceEquals(FocusManager.GetFocusedElement(scope), selector) || selector.IsKeyboardFocusWithin))
+            {
+                FocusManager.SetFocusedElement(scope, null);
+            }
+
+            if (selector.IsKeyboardFocusWithin || ReferenceEquals(Keyboard.FocusedElement, selector))
+            {
+                Keyboard.ClearFocus();
+            }
+        }
+
+        ReleaseFocus();
+        Dispatcher.BeginInvoke(DispatcherPriority.Input, (Action)ReleaseFocus);
+    }
+
     private void SelectRemoteButton(object sender, RoutedEventArgs e)
     {
+        FlushFocusedTextBoxBinding();
         if (DataContext is MappingViewModel vm && sender is Button { Tag: string tag })
             vm.SelectButton(tag);
     }
@@ -100,12 +164,32 @@ public partial class MappingPage : UserControl
         if (modifiers.HasFlag(ModifierKeys.Alt)) parts.Add("Alt");
         if (modifiers.HasFlag(ModifierKeys.Shift)) parts.Add("Shift");
         if (modifiers.HasFlag(ModifierKeys.Windows)) parts.Add("Win");
-        parts.Add(key is >= Key.D0 and <= Key.D9 ? ((int)(key - Key.D0)).ToString() : key.ToString());
+        parts.Add(FormatRecordedKey(key));
 
         var shortcut = string.Join("+", parts);
         if (!NativeInputSender.TryParseShortcut(shortcut, out _, out _)) return;
         gesture.Shortcut = shortcut;
         recorder.IsChecked = false;
+    }
+
+    private static string FormatRecordedKey(Key key)
+    {
+        if (key is >= Key.D0 and <= Key.D9) return ((int)(key - Key.D0)).ToString();
+        return key switch
+        {
+            Key.OemComma => ",",
+            Key.OemPeriod => ".",
+            Key.OemQuestion => "/",
+            Key.OemOpenBrackets => "[",
+            Key.OemCloseBrackets => "]",
+            Key.OemSemicolon => ";",
+            Key.OemQuotes => "'",
+            Key.OemMinus => "-",
+            Key.OemPlus => "=",
+            Key.OemPipe => "\\",
+            Key.OemTilde => "`",
+            _ => key.ToString()
+        };
     }
 
     private void StopRecordingShortcut(object sender, KeyboardFocusChangedEventArgs e)
@@ -124,16 +208,19 @@ public partial class MappingPage : UserControl
 
     private void SelectSingleClickFromStatus(object sender, MouseButtonEventArgs e)
     {
+        FlushFocusedTextBoxBinding();
         if (DataContext is MappingViewModel vm) vm.SelectedTrigger = ButtonTrigger.SingleClick;
     }
 
     private void SelectLongPressFromStatus(object sender, MouseButtonEventArgs e)
     {
+        FlushFocusedTextBoxBinding();
         if (DataContext is MappingViewModel vm) vm.SelectedTrigger = ButtonTrigger.LongPress;
     }
 
     private void SelectDoubleClickFromStatus(object sender, MouseButtonEventArgs e)
     {
+        FlushFocusedTextBoxBinding();
         if (DataContext is MappingViewModel vm) vm.SelectedTrigger = ButtonTrigger.DoubleClick;
     }
 }

@@ -31,6 +31,8 @@ public sealed class ChromecastEtwReceiver : IDisposable
     public event Action<ulong, RemoteButton, bool>? ButtonEvent;
     public event Action<ulong>? TruncatedPacketDetected;
     public event Action<ulong>? DeviceDisconnected;
+    public event Action<ulong>? SourceBound;
+    public event Action<string>? UnexpectedStop;
 
     private const byte HciEvent = 2;
     private const byte AclReceived = 3;
@@ -53,12 +55,13 @@ public sealed class ChromecastEtwReceiver : IDisposable
     }
 
     private readonly object _lock = new();
+    private readonly object _stateLock = new();
     private SourceState[] _sources = [];
     private volatile bool _sawPacketEvent;
 
     internal void SetSources(IEnumerable<EtwButtonSource> sources)
     {
-        _sources = sources.Select(source =>
+        var next = sources.Select(source =>
         {
             byte[] request = [0x06, 0x01, 0x00, 0xFF, 0xFF, 0x00, 0x28,
                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
@@ -67,7 +70,11 @@ public sealed class ChromecastEtwReceiver : IDisposable
             uuid.Reverse();
             return new SourceState(source, request);
         }).ToArray();
-        _sawPacketEvent = false;
+        lock (_stateLock)
+        {
+            _sources = next;
+            _sawPacketEvent = false;
+        }
     }
 
     private string? _sessionName;
@@ -251,7 +258,13 @@ public sealed class ChromecastEtwReceiver : IDisposable
             return;
         }
 
-        if (cancellationToken.IsCancellationRequested || _sources.All(s => s.BoundHandle.HasValue)) return;
+        if (cancellationToken.IsCancellationRequested) return;
+        bool allBound;
+        lock (_stateLock)
+        {
+            allBound = _sources.All(s => s.BoundHandle.HasValue);
+        }
+        if (allBound) return;
         AppLogger.Warn(_sawPacketEvent
             ? "BthPort Event 402 arrived, but the selected remote's GATT probe was not matched."
             : "ETW started, but no BthPort Event 402 arrived for button capture.",
@@ -270,6 +283,11 @@ public sealed class ChromecastEtwReceiver : IDisposable
         if (result != 0 && result != 1223 /* ERROR_CANCELLED */)
         {
             AppLogger.Warn($"ProcessTrace exited with code {result}", "ChromecastEtwReceiver");
+            if (_isRunning)
+            {
+                _isRunning = false;
+                UnexpectedStop?.Invoke($"ProcessTrace exited with Win32Error={result}");
+            }
         }
     }
 
@@ -322,19 +340,35 @@ public sealed class ChromecastEtwReceiver : IDisposable
 
     internal void ProcessPacket(byte kind, ReadOnlySpan<byte> packet)
     {
-        var sources = _sources;
+        List<ulong>? disconnectedAddrs = null;
+        ulong? newlyBoundAddr = null;
+        ulong? truncatedAddr = null;
+        ulong buttonAddr = 0;
+        RemoteButton edge1 = RemoteButton.None;
+        bool edge1Down = false;
+        RemoteButton edge2 = RemoteButton.None;
+        bool edge2Down = false;
+
         if (kind == HciEvent)
         {
-            if (packet is [0x05, 0x04, 0x00, _, _, _])
+            if (packet is [0x05, 0x04, 0x00, _, _, _, ..])
             {
-                ushort handle = BinaryPrimitives.ReadUInt16LittleEndian(packet[3..]);
-                foreach (var source in sources)
+                ushort handle = (ushort)(BinaryPrimitives.ReadUInt16LittleEndian(packet[3..]) & 0x0FFF);
+                lock (_stateLock)
                 {
-                    if (source.PendingHandle == handle) source.PendingHandle = null;
-                    if (source.BoundHandle != handle) continue;
-                    source.BoundHandle = null;
-                    source.Held = RemoteButton.None;
-                    DeviceDisconnected?.Invoke(source.Source.Address);
+                    foreach (var source in _sources)
+                    {
+                        if (source.PendingHandle == handle) source.PendingHandle = null;
+                        if (source.BoundHandle != handle) continue;
+                        source.BoundHandle = null;
+                        source.Held = RemoteButton.None;
+                        disconnectedAddrs ??= [];
+                        disconnectedAddrs.Add(source.Source.Address);
+                    }
+                }
+                if (disconnectedAddrs != null)
+                {
+                    foreach (var addr in disconnectedAddrs) DeviceDisconnected?.Invoke(addr);
                 }
             }
             return;
@@ -345,67 +379,126 @@ public sealed class ChromecastEtwReceiver : IDisposable
         if (kind == AclSent)
         {
             if (incomplete) return;
-            foreach (var source in sources)
+            lock (_stateLock)
             {
-                if (!att.SequenceEqual(source.Request)) continue;
-                source.PendingHandle = connection;
-                AppLogger.Info($"BthPort observed GATT query for 0x{source.Source.Address:X12}", "ChromecastEtwReceiver");
-                return;
-            }
-            return;
-        }
-
-        var pendingSource = sources.FirstOrDefault(source => source.PendingHandle == connection);
-        var boundSource = sources.FirstOrDefault(source => source.BoundHandle == connection);
-        foreach (var source in new[] { pendingSource, boundSource })
-        {
-            if (source == null) continue;
-            bool pending = source == pendingSource;
-            bool response = pending && !incomplete &&
-                (att is [0x01, 0x06, _, _, _] || att is [0x07, ..]);
-            if (response)
-            {
-                Bind(source);
-                return;
-            }
-            if (!pending && source.BoundHandle != connection) continue;
-            bool parsed = TryParseButtonReport(att, incomplete, source.Source.Protocol,
-                out var button, out bool isDown, out bool truncated);
-            if (pending && parsed && isDown) Bind(source);
-            if (source.BoundHandle != connection) continue;
-            if (parsed)
-            {
-                if (!isDown && source.Source.Protocol == EtwProtocolKind.Xiaomi &&
-                    att.Length == 11 && BinaryPrimitives.ReadUInt16LittleEndian(att[1..]) == XiaomiKeyboardAttribute &&
-                    source.Held is not (RemoteButton.Back or RemoteButton.VolumeUp or RemoteButton.VolumeDown))
-                    return;
-                DispatchButtonEvent(source, button, isDown);
-            }
-            else if (truncated)
-            {
-                if (!source.SawRedaction)
+                foreach (var source in _sources)
                 {
-                    source.SawRedaction = true;
-                    AppLogger.Warn("Windows omitted a verified button code", "ChromecastEtwReceiver");
+                    if (!att.SequenceEqual(source.Request)) continue;
+                    source.PendingHandle = connection;
+                    AppLogger.Info($"BthPort observed GATT query for 0x{source.Source.Address:X12}", "ChromecastEtwReceiver");
+                    return;
                 }
-                DispatchButtonEvent(source, RemoteButton.None, false);
-                TruncatedPacketDetected?.Invoke(source.Source.Address);
             }
             return;
         }
 
-        void Bind(SourceState source)
+        lock (_stateLock)
         {
-            foreach (var other in sources)
+            var sources = _sources;
+            var pendingSource = sources.FirstOrDefault(source => source.PendingHandle == connection);
+            var boundSource = sources.FirstOrDefault(source => source.BoundHandle == connection);
+            foreach (var source in new[] { pendingSource, boundSource })
             {
-                if (other == source || other.BoundHandle != connection) continue;
-                other.BoundHandle = null;
-                other.Held = RemoteButton.None;
-                DeviceDisconnected?.Invoke(other.Source.Address);
+                if (source == null) continue;
+                bool pending = source == pendingSource;
+                bool response = pending && !incomplete &&
+                    (att is [0x01, 0x06, _, _, _] || att is [0x07, ..]);
+                if (response)
+                {
+                    BindLocked(sources, source);
+                    break;
+                }
+                if (!pending && source.BoundHandle != connection) continue;
+                bool parsed = TryParseButtonReport(att, incomplete, source.Source.Protocol,
+                    out var button, out bool isDown, out bool truncated);
+                if (pending && parsed && isDown) BindLocked(sources, source);
+                if (source.BoundHandle != connection) continue;
+                if (parsed)
+                {
+                    if (!isDown && source.Source.Protocol == EtwProtocolKind.Xiaomi &&
+                        att.Length == 11 && BinaryPrimitives.ReadUInt16LittleEndian(att[1..]) == XiaomiKeyboardAttribute &&
+                        source.Held is not (RemoteButton.Back or RemoteButton.VolumeUp or RemoteButton.VolumeDown))
+                        break;
+                    RecordButtonEdgesLocked(source, button, isDown);
+                }
+                else if (truncated)
+                {
+                    if (!source.SawRedaction)
+                    {
+                        source.SawRedaction = true;
+                        AppLogger.Warn("Windows omitted a verified button code", "ChromecastEtwReceiver");
+                    }
+                    RecordButtonEdgesLocked(source, RemoteButton.None, false);
+                    truncatedAddr = source.Source.Address;
+                }
+                break;
             }
-            source.BoundHandle = connection;
-            source.PendingHandle = null;
-            AppLogger.Info($"ETW bound 0x{source.Source.Address:X12} to ACL 0x{connection:X4}", "ChromecastEtwReceiver");
+
+            void BindLocked(SourceState[] allSources, SourceState source)
+            {
+                foreach (var other in allSources)
+                {
+                    if (other == source || other.BoundHandle != connection) continue;
+                    other.BoundHandle = null;
+                    other.Held = RemoteButton.None;
+                    disconnectedAddrs ??= [];
+                    disconnectedAddrs.Add(other.Source.Address);
+                }
+                source.BoundHandle = connection;
+                source.PendingHandle = null;
+                newlyBoundAddr = source.Source.Address;
+                AppLogger.Info($"ETW bound 0x{source.Source.Address:X12} to ACL 0x{connection:X4}", "ChromecastEtwReceiver");
+            }
+
+            void RecordButtonEdgesLocked(SourceState source, RemoteButton btn, bool isDown)
+            {
+                var next = isDown ? btn : RemoteButton.None;
+                var previous = source.Held;
+                if (next == previous) return;
+                source.Held = next;
+                buttonAddr = source.Source.Address;
+                if (previous != RemoteButton.None)
+                {
+                    edge1 = previous;
+                    edge1Down = false;
+                }
+                if (next != RemoteButton.None)
+                {
+                    if (edge1 == RemoteButton.None)
+                    {
+                        edge1 = next;
+                        edge1Down = true;
+                    }
+                    else
+                    {
+                        edge2 = next;
+                        edge2Down = true;
+                    }
+                }
+            }
+        }
+
+        if (disconnectedAddrs != null)
+        {
+            foreach (var addr in disconnectedAddrs) DeviceDisconnected?.Invoke(addr);
+        }
+        if (newlyBoundAddr.HasValue)
+        {
+            SourceBound?.Invoke(newlyBoundAddr.Value);
+        }
+        if (edge1 != RemoteButton.None)
+        {
+            AppLogger.Info($"ETW button 0x{buttonAddr:X12}: {edge1} {(edge1Down ? "Down" : "Up")}", "ChromecastEtwReceiver");
+            ButtonEvent?.Invoke(buttonAddr, edge1, edge1Down);
+        }
+        if (edge2 != RemoteButton.None)
+        {
+            AppLogger.Info($"ETW button 0x{buttonAddr:X12}: {edge2} {(edge2Down ? "Down" : "Up")}", "ChromecastEtwReceiver");
+            ButtonEvent?.Invoke(buttonAddr, edge2, edge2Down);
+        }
+        if (truncatedAddr.HasValue)
+        {
+            TruncatedPacketDetected?.Invoke(truncatedAddr.Value);
         }
     }
 
@@ -422,11 +515,12 @@ public sealed class ChromecastEtwReceiver : IDisposable
 
         int aclLength = BinaryPrimitives.ReadUInt16LittleEndian(packet[2..]);
         int l2capLength = BinaryPrimitives.ReadUInt16LittleEndian(packet[4..]);
-        if (aclLength != l2capLength + 4 || packet.Length > aclLength + 4 ||
+        if (aclLength != l2capLength + 4 ||
             BinaryPrimitives.ReadUInt16LittleEndian(packet[6..]) != 4) return false;
 
-        att = packet[8..];
-        incomplete = att.Length < l2capLength;
+        int availableAtt = packet.Length - 8;
+        incomplete = availableAtt < l2capLength;
+        att = incomplete ? packet[8..] : packet.Slice(8, l2capLength);
         // The observed redaction keeps the ATT header of the eight-byte G9N9N report.
         return incomplete ? l2capLength == 11 && att.Length == 3 : !att.IsEmpty;
     }
@@ -668,7 +762,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 _sessionHandle = 0;
             }
 
-            _sources = [];
+            SetSources([]);
 
             CleanupUnmanaged();
         }

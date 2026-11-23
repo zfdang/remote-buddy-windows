@@ -29,21 +29,24 @@ public class ConvertersAndViewModelTests
         public G9N9NVoiceButtonMode VoiceButtonMode { get; set; } = G9N9NVoiceButtonMode.SmartToggle;
 
         public event Action<RemoteDevice>? DeviceDiscovered;
-        public event Action<bool, string>? ConnectionStatusChanged;
-        public event Action? ConnectedDeviceInformationChanged;
-        public event Action<float>? AudioLevelChanged { add { } remove { } }
-        public event Action? VoiceButtonPressed { add { } remove { } }
-        public event Action? VoiceSessionStarted { add { } remove { } }
-        public event Action? VoiceSessionEnded;
+        public event Action<ulong, bool, string>? ConnectionStatusChanged;
+        public event Action<ulong>? ConnectedDeviceInformationChanged;
+        public event Action<ulong, float>? AudioLevelChanged { add { } remove { } }
+        public event Action<ulong>? VoiceButtonPressed;
+        public event Action<ulong>? VoiceSessionStarted;
+        public event Action<ulong>? VoiceSessionEnded;
 
         public void RaiseDeviceDiscovered(RemoteDevice dev) => DeviceDiscovered?.Invoke(dev);
-        public void RaiseConnectionStatusChanged(bool connected, string name) => ConnectionStatusChanged?.Invoke(connected, name);
+        public void RaiseConnectionStatusChanged(bool connected, string name, ulong address = 0) =>
+            ConnectionStatusChanged?.Invoke(address != 0 ? address : ConnectedDeviceAddress, connected, name);
         public void SetConnectedDeviceInformation(RemoteDeviceInformation? information)
         {
             ConnectedDeviceInformation = information;
-            ConnectedDeviceInformationChanged?.Invoke();
+            ConnectedDeviceInformationChanged?.Invoke(information?.BluetoothAddress ?? ConnectedDeviceAddress);
         }
-        public void RaiseVoiceSessionEnded() => VoiceSessionEnded?.Invoke();
+        public void RaiseVoiceButtonPressed(ulong address = 0) => VoiceButtonPressed?.Invoke(address);
+        public void RaiseVoiceSessionStarted(ulong address = 0) => VoiceSessionStarted?.Invoke(address);
+        public void RaiseVoiceSessionEnded(ulong address = 0) => VoiceSessionEnded?.Invoke(address);
 
         public void StartScanning() => IsScanning = true;
         public void StopScanning() => IsScanning = false;
@@ -367,6 +370,9 @@ public class ConvertersAndViewModelTests
         vm.DriverStatus = DriverReadinessStatus.NotInstalled;
         Assert.Equal("未安装", vm.DriverStatusBadgeText);
 
+        vm.DriverStatus = DriverReadinessStatus.Disabled;
+        Assert.Equal("已禁用", vm.DriverStatusBadgeText);
+
         vm.DriverStatus = DriverReadinessStatus.RebootRequired;
         Assert.Equal("需重启", vm.DriverStatusBadgeText);
 
@@ -411,6 +417,166 @@ public class ConvertersAndViewModelTests
         }
         finally
         {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void DevicesViewModel_DiscoveredUnknownDevice_IsIgnoredWithoutPollutingConfiguredDevices()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-nearby-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var configured = new RemoteDevice
+            {
+                Id = "cfg-1",
+                Name = "Original Name",
+                BluetoothAddress = 0xAABBCCDDEEFF,
+                ModelType = RemoteModelType.XiaomiRC001
+            };
+            config.Current.Devices.Add(configured);
+
+            var bt = new DummyBluetoothManager();
+            using var vm = new DevicesViewModel(config, bt);
+
+            bt.RaiseDeviceDiscovered(new RemoteDevice
+            {
+                Id = "nearby-1",
+                Name = "Nearby Chromecast",
+                BluetoothAddress = 0x112233445566,
+                ModelType = RemoteModelType.GoogleG9N9N
+            });
+
+            Assert.Single(vm.DiscoveredDevices);
+            Assert.Equal("cfg-1", vm.DiscoveredDevices[0].Id);
+
+            bt.RaiseDeviceDiscovered(new RemoteDevice
+            {
+                Id = "cfg-1",
+                Name = "Updated Remote Name",
+                BluetoothAddress = 0xAABBCCDDEEFF,
+                ModelType = RemoteModelType.XiaomiRC003
+            });
+
+            Assert.Single(vm.DiscoveredDevices);
+            Assert.Equal("Updated Remote Name", vm.DiscoveredDevices[0].Name);
+            Assert.Equal(RemoteModelType.XiaomiRC003, vm.DiscoveredDevices[0].ModelType);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void DevicesViewModel_GainChangesDebounce_AndFlushOnDispose()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-debounce-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var dev = new RemoteDevice
+            {
+                Id = "dev1",
+                Name = "Test Remote",
+                BluetoothAddress = 0x112233445566,
+                ModelType = RemoteModelType.GoogleG9N9N,
+                Gain = 2.0f
+            };
+            config.Current.Devices.Add(dev);
+            config.Current.SelectedDeviceId = dev.Id;
+            config.Save();
+
+            var bt = new DummyBluetoothManager
+            {
+                IsConnected = true,
+                ConnectedDeviceAddress = dev.BluetoothAddress
+            };
+            var vm = new DevicesViewModel(config, bt);
+
+            // Rapid slider changes must update live BT settings immediately without synchronous disk save
+            dev.Gain = 4.0f;
+            dev.Gain = 6.5f;
+            Assert.Equal(6.5f, bt.CurrentGain);
+            Assert.Equal(2.0f, new ConfigService(path).Current.Devices.Single().Gain);
+
+            // Disposing must flush the debounced gain write synchronously
+            vm.Dispose();
+            Assert.Equal(6.5f, new ConfigService(path).Current.Devices.Single().Gain);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void DevicesViewModel_ConnectionStatusChanged_PreservesUserSelectedDevice_AndReloadSkipsSave()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-sel-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var dev1 = new RemoteDevice
+            {
+                Id = "dev1",
+                Name = "Remote 1",
+                BluetoothAddress = 0x111111111111,
+                ModelType = RemoteModelType.GoogleG9N9N
+            };
+            var dev2 = new RemoteDevice
+            {
+                Id = "dev2",
+                Name = "Remote 2",
+                BluetoothAddress = 0x222222222222,
+                ModelType = RemoteModelType.XiaomiRC003
+            };
+            config.Current.Devices.AddRange([dev1, dev2]);
+            config.Current.SelectedDeviceId = dev2.Id;
+            config.Save();
+
+            var bt = new DummyBluetoothManager();
+            using var vm = new DevicesViewModel(config, bt);
+            Assert.Same(dev2, vm.SelectedDevice);
+
+            // Connecting dev1 must not overwrite the user's valid dev2 selection
+            bt.IsConnected = true;
+            bt.ConnectedDeviceAddress = dev1.BluetoothAddress;
+            bt.RaiseConnectionStatusChanged(true, dev1.Name, dev1.BluetoothAddress);
+
+            Assert.True(dev1.IsConnected);
+            Assert.Same(dev2, vm.SelectedDevice);
+
+            // Reload must refresh UI collections without writing config.json
+            var pastWrite = DateTime.UtcNow.AddMinutes(-10);
+            File.SetLastWriteTimeUtc(path, pastWrite);
+            vm.Reload();
+            Assert.Equal(pastWrite, File.GetLastWriteTimeUtc(path), TimeSpan.FromSeconds(1));
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void OnboardingViewModel_WhenDriverAlreadyReady_PopulatesDriverStatusMessage()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-onb-ready-{Guid.NewGuid():N}.json");
+        var previousOverride = VirtualAudioAuditor.StatusOverride;
+        try
+        {
+            VirtualAudioAuditor.StatusOverride = DriverReadinessStatus.Ready;
+            var config = new ConfigService(path);
+            using var vm = new OnboardingViewModel(config, new DummyBluetoothManager(), WizardMode.Full);
+
+            Assert.Equal(DriverReadinessStatus.Ready, vm.DriverStatus);
+            Assert.Contains("VB-CABLE 虚拟麦克风已就绪", vm.DriverStatusMessage);
+        }
+        finally
+        {
+            VirtualAudioAuditor.StatusOverride = previousOverride;
             if (File.Exists(path)) File.Delete(path);
         }
     }

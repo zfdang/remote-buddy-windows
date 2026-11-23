@@ -98,15 +98,19 @@
 
             <!-- Card 2: Setup Wizard Banner -->
             <Border Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="8" Padding="20" Margin="0,0,0,18">
-                <DockPanel LastChildFill="False">
-                    <StackPanel DockPanel.Dock="Left" MaxWidth="560">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Margin="0,0,20,0" VerticalAlignment="Center">
                         <TextBlock Text="设置向导" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
                         <TextBlock Text="重新运行首次配置向导，从头逐步完成麦克风驱动检查、蓝牙遥控器连接测试与目标输入法快捷键验证。"
                                    FontSize="13" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,6,0,0"/>
                     </StackPanel>
-                    <Button Content="🚀 重新运行向导" DockPanel.Dock="Right" VerticalAlignment="Center" Padding="16,9" Background="#007ACC"
+                    <Button Grid.Column="1" Content="🚀 重新运行向导" VerticalAlignment="Center" Padding="16,9" Background="#007ACC"
                             Command="{Binding RerunWizardCommand}"/>
-                </DockPanel>
+                </Grid>
             </Border>
 
             <!-- Card 3: Preferences -->

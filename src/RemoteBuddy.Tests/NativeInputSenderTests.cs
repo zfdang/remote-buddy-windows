@@ -83,4 +83,59 @@ public class NativeInputSenderTests
         var input = NativeInputSender.CreateKeyInput(0x41, false);
         Assert.Equal(NativeInputSender.SyntheticEventMarker, input.u.ki.dwExtraInfo);
     }
+
+    [Theory]
+    [InlineData(0u, new ushort[0])]
+    [InlineData(1u, new ushort[] { 0xA2 })]
+    [InlineData(2u, new ushort[] { 0xA0, 0xA2 })]
+    [InlineData(3u, new ushort[] { 0x41, 0xA0, 0xA2 })]
+    [InlineData(4u, new ushort[] { 0xA0, 0xA2 })]
+    [InlineData(5u, new ushort[] { 0xA2 })]
+    [InlineData(6u, new ushort[0])]
+    public void BuildUnclosedReleaseInputs_ReturnsMatchingKeyUpsAtEachSentBoundary(uint sentCount, ushort[] expectedReleaseVks)
+    {
+        var sequence = new INPUT[]
+        {
+            NativeInputSender.CreateKeyInput(0xA2, false), // Ctrl Down
+            NativeInputSender.CreateKeyInput(0xA0, false), // Shift Down
+            NativeInputSender.CreateKeyInput(0x41, false), // A Down
+            NativeInputSender.CreateKeyInput(0x41, true),  // A Up
+            NativeInputSender.CreateKeyInput(0xA0, true),  // Shift Up
+            NativeInputSender.CreateKeyInput(0xA2, true)   // Ctrl Up
+        };
+
+        var releases = NativeInputSender.BuildUnclosedReleaseInputs(sequence, sentCount);
+        Assert.Equal(expectedReleaseVks, releases.Select(i => i.u.ki.wVk).ToArray());
+        Assert.All(releases, r => Assert.NotEqual(0u, r.u.ki.dwFlags & NativeInputSender.KEYEVENTF_KEYUP));
+    }
+
+    [Theory]
+    [InlineData(",", 0xBC)]
+    [InlineData("OemComma", 0xBC)]
+    [InlineData(".", 0xBE)]
+    [InlineData("OemPeriod", 0xBE)]
+    [InlineData("/", 0xBF)]
+    [InlineData("OemQuestion", 0xBF)]
+    [InlineData("[", 0xDB)]
+    [InlineData("OemOpenBrackets", 0xDB)]
+    [InlineData("]", 0xDD)]
+    [InlineData("OemCloseBrackets", 0xDD)]
+    [InlineData(";", 0xBA)]
+    [InlineData("OemSemicolon", 0xBA)]
+    [InlineData("'", 0xDE)]
+    [InlineData("OemQuotes", 0xDE)]
+    [InlineData("-", 0xBD)]
+    [InlineData("OemMinus", 0xBD)]
+    [InlineData("=", 0xBB)]
+    [InlineData("OemPlus", 0xBB)]
+    [InlineData("\\", 0xDC)]
+    [InlineData("OemPipe", 0xDC)]
+    [InlineData("`", 0xC0)]
+    [InlineData("OemTilde", 0xC0)]
+    public void TryParseShortcut_SupportsAllUsOemSymbolsAndWpfAliases(string token, ushort expectedVk)
+    {
+        Assert.True(NativeInputSender.TryParseShortcut($"Ctrl+{token}", out var modifiers, out ushort mainKey));
+        Assert.Equal(new ushort[] { 0xA2 }, modifiers);
+        Assert.Equal(expectedVk, mainKey);
+    }
 }

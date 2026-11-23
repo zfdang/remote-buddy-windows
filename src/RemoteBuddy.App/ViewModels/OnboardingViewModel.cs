@@ -44,10 +44,10 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     private readonly WizardStep[] _activeSteps;
 
     private readonly Action<RemoteDevice> _onDeviceDiscovered;
-    private readonly Action<bool, string> _onConnectionChanged;
-    private readonly Action<float> _onAudioLevelChanged;
-    private readonly Action _onVoiceSessionEnded;
-    private readonly Action _onVoiceSessionStarted;
+    private readonly Action<ulong, bool, string> _onConnectionChanged;
+    private readonly Action<ulong, float> _onAudioLevelChanged;
+    private readonly Action<ulong> _onVoiceSessionEnded;
+    private readonly Action<ulong> _onVoiceSessionStarted;
 
     public WizardMode Mode { get; }
 
@@ -90,21 +90,17 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     private string _stepTitle = "欢迎使用 Remote Buddy";
 
     [ObservableProperty]
-    private DriverReadinessStatus _driverStatus;
+    [NotifyPropertyChangedFor(nameof(DriverStatusMessage))]
+    private DriverReadinessStatus _driverStatus = DriverReadinessStatus.NotInstalled;
 
-    partial void OnDriverStatusChanged(DriverReadinessStatus value)
+    public string DriverStatusMessage => DriverStatus switch
     {
-        DriverStatusMessage = value switch
-        {
-            DriverReadinessStatus.Ready => "✅ VB-CABLE 虚拟麦克风已就绪，音频服务工作正常。",
-            DriverReadinessStatus.NotInstalled => "❌ 未检测到 VB-CABLE。请点击下方按钮前往官网下载安装。",
-            DriverReadinessStatus.RebootRequired => "⚠️ 检测到虚拟声卡安装未完全生效，请重启电脑完成系统音频服务初始化。",
-            _ => "❌ 虚拟麦克风初始化失败，请在设备管理器中检查设备状态。"
-        };
-    }
-
-    [ObservableProperty]
-    private string _driverStatusMessage = string.Empty;
+        DriverReadinessStatus.Ready => "✅ VB-CABLE 虚拟麦克风已就绪，音频服务工作正常。",
+        DriverReadinessStatus.NotInstalled => "❌ 未检测到 VB-CABLE。请点击下方按钮前往官网下载安装。",
+        DriverReadinessStatus.Disabled => "⚠️ 检测到 CABLE Input 音频设备已被禁用，请在 Windows 声音设置中启用后再继续。",
+        DriverReadinessStatus.RebootRequired => "⚠️ 检测到虚拟声卡安装未完全生效，请重启电脑完成系统音频服务初始化。",
+        _ => "❌ 虚拟麦克风初始化失败，请在设备管理器中检查设备状态。"
+    };
 
     [ObservableProperty]
     private bool _isScanning = false;
@@ -299,12 +295,14 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             }));
         };
 
-        _onConnectionChanged = (connected, name) =>
+        _onConnectionChanged = (addr, connected, name) =>
         {
+            if (SelectedDevice is { BluetoothAddress: not 0 } selected && addr != 0 && addr != selected.BluetoothAddress) return;
             void Update()
             {
-                bool targetReady = _bt is RemoteBuddy.Platform.Windows.Bluetooth.MultiRemoteBluetoothManager
-                    ? SelectedDevice is { } device && _bt.IsDeviceReady(device.BluetoothAddress) : connected;
+                bool targetReady = SelectedDevice is { BluetoothAddress: not 0 } device
+                    ? (_bt.IsDeviceReady(device.BluetoothAddress) || (connected && (addr == 0 || addr == device.BluetoothAddress)))
+                    : connected;
                 IsDeviceConnected = targetReady;
                 DeviceConnectionStatus = targetReady ? $"语音服务已就绪：{name}" : $"语音服务未就绪：{name}";
                 if (!targetReady)
@@ -326,10 +324,9 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             }
         };
 
-        _onAudioLevelChanged = (level) =>
+        _onAudioLevelChanged = (addr, level) =>
         {
-            ulong owner = _bt.VoiceDeviceAddress;
-            if (owner != 0 && owner != SelectedDevice?.BluetoothAddress) return;
+            if (SelectedDevice is { BluetoothAddress: not 0 } selected && addr != 0 && addr != selected.BluetoothAddress) return;
             void Update()
             {
                 LiveAudioLevel = level;
@@ -349,10 +346,9 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             }
         };
 
-        _onVoiceSessionEnded = () =>
+        _onVoiceSessionEnded = (addr) =>
         {
-            ulong owner = _bt.VoiceDeviceAddress;
-            if (owner != 0 && owner != SelectedDevice?.BluetoothAddress) return;
+            if (SelectedDevice is { BluetoothAddress: not 0 } selected && addr != 0 && addr != selected.BluetoothAddress) return;
             void Update()
             {
                 LiveAudioLevel = 0f;
@@ -372,10 +368,9 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             }
         };
 
-        _onVoiceSessionStarted = () =>
+        _onVoiceSessionStarted = (addr) =>
         {
-            ulong owner = _bt.VoiceDeviceAddress;
-            if (owner != 0 && owner != SelectedDevice?.BluetoothAddress) return;
+            if (SelectedDevice is { BluetoothAddress: not 0 } selected && addr != 0 && addr != selected.BluetoothAddress) return;
             void Update()
             {
                 if (CurrentWizardStep == WizardStep.ButtonTest)
@@ -425,9 +420,10 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
         if (!IsCompleted && Mode == WizardMode.DeviceOnly)
         {
             AppLogger.Info("AddDevice wizard closed without completion: discarding unverified device connection", "OnboardingViewModel");
-            if (_bt.IsConnected)
+            if (SelectedDevice is { BluetoothAddress: not 0 } target &&
+                _config.Current.Devices.All(d => d.BluetoothAddress != target.BluetoothAddress))
             {
-                if (SelectedDevice is { } target) _bt.DisconnectDevice(target.BluetoothAddress);
+                _bt.RemoveDevice(target.BluetoothAddress);
             }
             if (!string.IsNullOrEmpty(_config.Current.SelectedDeviceId))
             {
@@ -444,6 +440,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     public void RefreshDriverStatus()
     {
         DriverStatus = VirtualAudioAuditor.AuditCableInputDevice(forceRefresh: true);
+        OnPropertyChanged(nameof(DriverStatusMessage));
     }
 
     [RelayCommand]
@@ -622,7 +619,9 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
                 }
                 if (DriverStatus != DriverReadinessStatus.Ready)
                 {
-                    ValidationError = "请先安装 VB-CABLE 并确保音频端点就绪（如需重启请先重启电脑）。";
+                    ValidationError = DriverStatus == DriverReadinessStatus.Disabled
+                        ? "CABLE Input 音频设备当前处于禁用状态，请在 Windows 声音设置中启用。"
+                        : "请先安装 VB-CABLE 并确保音频端点就绪（如需重启请先重启电脑）。";
                     return;
                 }
                 break;
@@ -748,14 +747,13 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
                 }
             }
 
-            if (!_config.Current.Devices.Any(d => d.Id == SelectedDevice.Id))
-            {
-                _config.Current.Devices.Add(SelectedDevice);
-            }
-            _config.Current.SelectedDeviceId = SelectedDevice.Id;
+            SelectedDevice = _config.UpsertDevice(SelectedDevice, select: true, save: true);
             AppLogger.Info($"Wizard completed: device '{SelectedDevice.Name}' (0x{SelectedDevice.BluetoothAddress:X12}) added to configuration", "OnboardingViewModel");
         }
-        _config.Save();
+        else
+        {
+            _config.Save();
+        }
         IsCompleted = true;
         AppLogger.Info($"Wizard completed (Mode={Mode}) and configuration saved", "OnboardingViewModel");
         RequestClose?.Invoke();

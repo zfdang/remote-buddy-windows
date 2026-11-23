@@ -43,9 +43,11 @@ public partial class RemoteDevice : ObservableObject
     private RemoteModelType _modelType = RemoteModelType.Unknown;
 
     [ObservableProperty]
+    [property: JsonIgnore]
     private bool _isConnected;
 
     [ObservableProperty]
+    [property: JsonIgnore]
     private int _batteryLevel = -1;
 
     [ObservableProperty]
@@ -61,35 +63,60 @@ public partial class RemoteDevice : ObservableObject
     private G9N9NVoiceButtonMode _voiceButtonMode = G9N9NVoiceButtonMode.SmartToggle;
 
     [ObservableProperty]
+    [property: JsonIgnore]
     [NotifyPropertyChangedFor(nameof(HasHidInfo))]
     [NotifyPropertyChangedFor(nameof(HidSpecSummary))]
     private string? _hidDevicePath;
 
     [ObservableProperty]
+    [property: JsonIgnore]
     [NotifyPropertyChangedFor(nameof(HidSpecSummary))]
     private ushort _hidUsagePage;
 
     [ObservableProperty]
+    [property: JsonIgnore]
     [NotifyPropertyChangedFor(nameof(HidSpecSummary))]
     private ushort _hidUsage;
 
     [ObservableProperty]
+    [property: JsonIgnore]
     [NotifyPropertyChangedFor(nameof(HidSpecSummary))]
     private int _hidReportLength;
 
     [ObservableProperty]
+    [property: JsonIgnore]
     private string _hidCaptureStatus = "待匹配";
 
+    [JsonIgnore]
     public bool HasHidInfo => !string.IsNullOrEmpty(HidDevicePath);
 
+    [JsonIgnore]
     public string HidSpecSummary => HidUsagePage != 0
         ? $"Page 0x{HidUsagePage:X4} · Usage 0x{HidUsage:X4} · 报告 {HidReportLength} 字节"
         : "标准 Consumer Control (待检测)";
 
+    [JsonIgnore]
     public bool IsG9N9N => ModelType is RemoteModelType.GoogleG9N9N or RemoteModelType.GoogleGY3LE;
+    [JsonIgnore]
+    public bool IsG9N9NLayout => ModelType == RemoteModelType.GoogleG9N9N;
+    [JsonIgnore]
+    public bool IsGY3LELayout => ModelType == RemoteModelType.GoogleGY3LE;
+    [JsonIgnore]
     public bool IsT1 => ModelType == RemoteModelType.T1Remote;
+    [JsonIgnore]
     public bool IsXiaomi => !IsG9N9N && !IsT1;
 
+    public bool MatchesPhysicalDevice(RemoteDevice? other)
+    {
+        if (other == null) return false;
+        if (BluetoothAddress != 0 && other.BluetoothAddress != 0)
+        {
+            return BluetoothAddress == other.BluetoothAddress;
+        }
+        return !string.IsNullOrEmpty(Id) && string.Equals(Id, other.Id, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [JsonIgnore]
     public string FormattedAddress
     {
         get
@@ -100,6 +127,7 @@ public partial class RemoteDevice : ObservableObject
         }
     }
 
+    [JsonIgnore]
     public string ModelDisplayName => ModelType switch
     {
         RemoteModelType.GoogleG9N9N => "Chromecast Voice Remote (G9N9N)",
@@ -111,14 +139,17 @@ public partial class RemoteDevice : ObservableObject
         _ => "未知型号"
     };
 
+    [JsonIgnore]
     public string IllustrationSource => IsG9N9N
         ? "/Resources/ChromecastG9N9NPhoto.png"
         : (IsT1 ? "/Resources/T1RemoteIllustration.png" : "/Resources/BuddyRemoteIllustration.png");
 
+    [JsonIgnore]
     public string VoiceModeHelp => VoiceButtonMode == G9N9NVoiceButtonMode.SmartToggle
         ? "短按并松开后保持免提收音，再按一次停止；若长按超过 0.7 秒则松手即停。"
         : "按住 Google Assistant 语音键说话，松开后立即停止收音。";
 
+    [JsonIgnore]
     public bool IsSmartToggleMode
     {
         get => VoiceButtonMode == G9N9NVoiceButtonMode.SmartToggle;
@@ -133,6 +164,7 @@ public partial class RemoteDevice : ObservableObject
         }
     }
 
+    [JsonIgnore]
     public bool IsHoldToTalkMode
     {
         get => VoiceButtonMode == G9N9NVoiceButtonMode.HoldToTalk;
@@ -157,8 +189,11 @@ public partial class RemoteDevice : ObservableObject
     partial void OnModelTypeChanged(RemoteModelType value)
     {
         OnPropertyChanged(nameof(IsG9N9N));
+        OnPropertyChanged(nameof(IsG9N9NLayout));
+        OnPropertyChanged(nameof(IsGY3LELayout));
         OnPropertyChanged(nameof(IsT1));
         OnPropertyChanged(nameof(IsXiaomi));
+        OnPropertyChanged(nameof(IllustrationSource));
     }
 
     [ObservableProperty]
@@ -234,6 +269,10 @@ public partial class RemoteDevice : ObservableObject
                 shortcut: isG9N9N ? "Ctrl+W" : null);
             Add(RemoteButton.Input, isG9N9N ? ButtonActionType.MediaControl : ButtonActionType.None,
                 media: isG9N9N ? MediaCommand.PlayPause : MediaCommand.None);
+            if (type == RemoteModelType.GoogleGY3LE)
+            {
+                Add(RemoteButton.Custom, ButtonActionType.None);
+            }
         }
 
         return list;

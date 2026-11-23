@@ -35,6 +35,10 @@ public sealed class ImaAdpcmDecoder
         _stepIndex = Math.Clamp((int)syncStepIndex, 0, 88);
     }
 
+    /// <summary>
+    /// Resets ADPCM predictor and step index for a new utterance.
+    /// Preserves <see cref="LowNibbleFirst"/> because it is a per-device hardware format setting.
+    /// </summary>
     public void Reset(int predictor = 0, int stepIndex = 0)
     {
         _predictor = Math.Clamp(predictor, -32768, 32767);

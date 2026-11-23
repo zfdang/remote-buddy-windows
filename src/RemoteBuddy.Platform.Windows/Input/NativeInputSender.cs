@@ -142,7 +142,62 @@ public static class NativeInputSender
         inputs[3] = CreateKeyInput(modifierVk, true);
 
         uint sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+        if (sent > 0 && sent < inputs.Length)
+        {
+            ReleasePartialSendInputs(inputs, sent);
+        }
         return sent == inputs.Length;
+    }
+
+    internal static INPUT[] BuildUnclosedReleaseInputs(ReadOnlySpan<INPUT> inputs, uint sentCount)
+    {
+        int count = Math.Min((int)sentCount, inputs.Length);
+        if (count <= 0) return [];
+
+        var openKeys = new List<ushort>(count);
+        for (int i = 0; i < count; i++)
+        {
+            if (inputs[i].type != INPUT_KEYBOARD) continue;
+            ushort vk = inputs[i].u.ki.wVk;
+            if (vk == 0) continue;
+
+            bool isUp = (inputs[i].u.ki.dwFlags & KEYEVENTF_KEYUP) != 0;
+            if (!isUp)
+            {
+                openKeys.Add(vk);
+            }
+            else
+            {
+                for (int j = openKeys.Count - 1; j >= 0; j--)
+                {
+                    if (openKeys[j] == vk)
+                    {
+                        openKeys.RemoveAt(j);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (openKeys.Count == 0) return [];
+        var releases = new INPUT[openKeys.Count];
+        for (int i = 0; i < openKeys.Count; i++)
+        {
+            releases[i] = CreateKeyInput(openKeys[openKeys.Count - 1 - i], isKeyUp: true);
+        }
+        return releases;
+    }
+
+    private static void ReleasePartialSendInputs(ReadOnlySpan<INPUT> inputs, uint sentCount)
+    {
+        var releases = BuildUnclosedReleaseInputs(inputs, sentCount);
+        if (releases.Length == 0) return;
+
+        uint relSent = SendInput((uint)releases.Length, releases, Marshal.SizeOf<INPUT>());
+        for (int i = (int)relSent; i < releases.Length; i++)
+        {
+            TrackHeldKey(releases[i].u.ki.wVk);
+        }
     }
 
     public static bool TryParseShortcut(string shortcut, out List<ushort> modifiers, out ushort mainKey)
@@ -182,6 +237,17 @@ public static class NativeInputSender
                 else if (upper is "PAGEDOWN" or "PGDN") parsedKey = VK_NEXT;
                 else if (upper is "INSERT" or "INS") parsedKey = VK_INSERT;
                 else if (upper is "APPS" or "MENU") parsedKey = 0x5D;
+                else if (upper is "," or "OEMCOMMA" or "COMMA") parsedKey = 0xBC;
+                else if (upper is "." or "OEMPERIOD" or "PERIOD") parsedKey = 0xBE;
+                else if (upper is "/" or "OEMQUESTION" or "OEM2" or "SLASH" or "QUESTION") parsedKey = 0xBF;
+                else if (upper is "[" or "OEMOPENBRACKETS" or "OEM4" or "OPENBRACKETS") parsedKey = 0xDB;
+                else if (upper is "]" or "OEMCLOSEBRACKETS" or "OEM6" or "CLOSEBRACKETS") parsedKey = 0xDD;
+                else if (upper is ";" or "OEMSEMICOLON" or "OEM1" or "SEMICOLON") parsedKey = 0xBA;
+                else if (upper is "'" or "OEMQUOTES" or "OEM7" or "QUOTES" or "APOSTROPHE") parsedKey = 0xDE;
+                else if (upper is "-" or "OEMMINUS" or "MINUS") parsedKey = 0xBD;
+                else if (upper is "=" or "OEMPLUS" or "EQUALS" or "PLUS") parsedKey = 0xBB;
+                else if (upper is "\\" or "OEMPIPE" or "OEM5" or "PIPE" or "BACKSLASH") parsedKey = 0xDC;
+                else if (upper is "`" or "OEMTILDE" or "OEM3" or "TILDE" or "GRAVE") parsedKey = 0xC0;
                 else if (upper.StartsWith("F") && int.TryParse(upper[1..], out int fNum) && fNum >= 1 && fNum <= 12)
                 {
                     parsedKey = (ushort)(VK_F1 + (fNum - 1));
@@ -250,8 +316,13 @@ public static class NativeInputSender
         }
         for (int i = ownedModifiers.Count - 1; i >= 0; i--) inputs.Add(CreateKeyInput(ownedModifiers[i], true));
 
-        uint sent = SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<INPUT>());
-        return sent == inputs.Count;
+        var inputArray = inputs.ToArray();
+        uint sent = SendInput((uint)inputArray.Length, inputArray, Marshal.SizeOf<INPUT>());
+        if (sent > 0 && sent < inputArray.Length)
+        {
+            ReleasePartialSendInputs(inputArray, sent);
+        }
+        return sent == inputArray.Length;
     }
 
     public static bool SendShortcutString(string shortcut) => SendShortcutClick(shortcut);
@@ -307,8 +378,13 @@ public static class NativeInputSender
             });
         }
 
-        uint sent = SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<INPUT>());
-        return sent == inputs.Count;
+        var inputArray = inputs.ToArray();
+        uint sent = SendInput((uint)inputArray.Length, inputArray, Marshal.SizeOf<INPUT>());
+        if (sent > 0 && sent < inputArray.Length)
+        {
+            ReleasePartialSendInputs(inputArray, sent);
+        }
+        return sent == inputArray.Length;
     }
 
     public static INPUT CreateKeyInput(ushort vk, bool isKeyUp)

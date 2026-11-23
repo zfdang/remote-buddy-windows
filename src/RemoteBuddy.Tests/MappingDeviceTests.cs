@@ -1,7 +1,9 @@
 // Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
+using System.Collections.Specialized;
 using RemoteBuddy.App.ViewModels;
+using RemoteBuddy.Core.Bluetooth;
 using RemoteBuddy.Core.Config;
 using RemoteBuddy.Core.Models;
 using Xunit;
@@ -299,5 +301,269 @@ public class MappingDeviceTests
         Assert.Equal(RemoteDevice.DefaultMicrophoneGain, dev.Gain);
         double db = Math.Round(20.0 * Math.Log10(dev.Gain));
         Assert.Equal(10.0, db);
+    }
+
+    private sealed class MinimalBluetoothManager : IBluetoothManager
+    {
+        public bool IsScanning => false;
+        public bool IsConnected => false;
+        public bool IsReady => false;
+        public bool IsStreaming => false;
+        public float CurrentGain { get; set; } = RemoteDevice.DefaultMicrophoneGain;
+        public BluetoothSessionState SessionState => BluetoothSessionState.Idle;
+        public string ConnectedDeviceName => string.Empty;
+        public ulong ConnectedDeviceAddress => 0;
+        public Guid? ConnectedDeviceContainerId => null;
+        public RemoteDeviceInformation? ConnectedDeviceInformation => null;
+        public G9N9NVoiceButtonMode VoiceButtonMode { get; set; } = G9N9NVoiceButtonMode.SmartToggle;
+
+        public event Action<RemoteDevice>? DeviceDiscovered { add { } remove { } }
+        public event Action<ulong, bool, string>? ConnectionStatusChanged { add { } remove { } }
+        public event Action<ulong>? ConnectedDeviceInformationChanged { add { } remove { } }
+        public event Action<ulong, float>? AudioLevelChanged { add { } remove { } }
+        public event Action<ulong>? VoiceButtonPressed { add { } remove { } }
+        public event Action<ulong>? VoiceSessionStarted { add { } remove { } }
+        public event Action<ulong>? VoiceSessionEnded { add { } remove { } }
+
+        public void StartScanning() { }
+        public void StopScanning() { }
+        public Task DiscoverPairedRemotesAsync() => Task.CompletedTask;
+        public void StartScan() { }
+        public void StopScan() { }
+        public Task<bool> ConnectAsync(ulong bluetoothAddress) => Task.FromResult(false);
+        public void Disconnect() { }
+        public Task<bool> StartVoiceSessionAsync() => Task.FromResult(false);
+        public Task<bool> StopVoiceSessionAsync() => Task.FromResult(false);
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public void CrossDeviceLostFocus_MutatingStaleDeviceAItemAfterSwitchingToB_UpdatesOnlyDeviceA()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"vib-cross-lostfocus-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var devA = new RemoteDevice { Id = "devA", Name = "Remote A", ModelType = RemoteModelType.XiaomiRC003 };
+            var devB = new RemoteDevice { Id = "devB", Name = "Remote B", ModelType = RemoteModelType.GoogleG9N9N };
+            config.Current.Devices.AddRange([devA, devB]);
+            config.Current.SelectedDeviceId = devA.Id;
+
+            var vm = new MappingViewModel(config);
+            var staleDevAUp = vm.CurrentMappings.Single(m => m.Button == RemoteButton.Up);
+            string origDevBUp = devB.Mappings.Single(m => m.Button == RemoteButton.Up).ClickShortcut!;
+
+            // Simulate ComboBox switching SelectedDevice to devB BEFORE TextBox.LostFocus fires on devA's item
+            vm.SelectedDevice = devB;
+            staleDevAUp.SingleClick.Action = ButtonActionType.KeyboardShortcut;
+            staleDevAUp.SingleClick.Shortcut = "F6";
+
+            Assert.Equal("F6", devA.Mappings.Single(m => m.Button == RemoteButton.Up).ClickShortcut);
+            Assert.Equal(origDevBUp, devB.Mappings.Single(m => m.Button == RemoteButton.Up).ClickShortcut);
+
+            var reloaded = new ConfigService(path).Current;
+            Assert.Equal("F6", reloaded.Devices.Single(d => d.Id == "devA").Mappings.Single(m => m.Button == RemoteButton.Up).ClickShortcut);
+            Assert.Equal(origDevBUp, reloaded.Devices.Single(d => d.Id == "devB").Mappings.Single(m => m.Button == RemoteButton.Up).ClickShortcut);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void DeletedDevice_SyncWithDevicesDropsStaleDraftAndPreventsWriteBack()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"vib-del-sync-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var devA = new RemoteDevice { Id = "devA", Name = "Remote A", BluetoothAddress = 0x1111, ModelType = RemoteModelType.XiaomiRC003 };
+            config.Current.Devices.Add(devA);
+            config.Current.SelectedDeviceId = devA.Id;
+            config.Save();
+
+            using var devicesVm = new DevicesViewModel(config, new MinimalBluetoothManager());
+            var mappingVm = new MappingViewModel(config);
+            var staleItem = mappingVm.CurrentMappings.Single(m => m.Button == RemoteButton.Home);
+
+            devicesVm.RemoveDevice(devA);
+            mappingVm.SyncWithDevices();
+
+            Assert.Empty(mappingVm.Devices);
+            Assert.False(mappingVm.HasDevices);
+            Assert.Null(mappingVm.SelectedDevice);
+            Assert.Empty(mappingVm.CurrentMappings);
+
+            // Late mutation on orphaned viewmodel item must not re-add or persist devA
+            staleItem.SingleClick.Shortcut = "F9";
+            Assert.Empty(new ConfigService(path).Current.Devices);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void InvalidShortcut_SetsValidationErrorWithoutPersisting_AndValidShortcutClearsError()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"vib-val-shortcut-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var dev = new RemoteDevice { Id = "g9", Name = "G9N9N", ModelType = RemoteModelType.GoogleG9N9N };
+            config.Current.Devices.Add(dev);
+            config.Current.SelectedDeviceId = dev.Id;
+
+            var vm = new MappingViewModel(config);
+            vm.SelectButton("Home");
+            var gesture = vm.SelectedMapping!.SingleClick;
+            Assert.Equal("Win+Tab", gesture.Shortcut);
+
+            gesture.Shortcut = "NotAValidKey!!!";
+            Assert.True(gesture.HasShortcutError);
+            Assert.False(string.IsNullOrEmpty(gesture.ShortcutValidationError));
+            Assert.Equal("Win+Tab", dev.Mappings.Single(m => m.Button == RemoteButton.Home).ClickShortcut);
+
+            gesture.Shortcut = "Ctrl+,";
+            Assert.False(gesture.HasShortcutError);
+            Assert.Equal(string.Empty, gesture.ShortcutValidationError);
+            Assert.Equal("Ctrl+,", dev.Mappings.Single(m => m.Button == RemoteButton.Home).ClickShortcut);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void ContinuousRepeatWithoutSingleClick_SetsWarning_WhileStayingConfigured()
+    {
+        var mapping = new ButtonMapping { Button = RemoteButton.Up };
+        var item = new MappingItemViewModel(mapping);
+
+        Assert.False(item.LongPress.ShowRepeatNeedsClickWarning);
+        item.LongPress.Action = ButtonActionType.ContinuousRepeat;
+
+        Assert.True(item.LongPress.ShowRepeatNeedsClickWarning);
+        Assert.True(item.LongPress.IsConfigured);
+        Assert.Equal("持续连发", item.LongPressSummary);
+
+        item.SingleClick.Action = ButtonActionType.KeyboardShortcut;
+        item.SingleClick.Shortcut = "Up";
+        Assert.False(item.LongPress.ShowRepeatNeedsClickWarning);
+    }
+
+    [Fact]
+    public void EmptyConfig_SetsHasDevicesFalseAndIsXiaomiFalse()
+    {
+        var config = new ConfigService(Path.Combine(Path.GetTempPath(), $"vib-empty-{Guid.NewGuid():N}.json"));
+        var vm = new MappingViewModel(config);
+
+        Assert.False(vm.HasDevices);
+        Assert.Null(vm.SelectedDevice);
+        Assert.False(vm.IsXiaomi);
+        Assert.False(vm.IsG9N9N);
+        Assert.False(vm.IsT1);
+    }
+
+    [Fact]
+    public void Gy3leLayoutFlags_AndCustomButton_ConfiguredDistinctlyFromG9N9N()
+    {
+        var config = new ConfigService(Path.Combine(Path.GetTempPath(), $"vib-gy3le-{Guid.NewGuid():N}.json"));
+        var gy3le = new RemoteDevice { Id = "gy", Name = "Google TV Streamer", ModelType = RemoteModelType.GoogleGY3LE };
+        config.Current.Devices.Add(gy3le);
+        config.Current.SelectedDeviceId = gy3le.Id;
+
+        Assert.True(gy3le.IsG9N9N);
+        Assert.True(gy3le.IsGY3LELayout);
+        Assert.False(gy3le.IsG9N9NLayout);
+
+        var vm = new MappingViewModel(config);
+        Assert.True(vm.IsG9N9N);
+        Assert.True(vm.IsGY3LELayout);
+        Assert.False(vm.IsG9N9NLayout);
+
+        var custom = Assert.Single(vm.CurrentMappings, m => m.Button == RemoteButton.Custom);
+        Assert.Equal("自定义键 (★)", custom.ButtonName);
+    }
+
+    [Fact]
+    public void SyncDevicesCollection_DoesNotDuplicateWhenComboBoxClearsSelectionOnCollectionChange()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"vib-reentrant-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var g9 = new RemoteDevice { Id = "4754514C6FCC", Name = "Chromecast Remote", BluetoothAddress = 0x4754514C6FCC, ModelType = RemoteModelType.GoogleG9N9N };
+            var mi = new RemoteDevice { Id = "C05D39F86E0C", Name = "MI RC", BluetoothAddress = 0xC05D39F86E0C, ModelType = RemoteModelType.XiaomiRC003 };
+            config.UpsertDevice(g9);
+            config.UpsertDevice(mi);
+
+            using var devicesVm = new DevicesViewModel(config, new MinimalBluetoothManager());
+            var mappingVm = new MappingViewModel(config);
+
+            // Simulate WPF ComboBox synchronously clearing SelectedItem while Devices changes
+            ((INotifyCollectionChanged)mappingVm.Devices).CollectionChanged += (_, args) =>
+            {
+                if (args.Action is NotifyCollectionChangedAction.Reset or NotifyCollectionChangedAction.Remove)
+                {
+                    mappingVm.SelectedDevice = null;
+                }
+            };
+
+            mappingVm.LoadMappings();
+            mappingVm.SyncWithDevices();
+            Assert.Equal(2, mappingVm.Devices.Count);
+
+            // Delete one remote, re-add with a different Id for the same physical address, and re-sync multiple times
+            devicesVm.RemoveDevice(g9);
+            mappingVm.SyncWithDevices();
+            Assert.Single(mappingVm.Devices);
+
+            config.UpsertDevice(new RemoteDevice
+            {
+                Id = "bt_4754514C6FCC",
+                Name = "Chromecast Remote",
+                BluetoothAddress = 0x4754514C6FCC,
+                ModelType = RemoteModelType.GoogleG9N9N
+            });
+            mappingVm.SyncWithDevices();
+            mappingVm.LoadMappings();
+
+            Assert.Equal(2, mappingVm.Devices.Count);
+            Assert.Equal(2, mappingVm.Devices.Select(d => d.BluetoothAddress).Distinct().Count());
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void SyncWithDevices_DeduplicatesByPhysicalBluetoothAddress()
+    {
+        var config = new ConfigService(Path.Combine(Path.GetTempPath(), $"vib-dedup-map-{Guid.NewGuid():N}.json"));
+        config.Current.Devices.Add(new RemoteDevice
+        {
+            Id = "id-one",
+            Name = "Chromecast A",
+            BluetoothAddress = 0x4754514C6FCC,
+            ModelType = RemoteModelType.GoogleG9N9N
+        });
+        config.Current.Devices.Add(new RemoteDevice
+        {
+            Id = "id-two",
+            Name = "Chromecast B",
+            BluetoothAddress = 0x4754514C6FCC,
+            ModelType = RemoteModelType.GoogleG9N9N
+        });
+
+        var vm = new MappingViewModel(config);
+        vm.SyncWithDevices();
+
+        Assert.Single(vm.Devices);
+        Assert.Equal(0x4754514C6FCCUL, vm.Devices[0].BluetoothAddress);
     }
 }

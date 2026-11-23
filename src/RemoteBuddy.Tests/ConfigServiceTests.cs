@@ -104,4 +104,168 @@ public class ConfigServiceTests : IDisposable
         Assert.Single(corruptFiles);
         Assert.Equal("THIS IS INVALID NOT JSON", File.ReadAllText(corruptFiles[0]));
     }
+
+    [Fact]
+    public void Save_OmitsRuntimeAndComputedPropertiesFromJson()
+    {
+        string path = Path.Combine(_tempDir, "config.json");
+        var service = new ConfigService(path);
+        var device = new RemoteDevice
+        {
+            Id = "DEV_SANITIZED",
+            Name = "Chromecast",
+            BluetoothAddress = 0x112233445566,
+            ModelType = RemoteModelType.GoogleG9N9N,
+            IsConnected = true,
+            BatteryLevel = 92,
+            HidDevicePath = @"\\?\hid#test",
+            HidUsagePage = 0x0C,
+            HidUsage = 0x01,
+            HidReportLength = 3,
+            HidCaptureStatus = "Ready",
+            HardwareInformation = new RemoteDeviceInformation(0x112233445566, null, "Chromecast", "G9N9N", null)
+        };
+        service.Current.Devices.Add(device);
+        service.Save();
+
+        string json = File.ReadAllText(path);
+        foreach (string forbidden in new[]
+        {
+            "IsConnected", "BatteryLevel", "HardwareInformation",
+            "HidDevicePath", "HidUsagePage", "HidUsage", "HidReportLength", "HidCaptureStatus",
+            "HasHidInfo", "HidSpecSummary", "IsG9N9N", "IsT1", "IsXiaomi",
+            "FormattedAddress", "ModelDisplayName", "IllustrationSource",
+            "VoiceModeHelp", "IsSmartToggleMode", "IsHoldToTalkMode"
+        })
+        {
+            Assert.DoesNotContain($"\"{forbidden}\"", json);
+        }
+
+        foreach (string expected in new[]
+        {
+            "\"Id\"", "\"BluetoothAddress\"", "\"Name\"", "\"ModelType\"", "\"Gain\"", "\"VoiceButtonMode\"", "\"Mappings\""
+        })
+        {
+            Assert.Contains(expected, json);
+        }
+    }
+
+    [Fact]
+    public async Task Save_WithConcurrentUpdates_DoesNotThrowCollectionModified()
+    {
+        string path = Path.Combine(_tempDir, "config.json");
+        var service = new ConfigService(path);
+
+        var writer = Task.Run(() =>
+        {
+            for (int i = 0; i < 60; i++)
+            {
+                int idx = i;
+                service.Update(cfg =>
+                {
+                    if (cfg.Devices.Count > 5) cfg.Devices.RemoveAt(0);
+                    cfg.Devices.Add(new RemoteDevice
+                    {
+                        Id = $"dev_{idx}",
+                        Name = $"Remote {idx}",
+                        BluetoothAddress = (ulong)(0x1000 + idx),
+                        ModelType = RemoteModelType.GoogleG9N9N,
+                        Mappings = RemoteDevice.CreateDefaultMappings(RemoteModelType.GoogleG9N9N)
+                    });
+                    cfg.SelectedDeviceId = $"dev_{idx}";
+                }, save: false);
+            }
+        });
+
+        var saver = Task.Run(() =>
+        {
+            for (int i = 0; i < 60; i++)
+            {
+                service.Save();
+            }
+        });
+
+        await Task.WhenAll(writer, saver);
+        service.Save();
+
+        var reloaded = new ConfigService(path);
+        Assert.NotNull(reloaded.Current);
+        Assert.NotEmpty(reloaded.Current.Devices);
+    }
+
+    [Fact]
+    public void UpsertDevice_DeduplicatesByPhysicalBluetoothAddress_AndPreservesMappings()
+    {
+        string path = Path.Combine(_tempDir, "config.json");
+        var service = new ConfigService(path);
+
+        var customMappings = RemoteDevice.CreateDefaultMappings(RemoteModelType.GoogleG9N9N);
+        customMappings.Single(m => m.Button == RemoteButton.Home).ClickShortcut = "Ctrl+Alt+H";
+
+        var first = new RemoteDevice
+        {
+            Id = "4754514C6FCC",
+            Name = "Chromecast",
+            BluetoothAddress = 0x4754514C6FCC,
+            ModelType = RemoteModelType.GoogleG9N9N,
+            Mappings = customMappings
+        };
+        service.UpsertDevice(first);
+
+        var duplicateIdEntry = new RemoteDevice
+        {
+            Id = "bt_4754514C6FCC",
+            Name = "Chromecast Remote",
+            BluetoothAddress = 0x4754514C6FCC,
+            ModelType = RemoteModelType.GoogleG9N9N,
+            Mappings = []
+        };
+        var canonical = service.UpsertDevice(duplicateIdEntry);
+
+        Assert.Single(service.Current.Devices);
+        Assert.Equal("4754514C6FCC", canonical.Id);
+        Assert.Equal("Chromecast Remote", canonical.Name);
+        Assert.Equal("Ctrl+Alt+H", canonical.Mappings.Single(m => m.Button == RemoteButton.Home).ClickShortcut);
+
+        var reloaded = new ConfigService(path);
+        Assert.Single(reloaded.Current.Devices);
+        Assert.Equal("Ctrl+Alt+H", reloaded.Current.Devices[0].Mappings.Single(m => m.Button == RemoteButton.Home).ClickShortcut);
+    }
+
+    [Fact]
+    public void Load_DeduplicatesExistingDuplicatePhysicalAddressesInConfigJson()
+    {
+        string path = Path.Combine(_tempDir, "config.json");
+        File.WriteAllText(path, """
+        {
+          "Version": 1,
+          "SelectedDeviceId": "bt_4754514C6FCC",
+          "Devices": [
+            {
+              "Id": "4754514C6FCC",
+              "BluetoothAddress": 78427466788812,
+              "Name": "Chromecast Remote",
+              "ModelType": "GoogleG9N9N"
+            },
+            {
+              "Id": "bt_4754514C6FCC",
+              "BluetoothAddress": 78427466788812,
+              "Name": "Chromecast Remote",
+              "ModelType": "GoogleG9N9N"
+            },
+            {
+              "Id": "C05D39F86E0C",
+              "BluetoothAddress": 211506637073932,
+              "Name": "MI RC",
+              "ModelType": "XiaomiRC003"
+            }
+          ]
+        }
+        """);
+
+        var service = new ConfigService(path);
+        Assert.Equal(2, service.Current.Devices.Count);
+        Assert.Contains(service.Current.Devices, d => d.Id == "bt_4754514C6FCC");
+        Assert.Contains(service.Current.Devices, d => d.Id == "C05D39F86E0C");
+    }
 }

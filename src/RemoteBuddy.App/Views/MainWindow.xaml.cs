@@ -55,6 +55,7 @@ public partial class MainWindow : Window
     private const int WM_TRAYICON = WM_USER + 101;
     private const int WM_INPUT = 0x00FF;
     private const int WM_INPUT_DEVICE_CHANGE = 0x00FE;
+    private const int GIDC_ARRIVAL = 1;
     private const int GIDC_REMOVAL = 2;
     private const int WM_LBUTTONUP = 0x0202;
     private const int WM_LBUTTONDBLCLK = 0x0203;
@@ -64,6 +65,7 @@ public partial class MainWindow : Window
     private System.Drawing.Icon? _trayIcon;
     private bool _trayIconCreated = false;
     private uint _wmTaskbarCreated = 0;
+    private HwndSource? _hwndSource;
     public bool IsExplicitExit { get; set; } = false;
 
     private GeneralPage? _generalPage;
@@ -81,12 +83,20 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         Loaded += OnLoaded;
+        Activated += OnWindowActivatedChanged;
+        Deactivated += OnWindowActivatedChanged;
+        IsVisibleChanged += OnWindowVisibilityChanged;
         Closing += OnWindowClosing;
         Closed += OnWindowClosed;
         if (Application.Current != null)
         {
-            Application.Current.SessionEnding += (_, _) => { _isSystemShutdown = true; };
+            Application.Current.SessionEnding += OnSessionEnding;
         }
+    }
+
+    private void OnSessionEnding(object sender, SessionEndingCancelEventArgs e)
+    {
+        _isSystemShutdown = true;
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -98,7 +108,8 @@ public partial class MainWindow : Window
             vm.RegisterRawInput(hwnd);
         }
         _wmTaskbarCreated = RegisterWindowMessage("TaskbarCreated");
-        HwndSource.FromHwnd(hwnd)?.AddHook(WndProc);
+        _hwndSource = HwndSource.FromHwnd(hwnd);
+        _hwndSource?.AddHook(WndProc);
         InitializeTrayIcon(hwnd);
     }
 
@@ -166,7 +177,12 @@ public partial class MainWindow : Window
         }
         else if (msg == WM_INPUT_DEVICE_CHANGE && DataContext is MainViewModel vmDevice)
         {
-            if (wParam.ToInt32() == GIDC_REMOVAL)
+            int change = wParam.ToInt32();
+            if (change == GIDC_ARRIVAL)
+            {
+                vmDevice.HandleDeviceArrival(lParam);
+            }
+            else if (change == GIDC_REMOVAL)
             {
                 vmDevice.HandleDeviceRemoval(lParam);
             }
@@ -246,8 +262,20 @@ public partial class MainWindow : Window
 
     private void OnWindowClosed(object? sender, EventArgs e)
     {
+        Activated -= OnWindowActivatedChanged;
+        Deactivated -= OnWindowActivatedChanged;
+        IsVisibleChanged -= OnWindowVisibilityChanged;
+        _hwndSource?.RemoveHook(WndProc);
+        _hwndSource = null;
+
+        if (Application.Current != null)
+        {
+            Application.Current.SessionEnding -= OnSessionEnding;
+        }
+
         if (DataContext is MainViewModel vm)
         {
+            vm.IsMainWindowActive = false;
             vm.PropertyChanged -= OnViewModelPropertyChanged;
         }
 
@@ -275,6 +303,25 @@ public partial class MainWindow : Window
 
             vm.PropertyChanged += OnViewModelPropertyChanged;
             SwitchPage(vm.ActivePageName);
+            UpdateWindowActiveState();
+        }
+    }
+
+    private void OnWindowActivatedChanged(object? sender, EventArgs e)
+    {
+        UpdateWindowActiveState();
+    }
+
+    private void OnWindowVisibilityChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        UpdateWindowActiveState();
+    }
+
+    private void UpdateWindowActiveState()
+    {
+        if (DataContext is MainViewModel vm)
+        {
+            vm.IsMainWindowActive = IsVisible && IsActive;
         }
     }
 

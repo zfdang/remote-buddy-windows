@@ -130,4 +130,22 @@ public class RemoteVoiceKeyGuardTests
             Marshal.FreeHGlobal(packet);
         }
     }
+
+    [Fact]
+    public void OwnedF5_ExpiresAfterAbsoluteCeilingEvenIfSessionAppearsActive()
+    {
+        using var guard = new RemoteVoiceKeyGuard(() => true) { IsSuppressionEnabled = false };
+        guard.BeginShortcutHold("Ctrl+F5");
+        typeof(RemoteVoiceKeyGuard).GetField("_holdStartedAt", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(guard, Environment.TickCount64 - 315_000);
+        var callback = typeof(RemoteVoiceKeyGuard).GetMethod("OnKeyboard", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        IntPtr packet = Marshal.AllocHGlobal(24);
+        try
+        {
+            for (int i = 0; i < 24; i++) Marshal.WriteByte(packet, i, 0);
+            Marshal.WriteInt32(packet, 0, 0x74);
+            Assert.NotEqual((IntPtr)1, (IntPtr)callback.Invoke(guard, [0, (IntPtr)0x100, packet])!);
+        }
+        finally { Marshal.FreeHGlobal(packet); }
+    }
 }
