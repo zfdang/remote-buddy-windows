@@ -632,12 +632,14 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                     return new EtwAttributeFilter(0, 0, fallbackExcluded);
                 }
 
+                bool hasHidService = servicesResult.Services.Any(svc => svc.Uuid == HidServiceUuid);
                 var services = new List<(Guid ServiceUuid, ushort StartHandle)>(servicesResult.Services.Count);
                 var nonHidHandles = new List<ushort>();
                 foreach (var svc in servicesResult.Services)
                 {
                     services.Add((svc.Uuid, svc.AttributeHandle));
-                    if (ReferenceEquals(svc, activeAtvvService) || svc.Uuid == ATVVProtocol.ServiceUuid || svc.Uuid == HidServiceUuid)
+                    // Only scan extra services when HID 0x1812 is absent; otherwise HID bounds + ATVV exclusions suffice.
+                    if (hasHidService || ReferenceEquals(svc, activeAtvvService) || svc.Uuid == ATVVProtocol.ServiceUuid || svc.Uuid == HidServiceUuid)
                     {
                         continue;
                     }
@@ -794,16 +796,17 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
     private async Task LoadChromecastHardwareDetailsAsync(BluetoothLEDevice device, int generation, RemoteDeviceInformation information)
     {
         var updated = await ReadDeviceInformationAsync(device, information, includeHardwareDetails: true).ConfigureAwait(false);
+        lock (_stateLock)
+        {
+            if (generation != _connectionGeneration) return;
+            if (updated != information) ConnectedDeviceInformation = updated;
+        }
+
         AppLogger.Info(
             $"G9N9N hardware details for 0x{device.BluetoothAddress:X12}: model='{updated.ModelNumber ?? "-"}', firmware='{updated.FirmwareRevision ?? "-"}', hardwareRev='{updated.HardwareRevision ?? "-"}', pnp='{updated.VendorProductId ?? "-"}', hidVersion='{updated.HidVersionText ?? "-"}'",
             "BluetoothManager");
         if (updated == information) return;
 
-        lock (_stateLock)
-        {
-            if (generation != _connectionGeneration) return;
-            ConnectedDeviceInformation = updated;
-        }
         ConnectedDeviceInformationChanged?.Invoke(device.BluetoothAddress);
     }
 

@@ -305,14 +305,28 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (_hidReaders.Remove(address, out var reader)) reader.Dispose();
         }
 
+        var existingByAddress = _etwSources
+            .GroupBy(source => source.Address)
+            .ToDictionary(group => group.Key, group => group.First());
         var wanted = devices.Select(device =>
         {
             var protocol = device.IsG9N9N || G9N9NProtocol.IsCandidate(device.Name)
                 ? EtwProtocolKind.GoogleG9N9N
                 : device.IsT1 ? EtwProtocolKind.T1Remote : EtwProtocolKind.Xiaomi;
-            var filter = protocol == EtwProtocolKind.GoogleG9N9N
-                ? _bluetoothManager.GetEtwAttributeFilter(device.BluetoothAddress)
-                : default;
+            EtwAttributeFilter filter = default;
+            if (protocol == EtwProtocolKind.GoogleG9N9N)
+            {
+                if (_bluetoothManager.IsDeviceReady(device.BluetoothAddress))
+                {
+                    filter = _bluetoothManager.GetEtwAttributeFilter(device.BluetoothAddress);
+                }
+                else if (existingByAddress.TryGetValue(device.BluetoothAddress, out var prior) &&
+                         prior.Protocol == protocol)
+                {
+                    // Preserve the cached G9N9N filter while asleep so sibling remotes do not restart ETW.
+                    filter = new EtwAttributeFilter(prior.HidHandleStart, prior.HidHandleEnd, prior.ExcludedAttributes);
+                }
+            }
             return new EtwButtonSource(
                 device.BluetoothAddress,
                 Guid.NewGuid(),
@@ -405,7 +419,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private static bool EtwSourcesMatch(EtwButtonSource[] existing, EtwButtonSource[] wanted)
+    internal EtwButtonSource[] EtwSourcesForTest => _etwSources;
+
+    internal static bool EtwSourcesMatch(EtwButtonSource[] existing, EtwButtonSource[] wanted)
     {
         if (existing.Length != wanted.Length) return false;
         for (int i = 0; i < existing.Length; i++)

@@ -86,8 +86,8 @@
    - 连接 G9N9N 后，向系统缓存读取一次完整的 GATT 服务列表，定位 HID Service（`0x1812`）的起止句柄范围 `[HidHandleStart, HidHandleEnd]`。
    - 若成功找到 `0x1812`，只允许该区间内的 ATT 通知进入按键解码；Battery（`0x180F`）、Device Information（`0x180A`）等服务句柄天然落在区间外，无法冒充按键。
    - 若未能获取 `0x1812` 区间，则只放行已实测确认的两个 HID 句柄 `0x0029` 与 `0x0046`。
-2. **显式排除非 HID 特征句柄（尤其是 ATVV 通道）**
-   - `ATVV TX / Audio / Control` 的真实 `AttributeHandle` 以及扫描到的非 HID 特征句柄会被加入 `ExcludedAttributes`，并同步序列化传给提权 ETW 子进程。
+2. **显式排除 ATVV 与非 HID 特征句柄**
+   - `ATVV TX / Audio / Control` 的声明句柄与值句柄（`h` 及 `h + 1`，覆盖诸如音频 `0x003C` 与控制 `0x003F`），以及整个 ATVV 服务区间（`AB5E0001`，在缺少 `0x1812` 时还会补充扫描其余非 HID 特征句柄），均会被加入 `ExcludedAttributes` 并同步序列化传给提权 ETW 子进程；同时在布局发现期间保留活跃 ATVV 服务对象不释放，避免影响语音事件订阅。
    - 任何来自排除句柄的报文在 ETW 入口即被静默丢弃（例如 `START_SEARCH 0x08` 永远不会撞码静音键 `0x08`）。
 3. **`0x0029` 首次有效按键自动锁定（零回归锁死机制）**
    - 当已连接设备在经典句柄 `0x0029` 上成功解析到任意一次有效按键按下（`isDown == true`）后，该次连接立即锁定 `LockedG9N9NHandle = 0x0029`，同连接内后续来自其他句柄的报文一律忽略；蓝牙断开或重连后自动清除锁定。
@@ -136,7 +136,7 @@
    ```text
    G9N9N ETW unrecognized notification [UnknownPayload]: addr=0x..., attr=0x0048, opcode=0x1B, len=4, hex=02420000 (hidRange=0x0025..0x0050)
    ```
-   * `[UnknownPayload]`：在 HID 句柄范围内收到了暂未识别的载荷长度或键值，`hex=` 即为遥控器发出的原始十六进制字节。
+   * `[UnknownPayload]`：在 HID 句柄范围内收到了暂未识别的载荷长度或键值，`hex=` 即为遥控器发出的原始十六进制字节。超过 **16 字节** 的载荷会出于音频隐私保护记录为 `hex=<omitted>`，绝不会将音频波形写入日志。
    * `[OutsideHidRange]`：非排除句柄但在已计算 HID 区间之外收到了通知（例如某些改写了服务排布的兼容固件）。
    * `[UnlistedAttribute]`：系统未能返回 HID 范围时，回退名单（`0x0029`/`0x0046`）之外收到的通知。
    * **防刷屏机制**：相同 `(reason, attr, len, hex)` 每次连接只记录 1 次，且每条蓝牙连接最多记录 **32 条** 未识别条目，超过后记录封顶提示并停止追加。
