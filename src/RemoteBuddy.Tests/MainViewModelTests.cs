@@ -736,4 +736,80 @@ public class MainViewModelTests
         manager.SetDeviceVoiceSettings(new RemoteDevice { Id = "X", BluetoothAddress = 0x112233445566 });
         Assert.Empty(manager.ConnectedDeviceAddresses);
     }
+
+    [Fact]
+    public void TryRunChromecastWorker_ParsesBothParentPidAndLegacyFormats()
+    {
+        var sources = new[]
+        {
+            new RemoteBuddy.Platform.Windows.Input.EtwButtonSource(0x112233445566, Guid.NewGuid(), RemoteBuddy.Platform.Windows.Input.EtwProtocolKind.GoogleG9N9N)
+        };
+        string encoded = Convert.ToBase64String(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(sources));
+
+        string? capturedPipe = null;
+        int capturedPid = -1;
+        RemoteBuddy.Platform.Windows.Input.EtwButtonSource[]? capturedSources = null;
+
+        bool handled4Arg = RemoteBuddy.App.App.TryRunChromecastWorker(
+            ["--chromecast-worker", "pipeA", "12345", encoded],
+            (pipe, pid, s) => { capturedPipe = pipe; capturedPid = pid; capturedSources = s; });
+        Assert.True(handled4Arg);
+        Assert.Equal("pipeA", capturedPipe);
+        Assert.Equal(12345, capturedPid);
+        Assert.Single(capturedSources!);
+
+        bool handled3Arg = RemoteBuddy.App.App.TryRunChromecastWorker(
+            ["--chromecast-worker", "pipeB", encoded],
+            (pipe, pid, s) => { capturedPipe = pipe; capturedPid = pid; capturedSources = s; });
+        Assert.True(handled3Arg);
+        Assert.Equal("pipeB", capturedPipe);
+        Assert.Equal(0, capturedPid);
+        Assert.Single(capturedSources!);
+    }
+
+    [Fact]
+    public void EtwUnexpectedDisconnect_ResetsHeldGestures()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"etw-disc-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new TestBluetoothManager { IsConnected = true, IsReady = true };
+            const ulong addr = 0x4754514C6FCC;
+            bt.ReadyAddresses.Add(addr);
+            var executed = new List<RemoteButton>();
+            var g9n9n = new RemoteDevice
+            {
+                Id = "g9",
+                BluetoothAddress = addr,
+                Name = "Chromecast Remote",
+                ModelType = RemoteModelType.GoogleG9N9N,
+                Mappings =
+                [
+                    new ButtonMapping
+                    {
+                        Button = RemoteButton.Home,
+                        ClickAction = ButtonActionType.TextSnippet,
+                        ClickText = "home",
+                        LongPressAction = ButtonActionType.TextSnippet,
+                        LongPressText = "home-long"
+                    }
+                ]
+            };
+            config.Current.Devices.Add(g9n9n);
+            config.Current.SelectedDeviceId = g9n9n.Id;
+
+            using var vm = new MainViewModel(config, bt, _ => executed.Add(RemoteButton.Home));
+            vm.HandleDeviceButton(addr, RemoteButton.Home, true);
+            vm.TriggerEtwUnexpectedDisconnectForTest();
+            vm.HandleDeviceButton(addr, RemoteButton.Home, false);
+
+            // Releasing after UnexpectedDisconnect must NOT fire Click because active gestures were reset
+            Assert.Empty(executed);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
 }

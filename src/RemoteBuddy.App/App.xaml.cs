@@ -24,19 +24,8 @@ public partial class App : Application
         AppLogger.Info($"=== Application Starting (PID: {Environment.ProcessId}) ===", "App");
         AppLogger.Info($"OS: {Environment.OSVersion}, .NET Runtime: {Environment.Version}, Args: [{string.Join(", ", e.Args)}]", "App");
 
-        if (e.Args is ["--chromecast-worker", var pipeName, var encodedSources])
+        if (TryRunChromecastWorker(e.Args))
         {
-            try
-            {
-                var sources = System.Text.Json.JsonSerializer.Deserialize<EtwButtonSource[]>(
-                    Convert.FromBase64String(encodedSources));
-                if (sources is { Length: > 0 })
-                    ChromecastWorkerHost.RunWorker(pipeName, sources);
-            }
-            catch (Exception ex) when (ex is FormatException or System.Text.Json.JsonException)
-            {
-                AppLogger.Warn("Invalid ETW worker arguments", "App");
-            }
             Shutdown();
             return;
         }
@@ -174,5 +163,41 @@ public partial class App : Application
         _instanceMutex?.ReleaseMutex();
         _instanceMutex?.Dispose();
         base.OnExit(e);
+    }
+
+    internal static bool TryRunChromecastWorker(string[] args, Action<string, int, EtwButtonSource[]>? workerRunner = null)
+    {
+        if (args.Length < 3 || args[0] != "--chromecast-worker") return false;
+
+        string pipeName = args[1];
+        int parentPid = 0;
+        string encodedSources;
+        if (args.Length >= 4 && int.TryParse(args[2], out int parsedPid))
+        {
+            parentPid = parsedPid;
+            encodedSources = args[3];
+        }
+        else
+        {
+            encodedSources = args[2];
+        }
+
+        try
+        {
+            var sources = System.Text.Json.JsonSerializer.Deserialize<EtwButtonSource[]>(
+                Convert.FromBase64String(encodedSources));
+            if (sources is { Length: > 0 })
+            {
+                if (workerRunner != null)
+                    workerRunner(pipeName, parentPid, sources);
+                else
+                    ChromecastWorkerHost.RunWorker(pipeName, parentPid, sources);
+            }
+        }
+        catch (Exception ex) when (ex is FormatException or System.Text.Json.JsonException)
+        {
+            AppLogger.Warn("Invalid ETW worker arguments", "App");
+        }
+        return true;
     }
 }

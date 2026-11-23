@@ -540,4 +540,55 @@ public class ChromecastEtwTests
             BluetoothAdapterHelper.CustomRestartHandler = null;
         }
     }
+
+    [Fact]
+    public void ProcessPacket_HandlesTrailingPaddingInAclAndHciDisconnectWithMaskedHandle()
+    {
+        using var receiver = new ChromecastEtwReceiver();
+        const ulong addr = 0x112233445566;
+        Guid marker = new("00112233-4455-6677-8899-aabbccddeeff");
+        receiver.SetSources([new EtwButtonSource(addr, marker, EtwProtocolKind.GoogleG9N9N)]);
+
+        var bound = new List<ulong>();
+        var disconnected = new List<ulong>();
+        var edges = new List<(RemoteButton, bool)>();
+        receiver.SourceBound += bound.Add;
+        receiver.DeviceDisconnected += disconnected.Add;
+        receiver.ButtonEvent += (_, btn, down) => edges.Add((btn, down));
+
+        byte[] baseRequest = CreateAclPacket(0x06, 0x0001,
+            [0xFF, 0xFF, 0x00, 0x28, 0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0x00],
+            connectionHandle: 0x0040);
+        byte[] paddedRequest = [.. baseRequest, 0x00, 0x00, 0x00, 0x00];
+        byte[] baseResponse = CreateAclPacket(0x01, 0x0106, [0x00, 0x0A], connectionHandle: 0x0040);
+        byte[] paddedResponse = [.. baseResponse, 0xAA, 0xBB];
+        byte[] basePress = CreateAclPacket(0x1B, 0x0029, [0x07, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0040);
+        byte[] paddedPress = [.. basePress, 0x00, 0x00];
+
+        receiver.ProcessPacket(4, paddedRequest);
+        receiver.ProcessPacket(3, paddedResponse);
+        Assert.Equal(new[] { addr }, bound);
+
+        receiver.ProcessPacket(3, paddedPress);
+        Assert.Equal(new[] { (RemoteButton.Ok, true) }, edges);
+
+        // Padded 8-byte HCI Disconnection Complete with upper reserved handle bits set (0x2040 -> 0x0040)
+        receiver.ProcessPacket(2, [0x05, 0x04, 0x00, 0x40, 0x20, 0x13, 0x00, 0x00]);
+        Assert.Equal(new[] { addr }, disconnected);
+
+        // Subsequent packets on unbound handle must be ignored
+        receiver.ProcessPacket(3, paddedPress);
+        Assert.Single(edges);
+    }
+
+    [Fact]
+    public void TryParseAclPacket_WithTrailingAlignmentPadding_StillDecodesCleanly()
+    {
+        byte[] acl = CreateAclPacket(0x1B, 0x0029, [0x07, 0, 0, 0, 0, 0, 0, 0]);
+        byte[] padded = [.. acl, 0x00, 0x00, 0x00, 0x00];
+
+        Assert.True(ChromecastEtwReceiver.TryParseAclPacket(padded, out var btn, out bool down, EtwProtocolKind.GoogleG9N9N));
+        Assert.Equal(RemoteButton.Ok, btn);
+        Assert.True(down);
+    }
 }
