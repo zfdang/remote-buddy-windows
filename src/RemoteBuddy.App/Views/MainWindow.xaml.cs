@@ -83,6 +83,9 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         Loaded += OnLoaded;
+        Activated += OnWindowActivatedChanged;
+        Deactivated += OnWindowActivatedChanged;
+        IsVisibleChanged += OnWindowVisibilityChanged;
         Closing += OnWindowClosing;
         Closed += OnWindowClosed;
         if (Application.Current != null)
@@ -259,6 +262,9 @@ public partial class MainWindow : Window
 
     private void OnWindowClosed(object? sender, EventArgs e)
     {
+        Activated -= OnWindowActivatedChanged;
+        Deactivated -= OnWindowActivatedChanged;
+        IsVisibleChanged -= OnWindowVisibilityChanged;
         _hwndSource?.RemoveHook(WndProc);
         _hwndSource = null;
 
@@ -269,6 +275,7 @@ public partial class MainWindow : Window
 
         if (DataContext is MainViewModel vm)
         {
+            vm.IsMainWindowActive = false;
             vm.PropertyChanged -= OnViewModelPropertyChanged;
         }
 
@@ -296,6 +303,25 @@ public partial class MainWindow : Window
 
             vm.PropertyChanged += OnViewModelPropertyChanged;
             SwitchPage(vm.ActivePageName);
+            UpdateWindowActiveState();
+        }
+    }
+
+    private void OnWindowActivatedChanged(object? sender, EventArgs e)
+    {
+        UpdateWindowActiveState();
+    }
+
+    private void OnWindowVisibilityChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        UpdateWindowActiveState();
+    }
+
+    private void UpdateWindowActiveState()
+    {
+        if (DataContext is MainViewModel vm)
+        {
+            vm.IsMainWindowActive = IsVisible && IsActive;
         }
     }
 

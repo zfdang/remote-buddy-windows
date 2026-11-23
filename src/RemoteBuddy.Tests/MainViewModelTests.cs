@@ -1048,4 +1048,121 @@ public class MainViewModelTests
             if (File.Exists(path)) File.Delete(path);
         }
     }
+
+    [Fact]
+    public void MappingPageActiveForeground_XiaomiHomePress_ShowsFeedbackWithoutExecutingWinTab()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"mapping-suppress-active-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var xiaomi = new RemoteDevice
+            {
+                Id = "xiaomi_rc003",
+                BluetoothAddress = 0xC05D39F86E0C,
+                Name = "MI RC",
+                ModelType = RemoteModelType.XiaomiRC003,
+                Mappings = RemoteDevice.CreateDefaultMappings(RemoteModelType.XiaomiRC003)
+            };
+            config.Current.Devices.Add(xiaomi);
+            config.Current.SelectedDeviceId = xiaomi.Id;
+
+            var bt = new TestBluetoothManager();
+            bt.ReadyAddresses.Add(xiaomi.BluetoothAddress);
+
+            var executed = new List<string?>();
+            using var vm = new MainViewModel(config, bt, action => executed.Add(action.Shortcut));
+            vm.IsMainWindowActive = true;
+            vm.Navigate("Mapping");
+            vm.MappingVm.IsMappingSelectionLocked = false;
+
+            var animatedButtons = new List<RemoteButton>();
+            vm.MappingVm.HardwareButtonPressed += button => animatedButtons.Add(button);
+
+            vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Home, true);
+            vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Home, false);
+
+            Assert.Equal([RemoteButton.Home], animatedButtons);
+            Assert.Equal(RemoteButton.Home, vm.MappingVm.SelectedMapping?.Button);
+            Assert.Empty(executed);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void MappingPageWindowInactive_XiaomiHomePress_ExecutesMappedShortcut()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"mapping-suppress-inactive-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var xiaomi = new RemoteDevice
+            {
+                Id = "xiaomi_rc003",
+                BluetoothAddress = 0xC05D39F86E0C,
+                Name = "MI RC",
+                ModelType = RemoteModelType.XiaomiRC003,
+                Mappings = RemoteDevice.CreateDefaultMappings(RemoteModelType.XiaomiRC003)
+            };
+            config.Current.Devices.Add(xiaomi);
+            config.Current.SelectedDeviceId = xiaomi.Id;
+
+            var bt = new TestBluetoothManager();
+            bt.ReadyAddresses.Add(xiaomi.BluetoothAddress);
+
+            var executed = new List<string?>();
+            using var vm = new MainViewModel(config, bt, action => executed.Add(action.Shortcut));
+            vm.IsMainWindowActive = false;
+            vm.Navigate("Mapping");
+
+            vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Home, true);
+            vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Home, false);
+
+            Assert.Equal(["Win+Tab"], executed);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void GeneralPageActiveForeground_XiaomiHomePress_ExecutesMappedShortcut()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"mapping-suppress-general-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var xiaomi = new RemoteDevice
+            {
+                Id = "xiaomi_rc003",
+                BluetoothAddress = 0xC05D39F86E0C,
+                Name = "MI RC",
+                ModelType = RemoteModelType.XiaomiRC003,
+                Mappings = RemoteDevice.CreateDefaultMappings(RemoteModelType.XiaomiRC003)
+            };
+            config.Current.Devices.Add(xiaomi);
+            config.Current.SelectedDeviceId = xiaomi.Id;
+
+            var bt = new TestBluetoothManager();
+            bt.ReadyAddresses.Add(xiaomi.BluetoothAddress);
+
+            var executed = new List<string?>();
+            using var vm = new MainViewModel(config, bt, action => executed.Add(action.Shortcut));
+            vm.IsMainWindowActive = true;
+            vm.Navigate("General");
+
+            vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Home, true);
+            vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Home, false);
+
+            Assert.Equal(["Win+Tab"], executed);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
 }

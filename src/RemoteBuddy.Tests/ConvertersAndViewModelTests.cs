@@ -422,16 +422,24 @@ public class ConvertersAndViewModelTests
     }
 
     [Fact]
-    public void DevicesViewModel_DiscoveredUnknownDevice_PopulatesNearbyDevicesWithoutPollutingDiscovered()
+    public void DevicesViewModel_DiscoveredUnknownDevice_IsIgnoredWithoutPollutingConfiguredDevices()
     {
         string path = Path.Combine(Path.GetTempPath(), $"vib-nearby-{Guid.NewGuid():N}.json");
         try
         {
             var config = new ConfigService(path);
+            var configured = new RemoteDevice
+            {
+                Id = "cfg-1",
+                Name = "Original Name",
+                BluetoothAddress = 0xAABBCCDDEEFF,
+                ModelType = RemoteModelType.XiaomiRC001
+            };
+            config.Current.Devices.Add(configured);
+
             var bt = new DummyBluetoothManager();
             using var vm = new DevicesViewModel(config, bt);
 
-            Assert.False(vm.HasNearbyDevices);
             bt.RaiseDeviceDiscovered(new RemoteDevice
             {
                 Id = "nearby-1",
@@ -440,14 +448,20 @@ public class ConvertersAndViewModelTests
                 ModelType = RemoteModelType.GoogleG9N9N
             });
 
-            Assert.Empty(vm.DiscoveredDevices);
-            Assert.True(vm.HasNearbyDevices);
-            Assert.Single(vm.NearbyDevices);
+            Assert.Single(vm.DiscoveredDevices);
+            Assert.Equal("cfg-1", vm.DiscoveredDevices[0].Id);
 
-            vm.ToggleScan(); // starts scan and clears previous nearby scan results
-            Assert.True(vm.IsScanning);
-            Assert.False(vm.HasNearbyDevices);
-            Assert.Empty(vm.NearbyDevices);
+            bt.RaiseDeviceDiscovered(new RemoteDevice
+            {
+                Id = "cfg-1",
+                Name = "Updated Remote Name",
+                BluetoothAddress = 0xAABBCCDDEEFF,
+                ModelType = RemoteModelType.XiaomiRC003
+            });
+
+            Assert.Single(vm.DiscoveredDevices);
+            Assert.Equal("Updated Remote Name", vm.DiscoveredDevices[0].Name);
+            Assert.Equal(RemoteModelType.XiaomiRC003, vm.DiscoveredDevices[0].ModelType);
         }
         finally
         {

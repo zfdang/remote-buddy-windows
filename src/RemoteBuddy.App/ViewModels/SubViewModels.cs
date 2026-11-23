@@ -35,13 +35,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
     private ObservableCollection<RemoteDevice> _discoveredDevices = new();
 
     [ObservableProperty]
-    private ObservableCollection<RemoteDevice> _nearbyDevices = new();
-
-    [ObservableProperty]
     private RemoteDevice? _selectedDevice;
-
-    [ObservableProperty]
-    private bool _isScanning;
 
     [ObservableProperty]
     private float _deviceGain = RemoteDevice.DefaultMicrophoneGain;
@@ -49,7 +43,6 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
     public event Action? DevicesChanged;
 
     public bool HasDevices => DiscoveredDevices.Count > 0;
-    public bool HasNearbyDevices => NearbyDevices.Count > 0;
 
     public DevicesViewModel(ConfigService config, IBluetoothManager bt, Action<WizardMode>? openWizard = null)
     {
@@ -95,11 +88,6 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
                 {
                     existing.Name = dev.Name;
                     existing.ModelType = dev.ModelType;
-                    RemoveNearbyMatches(dev.BluetoothAddress, dev.Id);
-                }
-                else
-                {
-                    UpsertNearbyDevice(dev);
                 }
             }
 
@@ -179,7 +167,6 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
 
                 DiscoveredDevices.Add(dev);
             }
-            PruneNearbyConfiguredDevices();
             SelectedDevice = DiscoveredDevices.FirstOrDefault(d => d.Id == _config.Current.SelectedDeviceId);
             if (SelectedDevice != null)
             {
@@ -192,60 +179,6 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         {
             _isReloading = false;
         }
-    }
-
-    private void UpsertNearbyDevice(RemoteDevice dev)
-    {
-        if (dev.BluetoothAddress == 0 && string.IsNullOrEmpty(dev.Id)) return;
-        var existing = NearbyDevices.FirstOrDefault(d =>
-            (dev.BluetoothAddress != 0 && d.BluetoothAddress == dev.BluetoothAddress) ||
-            (!string.IsNullOrEmpty(dev.Id) && d.Id == dev.Id));
-        if (existing != null)
-        {
-            existing.Name = dev.Name;
-            existing.ModelType = dev.ModelType;
-            return;
-        }
-
-        if (string.IsNullOrEmpty(dev.Id))
-        {
-            dev.Id = dev.BluetoothAddress != 0 ? $"bt_{dev.BluetoothAddress:X12}" : Guid.NewGuid().ToString("N");
-        }
-        NearbyDevices.Add(dev);
-        OnPropertyChanged(nameof(HasNearbyDevices));
-    }
-
-    private void RemoveNearbyMatches(ulong bluetoothAddress, string? id)
-    {
-        bool removed = false;
-        for (int i = NearbyDevices.Count - 1; i >= 0; i--)
-        {
-            var candidate = NearbyDevices[i];
-            if ((bluetoothAddress != 0 && candidate.BluetoothAddress == bluetoothAddress) ||
-                (!string.IsNullOrEmpty(id) && candidate.Id == id))
-            {
-                NearbyDevices.RemoveAt(i);
-                removed = true;
-            }
-        }
-        if (removed) OnPropertyChanged(nameof(HasNearbyDevices));
-    }
-
-    private void PruneNearbyConfiguredDevices()
-    {
-        bool removed = false;
-        for (int i = NearbyDevices.Count - 1; i >= 0; i--)
-        {
-            var candidate = NearbyDevices[i];
-            if (DiscoveredDevices.Any(d =>
-                    (candidate.BluetoothAddress != 0 && d.BluetoothAddress == candidate.BluetoothAddress) ||
-                    (!string.IsNullOrEmpty(candidate.Id) && d.Id == candidate.Id)))
-            {
-                NearbyDevices.RemoveAt(i);
-                removed = true;
-            }
-        }
-        if (removed) OnPropertyChanged(nameof(HasNearbyDevices));
     }
 
     private void OnConnectedDeviceInformationChanged(ulong address)
@@ -343,31 +276,6 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    public void ToggleScan()
-    {
-        IsScanning = !IsScanning;
-        if (IsScanning)
-        {
-            NearbyDevices.Clear();
-            OnPropertyChanged(nameof(HasNearbyDevices));
-            _bt.StartScanning();
-        }
-        else
-        {
-            _bt.StopScanning();
-        }
-    }
-
-    [RelayCommand]
-    public void ScanForDevices()
-    {
-        if (!IsScanning)
-        {
-            ToggleScan();
-        }
-    }
-
-    [RelayCommand]
     public async Task ConnectDeviceAsync(RemoteDevice? device)
     {
         if (device == null) return;
@@ -391,7 +299,6 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
             _bt.SetDeviceVoiceSettings(canonical);
             foreach (var connectedDevice in DiscoveredDevices)
                 connectedDevice.IsConnected = _bt.IsDeviceReady(connectedDevice.BluetoothAddress);
-            RemoveNearbyMatches(canonical.BluetoothAddress, canonical.Id);
             if (!hadPhysicalMatch || !DiscoveredDevices.Contains(canonical))
             {
                 Reload();

@@ -137,6 +137,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    public bool IsMainWindowActive { get; set; }
+
+    internal bool IsMappingPreviewSuppressed() =>
+        ActiveOnboardingVm == null && IsMainWindowActive && ActivePageName == "Mapping";
+
     private int _buttonSourceGeneration;
 
     public event Action<WizardMode>? RequestOpenWizard;
@@ -900,6 +905,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
+        if (IsMappingPreviewSuppressed())
+        {
+            if (!isDown && _gestures.TryGetValue(address, out var activeGestures))
+            {
+                activeGestures.Reset();
+            }
+            return;
+        }
+
         if (!MappingVm.CustomMappingEnabled) return;
         if (!_gestures.TryGetValue(address, out var gestures))
         {
@@ -918,6 +932,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void ExecuteMappedButton(ulong address, RemoteButton button, ButtonAssignment assignment)
     {
+        if (IsMappingPreviewSuppressed()) return;
+
         var dev = KnownRemotes().FirstOrDefault(d => d.BluetoothAddress == address);
         if (dev != null && IsNativeKeyboardRemote(dev.ModelType) &&
             assignment.Action == ButtonActionType.KeyboardShortcut &&

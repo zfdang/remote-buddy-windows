@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media.Animation;
+using System.Windows.Threading;
 using RemoteBuddy.App.ViewModels;
 using RemoteBuddy.Core.Models;
 using RemoteBuddy.Platform.Windows.Input;
@@ -71,6 +72,55 @@ public partial class MappingPage : UserControl
     private void FlushFocusedInput(object sender, MouseButtonEventArgs e)
     {
         FlushFocusedTextBoxBinding();
+    }
+
+    private void OnDeviceSelectorPreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        FlushFocusedTextBoxBinding();
+        Keyboard.ClearFocus();
+    }
+
+    private void OnDeviceSelectorPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (sender is ComboBox selector && e.Key == Key.Escape && selector.IsDropDownOpen)
+        {
+            selector.IsDropDownOpen = false;
+        }
+
+        // Prevent keyboard/remote arrow or character keys from switching remotes via the selector.
+        e.Handled = true;
+    }
+
+    private void OnDeviceSelectorSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        ClearDeviceSelectorFocus(sender as ComboBox);
+    }
+
+    private void OnDeviceSelectorDropDownClosed(object sender, EventArgs e)
+    {
+        ClearDeviceSelectorFocus(sender as ComboBox);
+    }
+
+    private void ClearDeviceSelectorFocus(ComboBox? selector)
+    {
+        if (selector == null) return;
+
+        void ReleaseFocus()
+        {
+            if (FocusManager.GetFocusScope(selector) is { } scope &&
+                (ReferenceEquals(FocusManager.GetFocusedElement(scope), selector) || selector.IsKeyboardFocusWithin))
+            {
+                FocusManager.SetFocusedElement(scope, null);
+            }
+
+            if (selector.IsKeyboardFocusWithin || ReferenceEquals(Keyboard.FocusedElement, selector))
+            {
+                Keyboard.ClearFocus();
+            }
+        }
+
+        ReleaseFocus();
+        Dispatcher.BeginInvoke(DispatcherPriority.Input, (Action)ReleaseFocus);
     }
 
     private void SelectRemoteButton(object sender, RoutedEventArgs e)

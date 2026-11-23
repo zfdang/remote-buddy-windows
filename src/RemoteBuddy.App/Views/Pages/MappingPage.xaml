@@ -123,8 +123,20 @@
             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"
                         Visibility="{Binding HasDevices, Converter={StaticResource BoolToVisibilityConverter}}">
                 <TextBlock Text="遥控器" Foreground="{StaticResource SecondaryTextBrush}" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                <ComboBox ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}" DisplayMemberPath="Name" Width="170" Margin="0,0,14,0"
-                          PreviewMouseDown="FlushFocusedInput"/>
+                <ComboBox x:Name="DeviceSelectorComboBox"
+                          ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}" DisplayMemberPath="Name"
+                          Width="170" Margin="0,0,14,0"
+                          Focusable="False" IsTabStop="False"
+                          PreviewMouseDown="OnDeviceSelectorPreviewMouseDown"
+                          PreviewKeyDown="OnDeviceSelectorPreviewKeyDown"
+                          SelectionChanged="OnDeviceSelectorSelectionChanged"
+                          DropDownClosed="OnDeviceSelectorDropDownClosed">
+                    <ComboBox.ItemContainerStyle>
+                        <Style TargetType="ComboBoxItem">
+                            <Setter Property="Focusable" Value="False"/>
+                        </Style>
+                    </ComboBox.ItemContainerStyle>
+                </ComboBox>
                 <CheckBox Content="启用自定义按键" IsChecked="{Binding CustomMappingEnabled}" Foreground="{StaticResource PrimaryTextBrush}" VerticalAlignment="Center"/>
             </StackPanel>
         </Grid>

@@ -11,53 +11,15 @@
             </Grid.ColumnDefinitions>
             <StackPanel>
                 <TextBlock Text="设备连接" FontSize="22" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
-                <TextBlock Text="管理已配对或已发现的蓝牙遥控器。选择设备并连接：" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,4,0,0"/>
+                <TextBlock Text="管理已添加的蓝牙遥控器。点击右上角「添加新设备」通过向导配对并测试新遥控器：" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,4,0,0"/>
             </StackPanel>
-            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                <Button Content="{Binding IsScanning, Converter={StaticResource BoolToScanTextConverter}, FallbackValue='🔍 扫描设备'}"
-                        Margin="0,0,10,0" Padding="14,8"
-                        Command="{Binding ToggleScanCommand}"/>
-                <Button Content="➕ 添加新设备" Padding="14,8" Background="#007ACC"
-                        Command="{Binding AddDeviceCommand}"/>
-            </StackPanel>
+            <Button Grid.Column="1" Content="➕ 添加新设备" Padding="14,8" Background="#007ACC" VerticalAlignment="Center"
+                    Command="{Binding AddDeviceCommand}"/>
         </Grid>
 
         <!-- Device Cards List -->
         <ScrollViewer VerticalScrollBarVisibility="Auto">
             <StackPanel>
-                <!-- Scanned Nearby Devices Card -->
-                <Border Background="{StaticResource CardBackgroundBrush}" BorderBrush="#2D5A88" BorderThickness="1" Margin="0,0,0,16" Padding="18" CornerRadius="8"
-                        Visibility="{Binding HasNearbyDevices, Converter={StaticResource BoolToVisibilityConverter}}">
-                    <StackPanel>
-                        <TextBlock Text="📡 发现的新设备 (扫描结果)" FontSize="15" FontWeight="SemiBold" Foreground="#88CCFF" Margin="0,0,0,10"/>
-                        <ItemsControl ItemsSource="{Binding NearbyDevices}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Border Background="#20252C" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,8">
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <StackPanel VerticalAlignment="Center">
-                                                <TextBlock Text="{Binding Name, FallbackValue='未知遥控器'}" FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
-                                                <TextBlock FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,3,0,0">
-                                                    <Run Text="{Binding ModelDisplayName, Mode=OneWay}"/>
-                                                    <Run Text=" · "/>
-                                                    <Run Text="{Binding FormattedAddress, Mode=OneWay}"/>
-                                                </TextBlock>
-                                            </StackPanel>
-                                            <Button Grid.Column="1" Content="⚡ 连接并添加" Padding="14,7" Background="#007ACC" VerticalAlignment="Center"
-                                                    Command="{Binding DataContext.ConnectDeviceCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                    CommandParameter="{Binding}"/>
-                                        </Grid>
-                                    </Border>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </StackPanel>
-                </Border>
-
                 <!-- Empty State Card -->
                 <Border Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" Margin="0,0,0,16" Padding="32" CornerRadius="8"
                         Visibility="{Binding HasDevices, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Inverse}">
