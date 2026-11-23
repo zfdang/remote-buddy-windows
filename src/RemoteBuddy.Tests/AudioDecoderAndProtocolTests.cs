@@ -774,4 +774,81 @@ public class AudioDecoderAndProtocolTests
             Directory.Delete(tempDir, true);
         }
     }
+
+    [Fact]
+    public void AtvvProtocol_SupportsLegacyV04_OpenCloseCapsAndAudioStart()
+    {
+        // v0.4 9-byte capabilities response (version 0x0004, 16kHz codec 0x02 at bytes[4], frameSize 120)
+        byte[] v04CapsBytes = [0x0B, 0x00, 0x04, 0x00, 0x02, 0x00, 0x78, 0x00, 0x00];
+        var caps = ATVVProtocol.ParseCapabilities(v04CapsBytes);
+        Assert.NotNull(caps);
+        Assert.Equal(0x0004, caps.Version);
+        Assert.Equal(0x02, caps.SelectedCodec);
+        Assert.Equal(120, caps.FrameSize);
+
+        Assert.Equal(new byte[] { 0x0C, 0x00, 0x02 }, ATVVProtocol.BuildMicrophoneOpen(caps.Version, caps.SelectedCodec));
+        Assert.Equal(new byte[] { 0x0C, 0x00 }, ATVVProtocol.BuildMicrophoneOpen(0x0100, 0x02));
+        Assert.Equal(new byte[] { 0x0D }, ATVVProtocol.BuildMicrophoneClose(0x01, caps.Version));
+        Assert.Equal(new byte[] { 0x0D, 0x01 }, ATVVProtocol.BuildMicrophoneClose(0x01, 0x0100));
+
+        // v0.4 1-byte AUDIO_START [0x04]
+        Assert.True(ATVVProtocol.ParseAudioStart([0x04], out byte interaction, out byte codec, out byte sessionId, defaultCodec: 0x02));
+        Assert.Equal(0x00, interaction);
+        Assert.Equal(0x02, codec);
+        Assert.Equal(0x00, sessionId);
+        Assert.False(ATVVProtocol.ParseAudioStart([0x04, 0x01], out _, out _, out _));
+    }
+
+    [Fact]
+    public void AtvvFrameAccumulator_FrameNumberSyncHandlesEarlyLateWraparoundAndFlush()
+    {
+        var acc = new ATVVFrameAccumulator();
+        Assert.True(ATVVProtocol.ParseAudioSync([0x0A, 0x00, 0x00, 0x02, 0x01, 0x90, 0x0C], out short pred, out byte step, out ushort frameNo));
+        Assert.Equal(2, frameNo);
+        Assert.Equal(400, pred);
+        Assert.Equal(12, step);
+
+        // Emit frame 0 cleanly
+        byte[] frame0 = new byte[120];
+        int decodedFrames = 0;
+        acc.Append(frame0, 120, _ => decodedFrames++);
+        Assert.Equal(1, decodedFrames); // _decodedFrameIndex is now 1
+
+        // Sync arrives for frame 2 (delta = +1 -> apply to frame 2, NOT frame 1)
+        acc.Synchronize(400, 12, frameNumber: 2);
+        byte[] partialChunk = new byte[40];
+        acc.Append(partialChunk, 120, _ => decodedFrames++);
+        acc.Append(new byte[80], 120, _ => decodedFrames++);
+        Assert.Equal(2, decodedFrames);
+        Assert.False(acc.TryConsumeSyncForNextFrame(out _, out _)); // Frame 1 skipped
+
+        acc.Append(new byte[120], 120, _ => decodedFrames++);
+        Assert.Equal(3, decodedFrames);
+        Assert.True(acc.TryConsumeSyncForNextFrame(out short p2, out byte s2)); // Applied on Frame 2
+        Assert.Equal(400, p2);
+        Assert.Equal(12, s2);
+
+        // Late stale sync for frame 1 (< current decoded index 3) must be discarded
+        acc.Synchronize(-500, 20, frameNumber: 1);
+        Assert.False(acc.TryConsumeSyncForNextFrame(out _, out _));
+
+        // Partial tail bytes are flushed cleanly
+        acc.Append(new byte[35], 120, _ => decodedFrames++);
+        int flushedLength = 0;
+        acc.Flush(120, partial => flushedLength = partial.Length);
+        Assert.Equal(35, flushedLength);
+        Assert.Equal(0, acc.PendingCount);
+    }
+
+    [Fact]
+    public void ImaAdpcmDecoder_Reset_PreservesLowNibbleFirstForArn9()
+    {
+        var decoder = new ImaAdpcmDecoder { LowNibbleFirst = true };
+        decoder.Synchronize(1234, 25);
+        decoder.Reset();
+
+        Assert.Equal(0, decoder.Predictor);
+        Assert.Equal(0, decoder.StepIndex);
+        Assert.True(decoder.LowNibbleFirst);
+    }
 }

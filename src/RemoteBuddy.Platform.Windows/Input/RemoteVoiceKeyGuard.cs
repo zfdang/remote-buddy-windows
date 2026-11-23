@@ -10,6 +10,7 @@ namespace RemoteBuddy.Platform.Windows.Input;
 public sealed class RemoteVoiceKeyGuard(Func<bool> voiceSessionActive) : IDisposable
 {
     private const long MaxHoldDurationMs = 5000; // Expire a stale hold once the voice session is no longer active.
+    private const long AbsoluteMaxHoldDurationMs = 310_000; // Hard safety cap (>5 min) prevents permanent key lock if session status ever wedged.
 
     private delegate IntPtr HookProc(int code, IntPtr message, IntPtr data);
     private IntPtr _hook;
@@ -87,7 +88,8 @@ public sealed class RemoteVoiceKeyGuard(Func<bool> voiceSessionActive) : IDispos
                     // can release the injected hold before our balanced key-up.
                     if (_ownsF5)
                     {
-                        if ((Environment.TickCount64 - _holdStartedAt) > MaxHoldDurationMs && !voiceSessionActive())
+                        long heldMs = Environment.TickCount64 - _holdStartedAt;
+                        if (heldMs > AbsoluteMaxHoldDurationMs || (heldMs > MaxHoldDurationMs && !voiceSessionActive()))
                         {
                             _ownsF5 = false;
                         }

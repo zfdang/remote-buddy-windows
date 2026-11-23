@@ -104,12 +104,25 @@ public static class ATVVProtocol
     }
 
     public static bool ParseAudioStart(ReadOnlySpan<byte> bytes, out byte interaction, out byte codec, out byte sessionId)
+        => ParseAudioStart(bytes, out interaction, out codec, out sessionId, defaultCodec: 0x02);
+
+    public static bool ParseAudioStart(ReadOnlySpan<byte> bytes, out byte interaction, out byte codec, out byte sessionId, byte defaultCodec)
     {
         interaction = 0;
         codec = 0;
         sessionId = 0;
 
-        if (bytes.Length < 3 || bytes[0] != OpcodeAudioStart)
+        if (bytes.Length == 0 || bytes[0] != OpcodeAudioStart)
+            return false;
+
+        if (bytes.Length == 1)
+        {
+            // ATVV v0.4 sends 1-byte [0x04] with no interaction, codec, or sessionId fields
+            codec = defaultCodec;
+            return true;
+        }
+
+        if (bytes.Length < 3)
             return false;
 
         interaction = bytes[1];
@@ -123,13 +136,18 @@ public static class ATVVProtocol
     }
 
     public static bool ParseAudioSync(ReadOnlySpan<byte> bytes, out short predictor, out byte stepIndex)
+        => ParseAudioSync(bytes, out predictor, out stepIndex, out _);
+
+    public static bool ParseAudioSync(ReadOnlySpan<byte> bytes, out short predictor, out byte stepIndex, out ushort frameNumber)
     {
         predictor = 0;
         stepIndex = 0;
+        frameNumber = 0;
 
         if (bytes.Length < 7 || bytes[0] != OpcodeAudioSync)
             return false;
 
+        frameNumber = (ushort)((bytes[2] << 8) | bytes[3]);
         ushort predictorBits = (ushort)((bytes[4] << 8) | bytes[5]);
         predictor = unchecked((short)predictorBits);
         stepIndex = bytes[6];
@@ -140,49 +158,127 @@ public static class ATVVProtocol
 
 public sealed class ATVVFrameAccumulator
 {
-    private readonly List<byte> _pending = new();
+    public delegate void SpanAction(ReadOnlySpan<byte> frame);
+
+    private byte[] _buffer = new byte[1024];
+    private int _offset;
+    private int _count;
     private (short Predictor, byte StepIndex)? _pendingSync;
     private int _framesBeforeSync = 0;
+    private ushort _decodedFrameIndex;
+    private bool _sawNonZeroSyncFrame;
 
-    public int PendingCount => _pending.Count;
+    public int PendingCount => _count;
 
     public void Synchronize(short predictor, byte stepIndex)
     {
         _pendingSync = (predictor, stepIndex);
-        _framesBeforeSync = _pending.Count == 0 ? 0 : 1;
+        _framesBeforeSync = _count == 0 ? 0 : 1;
+    }
+
+    public void Synchronize(short predictor, byte stepIndex, ushort frameNumber)
+    {
+        if (frameNumber != 0 || _sawNonZeroSyncFrame)
+        {
+            _sawNonZeroSyncFrame = true;
+            short delta = unchecked((short)(frameNumber - _decodedFrameIndex));
+            if (delta is < 0 and >= -16)
+            {
+                // Stale AudioSync for an already-decoded frame; discard instead of corrupting a later frame
+                return;
+            }
+            if (delta is >= 0 and <= 16)
+            {
+                _pendingSync = (predictor, stepIndex);
+                _framesBeforeSync = delta;
+                return;
+            }
+        }
+
+        // Remotes that send constant 0 or non-resetting/packet-based frame counters fall back to boundary heuristic
+        Synchronize(predictor, stepIndex);
     }
 
     public void Reset()
     {
-        _pending.Clear();
+        _offset = 0;
+        _count = 0;
         _pendingSync = null;
         _framesBeforeSync = 0;
+        _decodedFrameIndex = 0;
+        _sawNonZeroSyncFrame = false;
+    }
+
+    public void Append(ReadOnlySpan<byte> data, int frameSize, SpanAction onFrame)
+    {
+        if (frameSize <= 0) return;
+        EnsureCapacity(data.Length);
+        data.CopyTo(_buffer.AsSpan(_offset + _count));
+        _count += data.Length;
+
+        while (_count >= frameSize)
+        {
+            var frame = _buffer.AsSpan(_offset, frameSize);
+            _offset += frameSize;
+            _count -= frameSize;
+            _decodedFrameIndex++;
+            onFrame(frame);
+        }
+
+        if (_count == 0)
+        {
+            _offset = 0;
+        }
+    }
+
+    public void Flush(int frameSize, SpanAction onPartialFrame)
+    {
+        if (_count <= 0)
+        {
+            _offset = 0;
+            return;
+        }
+
+        if (frameSize <= 0)
+        {
+            _offset = 0;
+            _count = 0;
+            return;
+        }
+
+        var partial = _buffer.AsSpan(_offset, _count);
+        _offset = 0;
+        _count = 0;
+        _decodedFrameIndex++;
+        onPartialFrame(partial);
     }
 
     public List<byte[]> Append(ReadOnlySpan<byte> data, int frameSize)
     {
-        if (frameSize <= 0) return new();
-        for (int i = 0; i < data.Length; i++)
-        {
-            _pending.Add(data[i]);
-        }
-
         var frames = new List<byte[]>();
-        int offset = 0;
-        while (_pending.Count - offset >= frameSize)
-        {
-            byte[] frame = new byte[frameSize];
-            _pending.CopyTo(offset, frame, 0, frameSize);
-            frames.Add(frame);
-            offset += frameSize;
-        }
-
-        if (offset > 0)
-        {
-            _pending.RemoveRange(0, offset);
-        }
-
+        Append(data, frameSize, frame => frames.Add(frame.ToArray()));
         return frames;
+    }
+
+    private void EnsureCapacity(int additionalBytes)
+    {
+        if (_offset + _count + additionalBytes <= _buffer.Length) return;
+
+        if (_count + additionalBytes <= _buffer.Length)
+        {
+            Buffer.BlockCopy(_buffer, _offset, _buffer, 0, _count);
+            _offset = 0;
+            return;
+        }
+
+        int newSize = Math.Max(_buffer.Length * 2, _count + additionalBytes);
+        var next = new byte[newSize];
+        if (_count > 0)
+        {
+            Buffer.BlockCopy(_buffer, _offset, next, 0, _count);
+        }
+        _buffer = next;
+        _offset = 0;
     }
 
     public bool TryConsumeSyncForNextFrame(out short predictor, out byte stepIndex)
