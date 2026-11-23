@@ -37,27 +37,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private float _deviceGain = 1.0f;
 
-    public string ConnectedDeviceName => _bt.IsConnected ? _bt.ConnectedDeviceName : "未连接设备";
-    public bool IsConnected => _bt.IsConnected;
     public bool HasDevices => DiscoveredDevices.Count > 0;
-
-    public string VoiceIntegrationSummary
-    {
-        get
-        {
-            var tool = _config.Current.InputTool;
-            string toolName = tool.Tool switch
-            {
-                TargetInputTool.WeChatInput => "微信输入法",
-                TargetInputTool.DoubaoInput => "豆包输入法",
-                TargetInputTool.WindowsDictation => "Windows 听写",
-                TargetInputTool.Typeless => "Typeless",
-                _ => "自定义工具"
-            };
-            string mode = tool.TriggerMode == VoiceTriggerMode.HoldToTalk ? "长按说话" : "点按切换";
-            return $"{toolName} ({mode} · {tool.Shortcut})";
-        }
-    }
 
     public DevicesViewModel(ConfigService config, IBluetoothManager bt, Action<WizardMode>? openWizard = null)
     {
@@ -120,8 +100,6 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         {
             void Update()
             {
-                OnPropertyChanged(nameof(ConnectedDeviceName));
-                OnPropertyChanged(nameof(IsConnected));
                 foreach (var dev in DiscoveredDevices)
                 {
                     dev.IsConnected = connected && (dev.Name == name || dev.BluetoothAddress == _bt.ConnectedDeviceAddress || dev.BluetoothAddress.ToString("X") == _config.Current.SelectedDeviceId);
@@ -179,8 +157,6 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
             _bt.VoiceButtonMode = SelectedDevice.VoiceButtonMode;
         }
         OnPropertyChanged(nameof(HasDevices));
-        OnPropertyChanged(nameof(ConnectedDeviceName));
-        OnPropertyChanged(nameof(IsConnected));
     }
 
     private void OnDevicePropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -266,8 +242,6 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
                 _config.Current.Devices.Add(device);
             }
             _config.Save();
-            OnPropertyChanged(nameof(ConnectedDeviceName));
-            OnPropertyChanged(nameof(IsConnected));
         }
     }
 
@@ -283,8 +257,6 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         {
             SelectedDevice.IsConnected = false;
         }
-        OnPropertyChanged(nameof(ConnectedDeviceName));
-        OnPropertyChanged(nameof(IsConnected));
     }
 
     [RelayCommand]
@@ -337,8 +309,6 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         }
         _config.Save();
         OnPropertyChanged(nameof(HasDevices));
-        OnPropertyChanged(nameof(ConnectedDeviceName));
-        OnPropertyChanged(nameof(IsConnected));
     }
 
     [RelayCommand]
