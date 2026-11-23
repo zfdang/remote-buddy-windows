@@ -66,6 +66,19 @@ public partial class MappingPage : UserControl
             vm.SelectButton(tag);
     }
 
+    private void ConfirmResetAllMappings(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MappingViewModel { SelectedDevice: { } device } vm) return;
+        string message = $"将「{device.Name}」的所有按键恢复为默认映射？\n\n此遥控器的单击、长按和双击自定义映射都会被覆盖，且无法撤销。";
+        var owner = Window.GetWindow(this);
+        const string title = "恢复所有按键的默认映射";
+        var result = owner == null
+            ? MessageBox.Show(message, title, MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No)
+            : MessageBox.Show(owner, message, title, MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+        if (result == MessageBoxResult.Yes && ReferenceEquals(vm.SelectedDevice, device))
+            vm.ResetToDefaults();
+    }
+
     private void RecordShortcut(object sender, KeyEventArgs e)
     {
         if (sender is not ToggleButton { IsChecked: true, DataContext: MappingGestureViewModel gesture } recorder) return;

@@ -49,6 +49,25 @@ public sealed class BoolToConfiguredBrushConverter : IValueConverter
 
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotSupportedException();
 }
+
+public sealed class MappingButtonStatusConverter : IMultiValueConverter
+{
+    public object Convert(object[] values, Type targetType, object? parameter, CultureInfo culture)
+    {
+        if (values[0] is not string tag || !Enum.TryParse<RemoteButton>(tag, out var button)) return "";
+        if (button == RemoteButton.Voice) return "语音键";
+        if (values[1] is RemoteButton selected && selected == button) return "当前选择";
+        var mapping = (values[2] as IEnumerable<RemoteBuddy.App.ViewModels.MappingItemViewModel>)?
+            .FirstOrDefault(item => item.Button == button);
+        bool configured = mapping != null && (mapping.SingleClick.IsConfigured || mapping.DoubleClick.IsConfigured ||
+            (mapping.LongPress.IsConfigured && mapping.LongPress.Action != ButtonActionType.ContinuousRepeat));
+        return configured ? "已配置" : "未配置";
+    }
+
+    public object[] ConvertBack(object value, Type[] targetTypes, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
 public sealed class StringToVisibilityConverter : IValueConverter
 {
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)

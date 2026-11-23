@@ -1,4 +1,4 @@
-// Copyright (C) 2026 Remote Buddy Contributors
+﻿// Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
 using System.Collections.ObjectModel;
@@ -559,6 +559,8 @@ public partial class MappingViewModel : ObservableObject
     private readonly ConfigService _config;
     private readonly Dictionary<string, List<MappingItemViewModel>> _drafts = new();
 
+    public int MappingRevision { get; private set; }
+
     [ObservableProperty]
     private ObservableCollection<MappingItemViewModel> _currentMappings = new();
 
@@ -672,7 +674,6 @@ public partial class MappingViewModel : ObservableObject
         }
     }
 
-    [RelayCommand]
     public void ResetToDefaults()
     {
         var selectedDev = SelectedDevice;
@@ -753,6 +754,8 @@ public partial class MappingViewModel : ObservableObject
 
     private void OnMappingItemModified()
     {
+        MappingRevision++;
+        OnPropertyChanged(nameof(MappingRevision));
         var selectedDev = SelectedDevice;
         if (selectedDev != null)
         {
