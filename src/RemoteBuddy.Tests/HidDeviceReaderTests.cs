@@ -19,7 +19,7 @@ public class HidDeviceReaderTests
         public bool IsConnected { get; set; } = true;
         public bool IsReady => IsConnected;
         public bool IsStreaming => false;
-        public float CurrentGain { get; set; } = 1.0f;
+        public float CurrentGain { get; set; } = RemoteDevice.DefaultMicrophoneGain;
         public BluetoothSessionState SessionState => BluetoothSessionState.Idle;
         public string ConnectedDeviceName { get; set; } = "Test Remote";
         public ulong ConnectedDeviceAddress => 0x4754514C6FCC;
@@ -88,6 +88,23 @@ public class HidDeviceReaderTests
         // Subsequent call within 5s returns cached value immediately
         var status2 = VirtualAudioAuditor.AuditCableInputDevice(forceRefresh: false);
         Assert.Equal(status1, status2);
+    }
+
+    [Fact]
+    public void VirtualAudioAuditor_ResetDeviceCache_ClearsCachedEndpointId()
+    {
+        VirtualAudioAuditor.ResetDeviceCache();
+        // Should not throw on null device
+        VirtualAudioAuditor.EnsureEndpointUnmutedAndMaxVolume(null);
+    }
+
+    [Fact]
+    public void WasapiAudioPlayer_CanInstantiateAndDisposeSafely()
+    {
+        using var player = new WasapiAudioPlayer();
+        Assert.False(player.IsActive);
+        player.Stop();
+        Assert.False(player.IsActive);
     }
 
     [Fact]

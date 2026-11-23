@@ -35,7 +35,7 @@ public sealed class ChromecastWorkerClient : IDisposable
         }
     }
 
-    public bool Start(Guid marker)
+    public bool Start(Guid marker, EtwProtocolKind protocolKind = EtwProtocolKind.GoogleG9N9N)
     {
         lock (_lock)
         {
@@ -84,7 +84,7 @@ public sealed class ChromecastWorkerClient : IDisposable
                 var psi = new ProcessStartInfo
                 {
                     FileName = exePath,
-                    Arguments = $"--chromecast-worker {pipeName} {marker:D}",
+                    Arguments = $"--chromecast-worker {pipeName} {marker:D} {protocolKind}",
                     UseShellExecute = true,
                     Verb = "runas",
                     WindowStyle = ProcessWindowStyle.Hidden

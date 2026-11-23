@@ -6,6 +6,7 @@
     <Application.Resources>
         <!-- Value Converters -->
         <converters:BoolToBrushConverter x:Key="BoolToBrushConverter"/>
+        <converters:BoolToConfiguredBrushConverter x:Key="BoolToConfiguredBrushConverter"/>
         <converters:StringToVisibilityConverter x:Key="StringToVisibilityConverter"/>
         <converters:BoolToScanTextConverter x:Key="BoolToScanTextConverter"/>
         <converters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>

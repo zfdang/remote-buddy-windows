@@ -21,8 +21,27 @@
             </ColorAnimationUsingKeyFrames>
         </Storyboard>
 
+        <Style x:Key="GestureSelectorButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Height" Value="34"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Style.Triggers>
+                <Trigger Property="Tag" Value="True">
+                    <Setter Property="Background" Value="#007ACC"/>
+                    <Setter Property="BorderBrush" Value="#0098FF"/>
+                    <Setter Property="Foreground" Value="#FFFFFF"/>
+                </Trigger>
+                <Trigger Property="Tag" Value="False">
+                    <Setter Property="Background" Value="#2D3036"/>
+                    <Setter Property="BorderBrush" Value="#3E4249"/>
+                    <Setter Property="Foreground" Value="#CCCCCC"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
         <DataTemplate x:Key="GestureEditor">
-            <StackPanel Margin="0,14,0,0">
+            <StackPanel Margin="0,10,0,0">
                 <TextBlock Text="{Binding Help}" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,12"/>
                 <ComboBox ItemsSource="{Binding AvailableActions}" SelectedItem="{Binding Action, Mode=TwoWay}"
                           AutomationProperties.Name="动作类型" Margin="0,0,0,12">
@@ -52,7 +71,7 @@
                         <TextBox Text="{Binding Shortcut, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                  AutomationProperties.Name="键盘快捷键" Padding="8,5"/>
                     </DockPanel>
-                    <TextBlock Text="常用快捷键" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,4"/>
+                    <TextBlock Text="常用按键与组合快捷键" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,4"/>
                     <ComboBox ItemsSource="{x:Static vm:MappingGestureViewModel.ShortcutPresets}" DisplayMemberPath="Key"
                               SelectionChanged="ApplyShortcutPreset" AutomationProperties.Name="常用快捷键"/>
                 </StackPanel>
@@ -71,6 +90,12 @@
                     <TextBlock Text="常用短语" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,6"/>
                     <TextBox Text="{Binding Text, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                              AutomationProperties.Name="常用短语" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="65" Padding="8,5"/>
+                </StackPanel>
+                <StackPanel Visibility="{Binding Action, Converter={StaticResource EqualValueToVisibilityConverter}, ConverterParameter=ContinuousRepeat}">
+                    <Border Background="#1E2024" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="6" Padding="12,10" Margin="0,4,0,0">
+                        <TextBlock Text="🔄 持续连发模式：按住此键时将以约 100 毫秒间隔重复触发【单击】动作，松开即停。"
+                                   Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap"/>
+                    </Border>
                 </StackPanel>
             </StackPanel>
         </DataTemplate>
@@ -325,32 +350,99 @@
 
             <Border Grid.Column="2" Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="8" Padding="16">
                 <DockPanel>
-                    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,16">
+                    <!-- Top: Button Quick Select & Clear -->
+                    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,12">
                         <TextBlock Text="按键快速选择" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,6"/>
                         <DockPanel>
-                            <Button DockPanel.Dock="Right" Content="清除设置" Padding="8,6" Margin="8,0,0,0"
+                            <Button DockPanel.Dock="Right" Content="清除当前按键" Padding="10,6" Margin="8,0,0,0"
                                     Command="{Binding ClearSelectedMappingCommand}"/>
                             <ComboBox ItemsSource="{Binding CurrentMappings}" SelectedItem="{Binding SelectedMapping}"
                                       AutomationProperties.Name="正在编辑的按键" DisplayMemberPath="ButtonName"/>
                         </DockPanel>
                     </StackPanel>
-                    <TabControl DataContext="{Binding SelectedMapping}" Background="Transparent" BorderThickness="0">
-                        <TabItem Header="单击">
-                            <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                <ContentControl Content="{Binding SingleClick}" ContentTemplate="{StaticResource GestureEditor}"/>
-                            </ScrollViewer>
-                        </TabItem>
-                        <TabItem Header="长按">
-                            <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                <ContentControl Content="{Binding LongPress}" ContentTemplate="{StaticResource GestureEditor}"/>
-                            </ScrollViewer>
-                        </TabItem>
-                        <TabItem Header="双击">
-                            <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                <ContentControl Content="{Binding DoubleClick}" ContentTemplate="{StaticResource GestureEditor}"/>
-                            </ScrollViewer>
-                        </TabItem>
-                    </TabControl>
+
+                    <!-- Status Bar: Displays single click, long press, double click current values at a glance -->
+                    <Border DockPanel.Dock="Top" Background="#24262A" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="6" Padding="10,8" Margin="0,0,0,12">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="0" Text="当前按键设置状态 (一览)：" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" Margin="2,0,0,6"/>
+                            <Grid Grid.Row="1">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="6"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="6"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- Single Click Status Chip -->
+                                <Border Grid.Column="0" Background="#1D1F23" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="4" Padding="6,5"
+                                        Cursor="Hand" ToolTip="点击切换到单击设置" MouseLeftButtonDown="SelectSingleClickFromStatus">
+                                    <StackPanel>
+                                        <TextBlock Text="👆 单击" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
+                                        <TextBlock Text="{Binding SelectedMapping.SingleClickSummary, FallbackValue='未配置'}"
+                                                   FontSize="11" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"
+                                                   Foreground="{Binding SelectedMapping.SingleClick.IsConfigured, Converter={StaticResource BoolToConfiguredBrushConverter}}"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- Long Press Status Chip -->
+                                <Border Grid.Column="2" Background="#1D1F23" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="4" Padding="6,5"
+                                        Cursor="Hand" ToolTip="点击切换到长按设置" MouseLeftButtonDown="SelectLongPressFromStatus">
+                                    <StackPanel>
+                                        <TextBlock Text="⏱️ 长按" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
+                                        <TextBlock Text="{Binding SelectedMapping.LongPressSummary, FallbackValue='未配置'}"
+                                                   FontSize="11" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"
+                                                   Foreground="{Binding SelectedMapping.LongPress.IsConfigured, Converter={StaticResource BoolToConfiguredBrushConverter}}"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- Double Click Status Chip -->
+                                <Border Grid.Column="4" Background="#1D1F23" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="4" Padding="6,5"
+                                        Cursor="Hand" ToolTip="点击切换到双击设置" MouseLeftButtonDown="SelectDoubleClickFromStatus">
+                                    <StackPanel>
+                                        <TextBlock Text="✌️ 双击" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
+                                        <TextBlock Text="{Binding SelectedMapping.DoubleClickSummary, FallbackValue='未配置'}"
+                                                   FontSize="11" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"
+                                                   Foreground="{Binding SelectedMapping.DoubleClick.IsConfigured, Converter={StaticResource BoolToConfiguredBrushConverter}}"/>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
+                        </Grid>
+                    </Border>
+
+                    <!-- Gesture Selector Buttons: Separate buttons to set SingleClick, LongPress, or DoubleClick -->
+                    <Border DockPanel.Dock="Top" Margin="0,0,0,10">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Button Grid.Column="0" Content="👆 单击设置" Padding="0,7"
+                                    Command="{Binding SelectTriggerCommand}" CommandParameter="SingleClick"
+                                    Style="{StaticResource GestureSelectorButtonStyle}"
+                                    Tag="{Binding SelectedTrigger, Converter={StaticResource EqualValueToBoolConverter}, ConverterParameter=SingleClick}"/>
+                            <Button Grid.Column="2" Content="⏱️ 长按设置" Padding="0,7"
+                                    Command="{Binding SelectTriggerCommand}" CommandParameter="LongPress"
+                                    Style="{StaticResource GestureSelectorButtonStyle}"
+                                    Tag="{Binding SelectedTrigger, Converter={StaticResource EqualValueToBoolConverter}, ConverterParameter=LongPress}"/>
+                            <Button Grid.Column="4" Content="✌️ 双击设置" Padding="0,7"
+                                    Command="{Binding SelectTriggerCommand}" CommandParameter="DoubleClick"
+                                    Style="{StaticResource GestureSelectorButtonStyle}"
+                                    Tag="{Binding SelectedTrigger, Converter={StaticResource EqualValueToBoolConverter}, ConverterParameter=DoubleClick}"/>
+                        </Grid>
+                    </Border>
+
+                    <!-- Active Gesture Editor -->
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <ContentControl Content="{Binding ActiveGesture}" ContentTemplate="{StaticResource GestureEditor}"/>
+                    </ScrollViewer>
                 </DockPanel>
             </Border>
         </Grid>

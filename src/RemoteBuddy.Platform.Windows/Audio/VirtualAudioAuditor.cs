@@ -22,8 +22,43 @@ public static class VirtualAudioAuditor
     private static DateTime _lastAuditTime = DateTime.MinValue;
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(5);
     private static readonly object _auditLock = new();
+    private static string? _cachedCableInputId;
 
     public static DriverReadinessStatus? StatusOverride { get; set; }
+
+    public static void ResetDeviceCache()
+    {
+        lock (_auditLock)
+        {
+            _cachedCableInputId = null;
+            _lastAuditTime = DateTime.MinValue;
+        }
+    }
+
+    public static void EnsureEndpointUnmutedAndMaxVolume(MMDevice? device)
+    {
+        if (device == null) return;
+        try
+        {
+            if (device.AudioEndpointVolume != null)
+            {
+                if (device.AudioEndpointVolume.Mute)
+                {
+                    device.AudioEndpointVolume.Mute = false;
+                    AppLogger.Info($"Unmuted audio endpoint: {device.FriendlyName}", "VirtualAudioAuditor");
+                }
+                if (device.AudioEndpointVolume.MasterVolumeLevelScalar < 0.99f)
+                {
+                    device.AudioEndpointVolume.MasterVolumeLevelScalar = 1.0f;
+                    AppLogger.Info($"Set audio endpoint volume to 100%: {device.FriendlyName}", "VirtualAudioAuditor");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Debug($"Failed to adjust endpoint volume for {device.FriendlyName}: {ex.Message}", "VirtualAudioAuditor");
+        }
+    }
 
     public static DriverReadinessStatus AuditCableInputDevice(bool forceRefresh = false)
     {
@@ -63,10 +98,7 @@ public static class VirtualAudioAuditor
         try
         {
             using var enumerator = new MMDeviceEnumerator();
-            var renderDevices = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
-            
-            var cableInput = renderDevices.FirstOrDefault(d => 
-                d.FriendlyName.Contains("CABLE Input", StringComparison.OrdinalIgnoreCase));
+            var cableInput = GetCableInputDeviceInternal(enumerator);
 
             if (cableInput == null)
             {
@@ -75,6 +107,23 @@ public static class VirtualAudioAuditor
                 var status = pending ? DriverReadinessStatus.RebootRequired : DriverReadinessStatus.NotInstalled;
                 AppLogger.Warn($"VB-CABLE audit result: {status} (Active endpoint not found, pending={pending})", "VirtualAudioAuditor");
                 return status;
+            }
+
+            EnsureEndpointUnmutedAndMaxVolume(cableInput);
+
+            try
+            {
+                var captureDevices = enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active);
+                var cableOutput = captureDevices.FirstOrDefault(d =>
+                    d.FriendlyName.Contains("CABLE Output", StringComparison.OrdinalIgnoreCase));
+                if (cableOutput != null)
+                {
+                    EnsureEndpointUnmutedAndMaxVolume(cableOutput);
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Debug($"Failed to check CABLE Output volume: {ex.Message}", "VirtualAudioAuditor");
             }
 
             // Real WASAPI test open
@@ -96,14 +145,40 @@ public static class VirtualAudioAuditor
         try
         {
             using var enumerator = new MMDeviceEnumerator();
-            var renderDevices = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
-            return renderDevices.FirstOrDefault(d => 
-                d.FriendlyName.Contains("CABLE Input", StringComparison.OrdinalIgnoreCase));
+            return GetCableInputDeviceInternal(enumerator);
         }
         catch
         {
             return null;
         }
+    }
+
+    private static MMDevice? GetCableInputDeviceInternal(MMDeviceEnumerator enumerator)
+    {
+        if (!string.IsNullOrEmpty(_cachedCableInputId))
+        {
+            try
+            {
+                var dev = enumerator.GetDevice(_cachedCableInputId);
+                if (dev != null && dev.State == DeviceState.Active)
+                {
+                    return dev;
+                }
+            }
+            catch
+            {
+                _cachedCableInputId = null;
+            }
+        }
+
+        var renderDevices = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
+        var cableInput = renderDevices.FirstOrDefault(d =>
+            d.FriendlyName.Contains("CABLE Input", StringComparison.OrdinalIgnoreCase));
+        if (cableInput != null)
+        {
+            _cachedCableInputId = cableInput.ID;
+        }
+        return cableInput;
     }
 }
 
@@ -130,14 +205,23 @@ public sealed class WasapiAudioPlayer : IDisposable
     {
         lock (_lock)
         {
-            Stop();
-
             device ??= VirtualAudioAuditor.GetCableInputDevice();
             if (device == null)
             {
                 AppLogger.Warn("WasapiAudioPlayer.Start failed: CABLE Input device not found", "WasapiAudioPlayer");
+                Stop();
                 return false;
             }
+
+            VirtualAudioAuditor.EnsureEndpointUnmutedAndMaxVolume(device);
+
+            if (_wasapiOut != null && _waveProvider != null && _wasapiOut.PlaybackState == PlaybackState.Playing)
+            {
+                _waveProvider.ClearBuffer();
+                return true;
+            }
+
+            Stop();
 
             try
             {

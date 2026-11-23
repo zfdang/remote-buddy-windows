@@ -68,7 +68,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
     public bool IsConnected => _connectedDevice != null && _connectedDevice.ConnectionStatus == BluetoothConnectionStatus.Connected;
     public bool IsReady { get; private set; }
     public bool IsStreaming => _sessionState == BluetoothSessionState.Streaming;
-    public float CurrentGain { get; set; } = 1.0f;
+    public float CurrentGain { get; set; } = RemoteDevice.DefaultMicrophoneGain;
     public BluetoothSessionState SessionState => _sessionState;
     internal string? ConnectedDeviceNameOverride { get; set; }
     public string ConnectedDeviceName => ConnectedDeviceNameOverride ?? _connectedDevice?.Name ?? string.Empty;
@@ -84,13 +84,23 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
 
         try
         {
+            // Give ETW trace session 150ms to attach to driver buffers
+            await Task.Delay(150).ConfigureAwait(false);
             var result = await device.GetGattServicesForUuidAsync(marker, BluetoothCacheMode.Uncached);
             foreach (var service in result.Services) service.Dispose();
-            AppLogger.Debug($"Chromecast button source query finished: {result.Status}", "BluetoothManager");
+            AppLogger.Info($"Chromecast button source query finished: {result.Status}", "BluetoothManager");
+
+            if (result.Status != GattCommunicationStatus.Success)
+            {
+                await Task.Delay(250).ConfigureAwait(false);
+                var retryResult = await device.GetGattServicesForUuidAsync(marker, BluetoothCacheMode.Uncached);
+                foreach (var service in retryResult.Services) service.Dispose();
+                AppLogger.Info($"Chromecast button source query retry: {retryResult.Status}", "BluetoothManager");
+            }
         }
         catch (Exception ex)
         {
-            AppLogger.Debug($"Chromecast button source query failed: {ex.Message}", "BluetoothManager");
+            AppLogger.Info($"Chromecast button source query failed: {ex.Message}", "BluetoothManager");
         }
     }
 
@@ -478,6 +488,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
 
             AppLogger.Info($"Bluetooth remote connected and ready: '{device.Name}', FrameSize={_frameSize}, ContainerId={ConnectedDeviceContainerId}", "BluetoothManager");
             ConnectionStatusChanged?.Invoke(true, device.Name);
+            _ = Task.Run(() => _audioPlayer.Start());
             if (isChromecast)
             {
                 _ = LoadChromecastHardwareDetailsAsync(device, targetConnGen, information);

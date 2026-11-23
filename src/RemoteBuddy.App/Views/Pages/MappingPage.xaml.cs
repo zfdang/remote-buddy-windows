@@ -108,4 +108,19 @@ public partial class MappingPage : UserControl
             picker.SelectedIndex = -1;
         }
     }
+
+    private void SelectSingleClickFromStatus(object sender, MouseButtonEventArgs e)
+    {
+        if (DataContext is MappingViewModel vm) vm.SelectedTrigger = ButtonTrigger.SingleClick;
+    }
+
+    private void SelectLongPressFromStatus(object sender, MouseButtonEventArgs e)
+    {
+        if (DataContext is MappingViewModel vm) vm.SelectedTrigger = ButtonTrigger.LongPress;
+    }
+
+    private void SelectDoubleClickFromStatus(object sender, MouseButtonEventArgs e)
+    {
+        if (DataContext is MappingViewModel vm) vm.SelectedTrigger = ButtonTrigger.DoubleClick;
+    }
 }

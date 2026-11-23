@@ -10,15 +10,15 @@ namespace RemoteBuddy.Tests;
 
 public class ChromecastEtwTests
 {
-    private static byte[] CreateAclPacket(byte opcode, ushort attrHandle, byte[] payload)
+    private static byte[] CreateAclPacket(byte opcode, ushort attrHandle, byte[] payload, ushort connectionHandle = 0x0040)
     {
         ushort l2capLen = (ushort)(3 + payload.Length);
         ushort aclDataLen = (ushort)(4 + l2capLen);
 
         byte[] packet = new byte[4 + 4 + 3 + payload.Length];
-        // ACL Header: handle (0x0040) | PB=2 (first non-flushable) = 0x2040
-        packet[0] = 0x40;
-        packet[1] = 0x20;
+        // ACL Header: handle | PB=2 (first non-flushable) = 0x2000 | handle
+        packet[0] = (byte)(connectionHandle & 0xFF);
+        packet[1] = (byte)(0x20 | ((connectionHandle >> 8) & 0x0F));
         // Total ACL Data Length
         packet[2] = (byte)(aclDataLen & 0xFF);
         packet[3] = (byte)((aclDataLen >> 8) & 0xFF);
@@ -64,6 +64,159 @@ public class ChromecastEtwTests
         Assert.True(success);
         Assert.True(isDown);
         Assert.Equal(expected, button);
+    }
+
+    [Theory]
+    [InlineData(0x03, RemoteButton.Up)]
+    [InlineData(0x04, RemoteButton.Down)]
+    [InlineData(0x05, RemoteButton.Left)]
+    [InlineData(0x06, RemoteButton.Right)]
+    [InlineData(0x07, RemoteButton.Ok)]
+    [InlineData(0x0A, RemoteButton.Home)]
+    [InlineData(0x0B, RemoteButton.Back)]
+    public void TryParseAclPacket_G9N9N3ByteReport_ReturnsCorrectButton(byte code, RemoteButton expected)
+    {
+        // G9N9N Report ID 1: [0x01, code, 0x00]
+        byte[] payload = [0x01, code, 0x00];
+        byte[] packet = CreateAclPacket(0x1B, 0x0029, payload);
+
+        bool success = ChromecastEtwReceiver.TryParseAclPacket(packet, out var button, out bool isDown, EtwProtocolKind.GoogleG9N9N);
+
+        Assert.True(success);
+        Assert.True(isDown);
+        Assert.Equal(expected, button);
+    }
+
+    [Fact]
+    public void TryParseAclPacket_G9N9N3ByteRelease_ReturnsNoneAndNotDown()
+    {
+        byte[] payload = [0x01, 0x00, 0x00];
+        byte[] packet = CreateAclPacket(0x1B, 0x0029, payload);
+
+        bool success = ChromecastEtwReceiver.TryParseAclPacket(packet, out var button, out bool isDown, EtwProtocolKind.GoogleG9N9N);
+
+        Assert.True(success);
+        Assert.False(isDown);
+        Assert.Equal(RemoteButton.None, button);
+    }
+
+    [Theory]
+    [InlineData(0x00F1, RemoteButton.Back)]
+    [InlineData(0x0080, RemoteButton.VolumeUp)]
+    [InlineData(0x0081, RemoteButton.VolumeDown)]
+    [InlineData(0x004A, RemoteButton.Home)]
+    [InlineData(0x0065, RemoteButton.Menu)]
+    [InlineData(0x0028, RemoteButton.Ok)]
+    [InlineData(0x0052, RemoteButton.Up)]
+    [InlineData(0x0051, RemoteButton.Down)]
+    [InlineData(0x0050, RemoteButton.Left)]
+    [InlineData(0x004F, RemoteButton.Right)]
+    public void TryParseAclPacket_Xiaomi3ByteReport_ReturnsCorrectButton(ushort usage, RemoteButton expected)
+    {
+        byte[] payload = [0x01, (byte)(usage & 0xFF), (byte)((usage >> 8) & 0xFF)];
+        byte[] packet = CreateAclPacket(0x1B, 0x002B, payload);
+
+        bool success = ChromecastEtwReceiver.TryParseAclPacket(packet, out var button, out bool isDown, EtwProtocolKind.Xiaomi);
+
+        Assert.True(success);
+        Assert.True(isDown);
+        Assert.Equal(expected, button);
+    }
+
+    [Theory]
+    [InlineData(0x0224, RemoteButton.Back)]
+    [InlineData(0x00E9, RemoteButton.VolumeUp)]
+    [InlineData(0x00EA, RemoteButton.VolumeDown)]
+    public void TryParseAclPacket_Xiaomi2ByteReport_ReturnsCorrectButton(ushort usage, RemoteButton expected)
+    {
+        byte[] payload = [(byte)(usage & 0xFF), (byte)((usage >> 8) & 0xFF)];
+        byte[] packet = CreateAclPacket(0x1B, 0x0058, payload);
+
+        bool success = ChromecastEtwReceiver.TryParseAclPacket(packet, out var button, out bool isDown, EtwProtocolKind.Xiaomi);
+
+        Assert.True(success);
+        Assert.True(isDown);
+        Assert.Equal(expected, button);
+    }
+
+    [Fact]
+    public void TryParseAclPacket_Xiaomi2ByteRelease_ReturnsNoneAndNotDown()
+    {
+        byte[] payload = [0x00, 0x00];
+        byte[] packet = CreateAclPacket(0x1B, 0x0058, payload);
+
+        bool success = ChromecastEtwReceiver.TryParseAclPacket(packet, out var button, out bool isDown, EtwProtocolKind.Xiaomi);
+
+        Assert.True(success);
+        Assert.False(isDown);
+        Assert.Equal(RemoteButton.None, button);
+    }
+
+    [Fact]
+    public void TryParseAclPacket_XiaomiRelease_ReturnsNoneAndNotDown()
+    {
+        byte[] payload = [0x01, 0x00, 0x00];
+        byte[] packet = CreateAclPacket(0x1B, 0x002B, payload);
+
+        bool success = ChromecastEtwReceiver.TryParseAclPacket(packet, out var button, out bool isDown, EtwProtocolKind.Xiaomi);
+
+        Assert.True(success);
+        Assert.False(isDown);
+        Assert.Equal(RemoteButton.None, button);
+    }
+
+    [Fact]
+    public void TryParseAclPacket_AtvvAudioSyncOnNonHidAttribute_DoesNotDecodeAsButton()
+    {
+        // Reviewer reproduction: ATVV audio-sync payload 0A 00 00 00 00 52 00 on non-HID attribute (e.g. 0x003D)
+        byte[] payload = [0x0A, 0x00, 0x00, 0x00, 0x00, 0x52, 0x00];
+        byte[] packet = CreateAclPacket(0x1B, 0x003D, payload);
+
+        // When G9N9N protocol is active
+        bool g9Success = ChromecastEtwReceiver.TryParseAclPacket(packet, out var g9Button, out bool g9Down, EtwProtocolKind.GoogleG9N9N);
+        Assert.False(g9Success);
+        Assert.Equal(RemoteButton.None, g9Button);
+        Assert.False(g9Down);
+
+        // When Xiaomi protocol is active
+        bool xSuccess = ChromecastEtwReceiver.TryParseAclPacket(packet, out var xButton, out bool xDown, EtwProtocolKind.Xiaomi);
+        Assert.False(xSuccess);
+        Assert.Equal(RemoteButton.None, xButton);
+        Assert.False(xDown);
+    }
+
+    [Fact]
+    public void TryParseAclPacket_MouseMovement_DoesNotDecodeAsButton()
+    {
+        // Mouse report: Report ID 0x03, buttons=0, dX=0x52, dY=0x00
+        byte[] payload = [0x03, 0x00, 0x52, 0x00];
+        byte[] packet = CreateAclPacket(0x1B, 0x002B, payload);
+
+        bool success = ChromecastEtwReceiver.TryParseAclPacket(packet, out var button, out bool isDown, EtwProtocolKind.Xiaomi);
+        Assert.False(success);
+        Assert.Equal(RemoteButton.None, button);
+        Assert.False(isDown);
+    }
+
+    [Fact]
+    public void TryParseAclPacket_Xiaomi_RejectsAtvvAudioSyncPayload()
+    {
+        // Valid ATVV audio-sync payload: 0A 00 00 00 00 52 00
+        byte[] payload = [0x0A, 0x00, 0x00, 0x00, 0x00, 0x52, 0x00];
+
+        // On verified button attribute
+        byte[] packet1 = CreateAclPacket(0x1B, 0x002B, payload);
+        bool success1 = ChromecastEtwReceiver.TryParseAclPacket(packet1, out var button1, out bool isDown1, EtwProtocolKind.Xiaomi);
+        Assert.False(success1);
+        Assert.Equal(RemoteButton.None, button1);
+        Assert.False(isDown1);
+
+        // On non-HID attribute (e.g. 0x0012)
+        byte[] packet2 = CreateAclPacket(0x1B, 0x0012, payload);
+        bool success2 = ChromecastEtwReceiver.TryParseAclPacket(packet2, out var button2, out bool isDown2, EtwProtocolKind.Xiaomi);
+        Assert.False(success2);
+        Assert.Equal(RemoteButton.None, button2);
+        Assert.False(isDown2);
     }
 
     [Fact]
@@ -215,6 +368,54 @@ public class ChromecastEtwTests
         receiver.ProcessPacket(2, [0x05, 0x04, 0x00, 0x40, 0x00, 0x13]);
         receiver.ProcessPacket(3, press);
         Assert.Equal(2, edges.Count);
+    }
+
+    [Fact]
+    public void ProcessPacket_ProbeIsolation_RejectsOtherConnections()
+    {
+        using var receiver = new ChromecastEtwReceiver();
+        receiver.SetSourceProbe(new Guid("00112233-4455-6677-8899-aabbccddeeff"));
+        var edges = new List<(RemoteButton, bool)>();
+        receiver.ButtonEvent += (button, isDown) => edges.Add((button, isDown));
+
+        // Probing target device on connection 0x0040
+        byte[] request = CreateAclPacket(0x06, 0x0001,
+            [0xFF, 0xFF, 0x00, 0x28, 0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0x00],
+            connectionHandle: 0x0040);
+        byte[] response = CreateAclPacket(0x01, 0x0106, [0x00, 0x0A], connectionHandle: 0x0040);
+
+        receiver.ProcessPacket(4, request);
+        receiver.ProcessPacket(3, response);
+
+        // A button press arrives from a DIFFERENT connection (0x0041)
+        byte[] otherPress = CreateAclPacket(0x1B, 0x0029, [0x07, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0041);
+        receiver.ProcessPacket(3, otherPress);
+
+        // Must NOT bind or dispatch from connection 0x0041
+        Assert.Empty(edges);
+
+        // A button press arrives from the PROBED connection (0x0040)
+        byte[] matchingPress = CreateAclPacket(0x1B, 0x0029, [0x07, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0040);
+        receiver.ProcessPacket(3, matchingPress);
+
+        // Must bind and dispatch from connection 0x0040
+        Assert.Equal(new[] { (RemoteButton.Ok, true) }, edges);
+    }
+
+    [Fact]
+    public void ProcessPacket_WithoutProbe_AutoBindsOnVerifiedButtonReport()
+    {
+        using var receiver = new ChromecastEtwReceiver();
+        var edges = new List<(RemoteButton, bool)>();
+        receiver.ButtonEvent += (button, isDown) => edges.Add((button, isDown));
+
+        byte[] press = CreateAclPacket(0x1B, 0x0029, [0x01, 0x07, 0x00]); // G9N9N Ok
+        byte[] release = CreateAclPacket(0x1B, 0x0029, [0x01, 0x00, 0x00]);
+
+        receiver.ProcessPacket(3, press);
+        receiver.ProcessPacket(3, release);
+
+        Assert.Equal(new[] { (RemoteButton.Ok, true), (RemoteButton.Ok, false) }, edges);
     }
 
     [Fact]

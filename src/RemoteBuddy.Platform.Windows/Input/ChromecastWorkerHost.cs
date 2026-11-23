@@ -17,9 +17,9 @@ public static class ChromecastWorkerHost
     public const byte MsgTypeButtonEvent = 0x01;
     public const byte MsgTypeTruncatedDetected = 0x02;
 
-    public static void RunWorker(string pipeName, Guid marker)
+    public static void RunWorker(string pipeName, Guid marker, EtwProtocolKind protocolKind = EtwProtocolKind.GoogleG9N9N)
     {
-        AppLogger.Info($"ChromecastWorkerHost starting for pipe '{pipeName}' (PID: {Environment.ProcessId})", "ChromecastWorkerHost");
+        AppLogger.Info($"ChromecastWorkerHost starting for pipe '{pipeName}' (PID: {Environment.ProcessId}, Protocol: {protocolKind})", "ChromecastWorkerHost");
 
         try
         {
@@ -66,7 +66,7 @@ public static class ChromecastWorkerHost
                 }
             };
 
-            if (!receiver.Start(marker))
+            if (!receiver.Start(marker, protocolKind))
             {
                 AppLogger.Error("ChromecastWorkerHost: receiver.Start() failed", component: "ChromecastWorkerHost");
                 // Notify parent that startup failed (0x00)
