@@ -82,7 +82,7 @@ public class ChromecastEtwTests
         byte[] payload = [0x01, (byte)(usage & 0xFF), (byte)((usage >> 8) & 0xFF)];
         byte[] packet = CreateAclPacket(0x1B, 0x002B, payload);
 
-        bool success = ChromecastEtwReceiver.TryParseAclPacket(packet, out var button, out bool isDown);
+        bool success = ChromecastEtwReceiver.TryParseAclPacket(packet, out var button, out bool isDown, EtwProtocolKind.Xiaomi);
 
         Assert.True(success);
         Assert.True(isDown);
@@ -95,11 +95,44 @@ public class ChromecastEtwTests
         byte[] payload = [0x01, 0x00, 0x00];
         byte[] packet = CreateAclPacket(0x1B, 0x002B, payload);
 
-        bool success = ChromecastEtwReceiver.TryParseAclPacket(packet, out var button, out bool isDown);
+        bool success = ChromecastEtwReceiver.TryParseAclPacket(packet, out var button, out bool isDown, EtwProtocolKind.Xiaomi);
 
         Assert.True(success);
         Assert.False(isDown);
         Assert.Equal(RemoteButton.None, button);
+    }
+
+    [Fact]
+    public void TryParseAclPacket_AtvvAudioSyncOnNonHidAttribute_DoesNotDecodeAsButton()
+    {
+        // Reviewer reproduction: ATVV audio-sync payload 0A 00 00 00 00 52 00 on non-HID attribute (e.g. 0x003D)
+        byte[] payload = [0x0A, 0x00, 0x00, 0x00, 0x00, 0x52, 0x00];
+        byte[] packet = CreateAclPacket(0x1B, 0x003D, payload);
+
+        // When G9N9N protocol is active
+        bool g9Success = ChromecastEtwReceiver.TryParseAclPacket(packet, out var g9Button, out bool g9Down, EtwProtocolKind.GoogleG9N9N);
+        Assert.False(g9Success);
+        Assert.Equal(RemoteButton.None, g9Button);
+        Assert.False(g9Down);
+
+        // When Xiaomi protocol is active
+        bool xSuccess = ChromecastEtwReceiver.TryParseAclPacket(packet, out var xButton, out bool xDown, EtwProtocolKind.Xiaomi);
+        Assert.False(xSuccess);
+        Assert.Equal(RemoteButton.None, xButton);
+        Assert.False(xDown);
+    }
+
+    [Fact]
+    public void TryParseAclPacket_MouseMovement_DoesNotDecodeAsButton()
+    {
+        // Mouse report: Report ID 0x03, buttons=0, dX=0x52, dY=0x00
+        byte[] payload = [0x03, 0x00, 0x52, 0x00];
+        byte[] packet = CreateAclPacket(0x1B, 0x002B, payload);
+
+        bool success = ChromecastEtwReceiver.TryParseAclPacket(packet, out var button, out bool isDown, EtwProtocolKind.Xiaomi);
+        Assert.False(success);
+        Assert.Equal(RemoteButton.None, button);
+        Assert.False(isDown);
     }
 
     [Fact]

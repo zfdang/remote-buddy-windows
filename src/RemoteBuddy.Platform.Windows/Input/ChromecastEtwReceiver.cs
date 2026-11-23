@@ -10,6 +10,13 @@ using RemoteBuddy.Core.Protocols;
 
 namespace RemoteBuddy.Platform.Windows.Input;
 
+public enum EtwProtocolKind
+{
+    GoogleG9N9N = 0,
+    Xiaomi = 1,
+    T1Remote = 2
+}
+
 /// <summary>
 /// Captures Chromecast with Google TV Voice Remote (G9N9N) button reports in real time
 /// directly from the Windows Bluetooth driver (BthPort) via an ETW trace session.
@@ -26,6 +33,13 @@ public sealed class ChromecastEtwReceiver : IDisposable
     private const byte AclReceived = 3;
     private const byte AclSent = 4;
     private const ushort G9N9NInputAttribute = 0x0029;
+    public static readonly ushort[] G9N9NVerifiedAttributes = [G9N9NInputAttribute, 0x0025, 0x0028, 0x002D];
+    public static readonly ushort[] XiaomiVerifiedAttributes = [0x002B, 0x0056, 0x0058, 0x0059, 0x005B, 0x005E];
+    private static readonly HashSet<ushort> _g9n9nAttributesSet = [G9N9NInputAttribute, 0x0025, 0x0028, 0x002D];
+    private static readonly HashSet<ushort> _xiaomiAttributesSet = [0x002B, 0x0056, 0x0058, 0x0059, 0x005B, 0x005E];
+
+    private EtwProtocolKind _protocolKind = EtwProtocolKind.GoogleG9N9N;
+    private IReadOnlySet<ushort>? _verifiedAttributes;
     private readonly object _lock = new();
     private byte[] _sourceRequest = [];
     private ushort? _probeConnection;
@@ -66,10 +80,12 @@ public sealed class ChromecastEtwReceiver : IDisposable
         }
     }
 
-    public bool Start(Guid marker)
+    public bool Start(Guid marker, EtwProtocolKind protocolKind = EtwProtocolKind.GoogleG9N9N, IEnumerable<ushort>? verifiedAttributes = null)
     {
         lock (_lock)
         {
+            _protocolKind = protocolKind;
+            _verifiedAttributes = verifiedAttributes != null ? new HashSet<ushort>(verifiedAttributes) : null;
             if (_isRunning) return true;
             SetSourceProbe(marker);
 
@@ -176,6 +192,16 @@ public sealed class ChromecastEtwReceiver : IDisposable
 
             AppLogger.Info($"Chromecast ETW receiver successfully started (Session={_sessionName})", "ChromecastEtwReceiver");
             return true;
+        }
+    }
+
+    public void SetProtocol(EtwProtocolKind protocolKind, IEnumerable<ushort>? verifiedAttributes = null)
+    {
+        lock (_lock)
+        {
+            _protocolKind = protocolKind;
+            _verifiedAttributes = verifiedAttributes != null ? new HashSet<ushort>(verifiedAttributes) : null;
+            AppLogger.Info($"ETW receiver protocol set to {protocolKind}", "ChromecastEtwReceiver");
         }
     }
 
@@ -317,7 +343,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
         }
 
         if (_boundConnection != connection) return;
-        if (TryParseButtonReport(att, incomplete, out var button, out bool isDown, out bool truncated))
+        if (TryParseButtonReport(att, incomplete, _protocolKind, out var button, out bool isDown, out bool truncated, _verifiedAttributes))
             DispatchButtonEvent(button, isDown);
         else if (truncated)
         {
@@ -353,18 +379,18 @@ public sealed class ChromecastEtwReceiver : IDisposable
         return incomplete ? l2capLength == 11 && att.Length == 3 : !att.IsEmpty;
     }
 
-    public static bool TryParseAclPacket(ReadOnlySpan<byte> packet, out RemoteButton button, out bool isDown) =>
-        TryParseAclPacket(packet, out button, out isDown, out _);
+    public static bool TryParseAclPacket(ReadOnlySpan<byte> packet, out RemoteButton button, out bool isDown, EtwProtocolKind protocolKind = EtwProtocolKind.GoogleG9N9N) =>
+        TryParseAclPacket(packet, out button, out isDown, out _, protocolKind);
 
-    public static bool TryParseAclPacket(ReadOnlySpan<byte> packet, out RemoteButton button, out bool isDown, out bool truncated)
+    public static bool TryParseAclPacket(ReadOnlySpan<byte> packet, out RemoteButton button, out bool isDown, out bool truncated, EtwProtocolKind protocolKind = EtwProtocolKind.GoogleG9N9N, IReadOnlySet<ushort>? verifiedAttributes = null)
     {
         button = RemoteButton.None;
         isDown = truncated = false;
         return TryGetAttPacket(packet, out _, out var att, out bool incomplete) &&
-            TryParseButtonReport(att, incomplete, out button, out isDown, out truncated);
+            TryParseButtonReport(att, incomplete, protocolKind, out button, out isDown, out truncated, verifiedAttributes);
     }
 
-    private static bool TryParseButtonReport(ReadOnlySpan<byte> att, bool incomplete, out RemoteButton button, out bool isDown, out bool truncated)
+    private static bool TryParseButtonReport(ReadOnlySpan<byte> att, bool incomplete, EtwProtocolKind protocol, out RemoteButton button, out bool isDown, out bool truncated, IReadOnlySet<ushort>? customAttributes = null)
     {
         button = RemoteButton.None;
         isDown = truncated = false;
@@ -372,44 +398,96 @@ public sealed class ChromecastEtwReceiver : IDisposable
 
         ushort attribute = BinaryPrimitives.ReadUInt16LittleEndian(att[1..]);
         var report = att[3..];
-        if (incomplete)
+
+        if (protocol == EtwProtocolKind.GoogleG9N9N)
         {
-            truncated = attribute == G9N9NInputAttribute && report.IsEmpty;
+            var allowed = customAttributes ?? _g9n9nAttributesSet;
+            if (!allowed.Contains(attribute)) return false;
+
+            if (incomplete)
+            {
+                truncated = attribute == G9N9NInputAttribute && report.IsEmpty;
+                return false;
+            }
+
+            if (attribute == G9N9NInputAttribute && report is [_, 0, 0, 0, 0, 0, 0, 0])
+            {
+                byte code = report[0];
+                if (code == 0) return true;
+                if (code > G9N9NProtocol.IndexedConsumerUsages.Length) return false;
+                isDown = G9N9NProtocol.ConsumerButtons.TryGetValue(G9N9NProtocol.IndexedConsumerUsages[code - 1], out button);
+                return isDown;
+            }
+
+            if ((attribute is (G9N9NInputAttribute or 0x0025 or 0x0028 or 0x002D)) && report.Length == 2)
+            {
+                ushort usage = BinaryPrimitives.ReadUInt16LittleEndian(report);
+                if (usage == 0) return true;
+                if (G9N9NProtocol.ConsumerButtons.TryGetValue(usage, out button))
+                {
+                    isDown = true;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+        else if (protocol == EtwProtocolKind.Xiaomi)
+        {
+            if (incomplete) return false;
+
+            if (customAttributes != null)
+            {
+                if (!customAttributes.Contains(attribute)) return false;
+            }
+            else if (!IsXiaomiButtonAttribute(attribute))
+            {
+                return false;
+            }
+
+            // Discard mouse movements and non-button reports: must be Report ID 1 (keyboard) or 2 (consumer)
+            if (report.Length is >= 3 and <= 9 && (report[0] is 0x01 or 0x02) && XiaomiProtocol.TryParseReport(report, out var xiaomiButtons))
+            {
+                if (xiaomiButtons.Count > 0)
+                {
+                    button = xiaomiButtons[0];
+                    isDown = true;
+                    return true;
+                }
+                isDown = false;
+                return true;
+            }
+
+            return false;
+        }
+        else if (protocol == EtwProtocolKind.T1Remote)
+        {
+            if (incomplete) return false;
+            if (customAttributes != null && !customAttributes.Contains(attribute)) return false;
+
+            if (report.Length is >= 3 and <= 9 && (report[0] is 0x01 or 0x02 or 0x5A) &&
+                T1RemoteProtocol.TryParseReport(report, out var t1Buttons, out _))
+            {
+                if (t1Buttons.Count > 0)
+                {
+                    button = t1Buttons[0];
+                    isDown = true;
+                    return true;
+                }
+                isDown = false;
+                return true;
+            }
             return false;
         }
 
-        if (attribute == G9N9NInputAttribute && report is [_, 0, 0, 0, 0, 0, 0, 0])
-        {
-            byte code = report[0];
-            if (code == 0) return true;
-            if (code > G9N9NProtocol.IndexedConsumerUsages.Length) return false;
-            isDown = G9N9NProtocol.ConsumerButtons.TryGetValue(G9N9NProtocol.IndexedConsumerUsages[code - 1], out button);
-            return isDown;
-        }
+        return false;
+    }
 
-        if ((attribute is (G9N9NInputAttribute or 0x0025 or 0x0028 or 0x002D)) && report.Length == 2)
-        {
-            ushort usage = BinaryPrimitives.ReadUInt16LittleEndian(report);
-            if (usage == 0) return true;
-            if (G9N9NProtocol.ConsumerButtons.TryGetValue(usage, out button))
-            {
-                isDown = true;
-                return true;
-            }
-        }
-
-        if (report.Length <= 8 && XiaomiProtocol.TryParseReport(report, out var xiaomiButtons))
-        {
-            if (xiaomiButtons.Count > 0)
-            {
-                button = xiaomiButtons[0];
-                isDown = true;
-                return true;
-            }
-            isDown = false;
-            return true;
-        }
-
+    private static bool IsXiaomiButtonAttribute(ushort attribute)
+    {
+        if (_xiaomiAttributesSet.Contains(attribute)) return true;
+        // Range 0x0055..0x0070 corresponds to Xiaomi HID over GATT service instance
+        if (attribute is >= 0x0055 and <= 0x0070) return true;
         return false;
     }
 

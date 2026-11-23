@@ -125,9 +125,27 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             addr = ActiveOnboardingVm.SelectedDevice.BluetoothAddress;
         }
-        if (addr == 0 || _chromecastButtonReceiver.IsRunning) return;
+        if (addr == 0) return;
+
+        var name = ConnectedDeviceName;
+        var dev = _configService.Current.Devices.FirstOrDefault(d =>
+            (addr != 0 && d.BluetoothAddress == addr) ||
+            d.Id == _configService.Current.SelectedDeviceId);
+
+        var protocolKind = (XiaomiProtocol.IsCandidate(name) || (dev != null && dev.IsXiaomi) || (ActiveOnboardingVm?.SelectedDevice != null && ActiveOnboardingVm.SelectedDevice.IsXiaomi))
+            ? EtwProtocolKind.Xiaomi
+            : ((T1RemoteProtocol.IsCandidate(name) || (dev != null && dev.IsT1) || (ActiveOnboardingVm?.SelectedDevice != null && ActiveOnboardingVm.SelectedDevice.IsT1))
+                ? EtwProtocolKind.T1Remote
+                : EtwProtocolKind.GoogleG9N9N);
+
+        if (_chromecastButtonReceiver.IsRunning)
+        {
+            _chromecastButtonReceiver.SetProtocol(protocolKind);
+            return;
+        }
+
         var marker = Guid.NewGuid();
-        if (_chromecastButtonReceiver.Start(marker))
+        if (_chromecastButtonReceiver.Start(marker, protocolKind))
             _ = _bluetoothManager.ProbeButtonSourceAsync(marker);
     }
 
@@ -539,37 +557,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             MappingVm.NotifyHardwarePress(button);
         }
-    }
-
-    public bool HandleAppCommandButton(RemoteButton button)
-    {
-        AppLogger.Debug($"WM_APPCOMMAND received for button: {button}", "MainViewModel");
-        if (ActiveOnboardingVm != null)
-        {
-            OnRawButtonEvent(IntPtr.Zero, button, true);
-            OnRawButtonEvent(IntPtr.Zero, button, false);
-            return true;
-        }
-
-        if (ActivePageName == "Mapping")
-        {
-            ShowMappingPress(button);
-            return true;
-        }
-
-        if (MappingVm.CustomMappingEnabled)
-        {
-            var selectedDevice = _configService.Current.Devices.FirstOrDefault(d => d.Id == _configService.Current.SelectedDeviceId);
-            var mapping = selectedDevice?.Mappings?.FirstOrDefault(m => m.Button == button);
-            if (mapping != null && (mapping.ClickAction != ButtonActionType.None || mapping.LongPressAction != ButtonActionType.None || mapping.DoubleClickAction != ButtonActionType.None))
-            {
-                OnRawButtonEvent(IntPtr.Zero, button, true);
-                OnRawButtonEvent(IntPtr.Zero, button, false);
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private void ReleaseHeldVoiceShortcut()

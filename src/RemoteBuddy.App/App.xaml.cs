@@ -29,7 +29,12 @@ public partial class App : Application
                 i + 2 < e.Args.Length && Guid.TryParse(e.Args[i + 2], out var marker))
             {
                 string pipeName = e.Args[i + 1];
-                ChromecastWorkerHost.RunWorker(pipeName, marker);
+                var protocolKind = EtwProtocolKind.GoogleG9N9N;
+                if (i + 3 < e.Args.Length && Enum.TryParse<EtwProtocolKind>(e.Args[i + 3], out var parsedKind))
+                {
+                    protocolKind = parsedKind;
+                }
+                ChromecastWorkerHost.RunWorker(pipeName, marker, protocolKind);
                 Shutdown(0);
                 return;
             }

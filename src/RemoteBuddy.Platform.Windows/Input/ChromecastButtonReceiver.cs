@@ -48,16 +48,20 @@ public sealed class ChromecastButtonReceiver : IDisposable
         AppLogger.Warn("ChromecastButtonReceiver: Worker disconnected; status restored to stopped and ready for retry", "ChromecastButtonReceiver");
     }
 
-    public bool Start(Guid marker)
+    public bool Start(Guid marker, EtwProtocolKind protocolKind = EtwProtocolKind.GoogleG9N9N)
     {
         lock (_lock)
         {
-            if (IsRunning) return true;
+            if (IsRunning)
+            {
+                SetProtocol(protocolKind);
+                return true;
+            }
 
             // 1. If elevated or permitted, attempt in-process ETW session first
             if (IsAdministrator())
             {
-                if (_etwReceiver.Start(marker))
+                if (_etwReceiver.Start(marker, protocolKind))
                 {
                     AppLogger.Info("Chromecast buttons running via in-process ETW receiver", "ChromecastButtonReceiver");
                     return true;
@@ -66,7 +70,7 @@ public sealed class ChromecastButtonReceiver : IDisposable
             else
             {
                 // Attempt in-process trace (e.g. member of Performance Log Users group)
-                if (_etwReceiver.Start(marker))
+                if (_etwReceiver.Start(marker, protocolKind))
                 {
                     AppLogger.Info("Chromecast buttons running via in-process ETW receiver (non-admin)", "ChromecastButtonReceiver");
                     return true;
@@ -80,7 +84,7 @@ public sealed class ChromecastButtonReceiver : IDisposable
 
                 // 2. Fall back to elevated helper worker via UAC
                 AppLogger.Info("In-process ETW unavailable; activating elevated worker process", "ChromecastButtonReceiver");
-                if (_workerClient.Start(marker))
+                if (_workerClient.Start(marker, protocolKind))
                 {
                     AppLogger.Info("Chromecast buttons running via elevated worker process", "ChromecastButtonReceiver");
                     return true;
@@ -88,6 +92,14 @@ public sealed class ChromecastButtonReceiver : IDisposable
             }
 
             return false;
+        }
+    }
+
+    public void SetProtocol(EtwProtocolKind protocolKind)
+    {
+        lock (_lock)
+        {
+            _etwReceiver.SetProtocol(protocolKind);
         }
     }
 
