@@ -187,8 +187,11 @@ public class G9N9NSmartToggleTests
         Assert.NotEqual(G9N9NSmartToggleSession.Phase.HandsFreeActive, manager.SmartTogglePhaseForTest);
     }
 
-    [Fact]
-    public void AudioStop_HostCloseReason0x00_DoesNotTriggerSmartToggleReopen()
+    [Theory]
+    [InlineData((byte)0x00, G9N9NSmartToggleSession.Phase.Idle)]
+    [InlineData((byte)0x02, G9N9NSmartToggleSession.Phase.AwaitingReopen)]
+    public void AudioStop_OnlyPhysicalReleaseTriggersSmartToggleReopen(
+        byte reason, G9N9NSmartToggleSession.Phase expected)
     {
         using var manager = new WinRtBluetoothManager();
         manager.ConnectedDeviceNameOverride = "Chromecast Remote";
@@ -199,16 +202,9 @@ public class G9N9NSmartToggleTests
             sessionId: 103,
             smartTogglePhase: G9N9NSmartToggleSession.Phase.PhysicalPressed);
 
-        // Host close ACK (Reason=0x00) must NOT initiate AwaitingReopen
-        manager.HandleControlPacketForTest([ATVVProtocol.OpcodeAudioStop, 0x00]);
-        Assert.Equal(G9N9NSmartToggleSession.Phase.Idle, manager.SmartTogglePhaseForTest);
-
-        // Physical release before 0.7s (Reason=0x02) MUST initiate AwaitingReopen
-        manager.SetSessionStateForTest(
-            BluetoothSessionState.Streaming,
-            sessionId: 103,
-            smartTogglePhase: G9N9NSmartToggleSession.Phase.PhysicalPressed);
-        manager.HandleControlPacketForTest([ATVVProtocol.OpcodeAudioStop, 0x02]);
-        Assert.Equal(G9N9NSmartToggleSession.Phase.AwaitingReopen, manager.SmartTogglePhaseForTest);
+        // Each reason gets a fresh manager. The host-close path drains
+        // asynchronously and can reset a later session on the same test instance.
+        manager.HandleControlPacketForTest([ATVVProtocol.OpcodeAudioStop, reason]);
+        Assert.Equal(expected, manager.SmartTogglePhaseForTest);
     }
 }
