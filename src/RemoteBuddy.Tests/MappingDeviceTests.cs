@@ -27,11 +27,30 @@ public class MappingDeviceTests
         Assert.Equal(ButtonActionType.KeyboardShortcut, power.ClickAction);
         Assert.Equal("Backspace", power.ClickShortcut);
 
-        var google = RemoteDevice.CreateDefaultMappings(RemoteModelType.GoogleG9N9N);
+        var google = RemoteDevice.CreateDefaultMappings(RemoteModelType.GoogleGY3LE);
         Assert.Equal("Alt+Tab", google.Single(m => m.Button == RemoteButton.Home).ClickShortcut);
         Assert.Equal("Apps", google.Single(m => m.Button == RemoteButton.Menu).ClickShortcut);
         Assert.Equal(ButtonActionType.None, google.Single(m => m.Button == RemoteButton.LiveTv).ClickAction);
         Assert.Equal(ButtonActionType.None, google.Single(m => m.Button == RemoteButton.Power).ClickAction);
+    }
+
+    [Fact]
+    public void G9N9NDefaultsAssignActionsToThePhysicalButtons()
+    {
+        var mappings = RemoteDevice.CreateDefaultMappings(RemoteModelType.GoogleG9N9N);
+        foreach (var (button, shortcut) in new[] {
+            (RemoteButton.Power, "Backspace"), (RemoteButton.Home, "Win+Tab"),
+            (RemoteButton.Back, "Escape"), (RemoteButton.YouTube, "Ctrl+R"), (RemoteButton.Netflix, "Ctrl+W")
+        })
+        {
+            var mapping = mappings.Single(m => m.Button == button);
+            Assert.Equal(new ButtonAssignment(ButtonActionType.KeyboardShortcut, shortcut),
+                mapping.GetAssignment(ButtonTrigger.SingleClick));
+        }
+
+        var input = mappings.Single(m => m.Button == RemoteButton.Input);
+        Assert.Equal(new ButtonAssignment(ButtonActionType.MediaControl, Media: MediaCommand.PlayPause),
+            input.GetAssignment(ButtonTrigger.SingleClick));
     }
 
     [Fact]

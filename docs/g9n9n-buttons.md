@@ -22,4 +22,17 @@ ETW 解码接受属性 `0x0029` 上首字节为索引、其余七字节为零的
 
 如果 ETW 只交付了 `0x0029` 的报告头，向导可提示检测到活动但没有键码。应用不会据此触发映射。语音键使用独立的 ATVV GATT 路径，普通键的 ETW 可用性不影响语音协议握手。
 
+## 默认单击动作
+
+| 实体键 | 默认动作 |
+| --- | --- |
+| 电源 | Backspace |
+| 输入源 | 媒体播放／暂停 |
+| 主页 | Win+Tab |
+| 返回 | Esc |
+| YouTube | Ctrl+R |
+| Netflix | Ctrl+W |
+
+新设备及「恢复默认」使用这套配置。已保存的映射可在「按键映射」中单独编辑。
+
 参见 [Windows 按键采集与隔离](windows-remote-input.md) 和 [G9N9N 历史排查](chromecast-g9n9n-button-handling.md)。实现见 [G9N9N 协议](../src/RemoteBuddy.Core/Protocols/G9N9NProtocol.cs) 和 [ETW 接收器](../src/RemoteBuddy.Platform.Windows/Input/ChromecastEtwReceiver.cs)。

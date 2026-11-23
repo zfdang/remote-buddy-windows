@@ -1,4 +1,4 @@
-﻿// Copyright (C) 2026 Remote Buddy Contributors
+// Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
 using System.Text.Json.Serialization;
@@ -199,9 +199,10 @@ public partial class RemoteDevice : ObservableObject
         Add(RemoteButton.Right, ButtonActionType.KeyboardShortcut, shortcut: "Right");
         Add(RemoteButton.Ok, ButtonActionType.KeyboardShortcut, shortcut: "Enter");
         Add(RemoteButton.Back, ButtonActionType.KeyboardShortcut, shortcut: "Escape");
-        bool isGoogle = type is RemoteModelType.GoogleG9N9N or RemoteModelType.GoogleGY3LE;
+        bool isG9N9N = type == RemoteModelType.GoogleG9N9N;
+        bool isGoogle = isG9N9N || type == RemoteModelType.GoogleGY3LE;
         bool isRc003 = type == RemoteModelType.XiaomiRC003;
-        Add(RemoteButton.Home, ButtonActionType.KeyboardShortcut, shortcut: isGoogle ? "Alt+Tab" : "Win+Tab");
+        Add(RemoteButton.Home, ButtonActionType.KeyboardShortcut, shortcut: type == RemoteModelType.GoogleGY3LE ? "Alt+Tab" : "Win+Tab");
         Add(RemoteButton.VolumeUp, ButtonActionType.MediaControl, media: MediaCommand.VolumeUp);
         Add(RemoteButton.VolumeDown, ButtonActionType.MediaControl, media: MediaCommand.VolumeDown);
         Add(RemoteButton.Mute, ButtonActionType.MediaControl, media: MediaCommand.Mute);
@@ -210,14 +211,18 @@ public partial class RemoteDevice : ObservableObject
             shortcut: isRc003 ? null : "Apps");
         Add(RemoteButton.LiveTv, isRc003 ? ButtonActionType.MediaControl : ButtonActionType.None,
             media: isRc003 ? MediaCommand.PlayPause : MediaCommand.None);
-        Add(RemoteButton.Power, isGoogle ? ButtonActionType.None : ButtonActionType.KeyboardShortcut,
-            shortcut: isGoogle ? null : "Backspace");
+        bool hasPowerShortcut = !isGoogle || isG9N9N;
+        Add(RemoteButton.Power, hasPowerShortcut ? ButtonActionType.KeyboardShortcut : ButtonActionType.None,
+            shortcut: hasPowerShortcut ? "Backspace" : null);
 
         if (type is RemoteModelType.GoogleG9N9N or RemoteModelType.GoogleGY3LE)
         {
-            Add(RemoteButton.YouTube, ButtonActionType.None);
-            Add(RemoteButton.Netflix, ButtonActionType.None);
-            Add(RemoteButton.Input, ButtonActionType.None);
+            Add(RemoteButton.YouTube, isG9N9N ? ButtonActionType.KeyboardShortcut : ButtonActionType.None,
+                shortcut: isG9N9N ? "Ctrl+R" : null);
+            Add(RemoteButton.Netflix, isG9N9N ? ButtonActionType.KeyboardShortcut : ButtonActionType.None,
+                shortcut: isG9N9N ? "Ctrl+W" : null);
+            Add(RemoteButton.Input, isG9N9N ? ButtonActionType.MediaControl : ButtonActionType.None,
+                media: isG9N9N ? MediaCommand.PlayPause : MediaCommand.None);
         }
 
         return list;
