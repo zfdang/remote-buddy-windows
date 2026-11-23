@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 using RemoteBuddy.Core.Models;
+using RemoteBuddy.Core.Bluetooth;
 using RemoteBuddy.Core.Protocols;
 using RemoteBuddy.Platform.Windows.Bluetooth;
 using Xunit;
@@ -130,5 +131,84 @@ public class G9N9NSmartToggleTests
         });
 
         Assert.Empty(exceptions);
+    }
+
+    [Fact]
+    public async Task Draining_TrailingStartSearchAndHostAudioStop_DoesNotTriggerPhantomReopenOrLockout()
+    {
+        using var manager = new WinRtBluetoothManager();
+        manager.ConnectedDeviceNameOverride = "Chromecast Remote";
+        manager.VoiceButtonMode = G9N9NVoiceButtonMode.SmartToggle;
+        manager.SetSessionStateForTest(
+            BluetoothSessionState.Streaming,
+            sessionId: 0,
+            smartTogglePhase: G9N9NSmartToggleSession.Phase.HandsFreeActive);
+
+        // Second voice press initiates stop: AudioStart(SessionId=104) while HandsFreeActive -> Closing & Draining
+        manager.HandleControlPacketForTest([ATVVProtocol.OpcodeAudioStart, 0x03, 0x02, 104]);
+        Assert.Equal(BluetoothSessionState.Draining, manager.SessionStateForTest);
+        Assert.Equal(G9N9NSmartToggleSession.Phase.Closing, manager.SmartTogglePhaseForTest);
+
+        // 1ms later, StartSearch(0x08) arrives while Draining: must NOT re-arm PhysicalPressed
+        manager.HandleControlPacketForTest([ATVVProtocol.OpcodeStartSearch]);
+        Assert.Equal(G9N9NSmartToggleSession.Phase.Closing, manager.SmartTogglePhaseForTest);
+
+        // Host close ACK AudioStop(Reason=0x00) arrives while Draining: must NOT trigger AwaitingReopen
+        manager.HandleControlPacketForTest([ATVVProtocol.OpcodeAudioStop, 0x00]);
+        Assert.Equal(G9N9NSmartToggleSession.Phase.Closing, manager.SmartTogglePhaseForTest);
+
+        // Once Draining settles to Idle, StopVoiceSessionAsync/AudioStop resets any Closing phase cleanly
+        manager.SetSessionStateForTest(BluetoothSessionState.Idle, sessionId: 0);
+        await manager.StopVoiceSessionAsync();
+        Assert.Equal(G9N9NSmartToggleSession.Phase.Idle, manager.SmartTogglePhaseForTest);
+    }
+
+    [Fact]
+    public async Task StopVoiceSessionAsync_WhenIdle_HealsStuckSmartTogglePhase()
+    {
+        using var manager = new WinRtBluetoothManager();
+        manager.ConnectedDeviceNameOverride = "Chromecast Remote";
+        manager.VoiceButtonMode = G9N9NVoiceButtonMode.SmartToggle;
+        manager.SetSessionStateForTest(
+            BluetoothSessionState.Idle,
+            sessionId: 0,
+            smartTogglePhase: G9N9NSmartToggleSession.Phase.HandsFreeActive);
+
+        bool stopped = await manager.StopVoiceSessionAsync();
+        Assert.False(stopped);
+        Assert.Equal(G9N9NSmartToggleSession.Phase.Idle, manager.SmartTogglePhaseForTest);
+
+        // Also ensure AudioStart / StartSearch while Idle never stay stuck in HandsFreeActive
+        manager.SetSessionStateForTest(
+            BluetoothSessionState.Idle,
+            sessionId: 0,
+            smartTogglePhase: G9N9NSmartToggleSession.Phase.HandsFreeActive);
+        manager.HandleControlPacketForTest([ATVVProtocol.OpcodeStartSearch]);
+        Assert.NotEqual(G9N9NSmartToggleSession.Phase.HandsFreeActive, manager.SmartTogglePhaseForTest);
+    }
+
+    [Fact]
+    public void AudioStop_HostCloseReason0x00_DoesNotTriggerSmartToggleReopen()
+    {
+        using var manager = new WinRtBluetoothManager();
+        manager.ConnectedDeviceNameOverride = "Chromecast Remote";
+        manager.VoiceButtonMode = G9N9NVoiceButtonMode.SmartToggle;
+
+        manager.SetSessionStateForTest(
+            BluetoothSessionState.Streaming,
+            sessionId: 103,
+            smartTogglePhase: G9N9NSmartToggleSession.Phase.PhysicalPressed);
+
+        // Host close ACK (Reason=0x00) must NOT initiate AwaitingReopen
+        manager.HandleControlPacketForTest([ATVVProtocol.OpcodeAudioStop, 0x00]);
+        Assert.Equal(G9N9NSmartToggleSession.Phase.Idle, manager.SmartTogglePhaseForTest);
+
+        // Physical release before 0.7s (Reason=0x02) MUST initiate AwaitingReopen
+        manager.SetSessionStateForTest(
+            BluetoothSessionState.Streaming,
+            sessionId: 103,
+            smartTogglePhase: G9N9NSmartToggleSession.Phase.PhysicalPressed);
+        manager.HandleControlPacketForTest([ATVVProtocol.OpcodeAudioStop, 0x02]);
+        Assert.Equal(G9N9NSmartToggleSession.Phase.AwaitingReopen, manager.SmartTogglePhaseForTest);
     }
 }

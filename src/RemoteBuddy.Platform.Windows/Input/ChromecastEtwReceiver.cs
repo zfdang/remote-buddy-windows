@@ -444,10 +444,9 @@ public sealed class ChromecastEtwReceiver : IDisposable
                     disconnectedAddrs ??= [];
                     disconnectedAddrs.Add(other.Source.Address);
                 }
-                bool changed = source.BoundHandle != connection;
                 source.BoundHandle = connection;
                 source.PendingHandle = null;
-                if (changed) newlyBoundAddr = source.Source.Address;
+                newlyBoundAddr = source.Source.Address;
                 AppLogger.Info($"ETW bound 0x{source.Source.Address:X12} to ACL 0x{connection:X4}", "ChromecastEtwReceiver");
             }
 
