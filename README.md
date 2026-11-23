@@ -44,6 +44,8 @@ Windows 11 已验证一只 RC003 与一只 G9N9N 共存，两只普通键各用�
 
 ## 文档
 
+- [豆包语音快捷键与 USB/IP 虚拟键盘](docs/doubao-voice-hotkeys.md)说明豆包的输入检测、设置步骤和实测结果。
+
 - [Windows 遥控器输入实现](docs/windows-remote-input.md)对照两种设备的普通键、语音信号、设备身份绑定和并发规则。
 - [小米 RC003 按键与 Windows 报告](docs/xiaomi-rc003-buttons.md)列出 Raw Input 键码、返回和音量的 ETW 报告及默认映射。
 - [G9N9N 按键与 Windows 报告](docs/g9n9n-buttons.md)列出 HID 索引、Consumer Usage、语音智能模式及默认映射。

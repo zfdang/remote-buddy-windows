@@ -40,6 +40,10 @@ public sealed record VoiceShortcutOption(string Label, string Value, bool IsCust
 
 public partial class OnboardingViewModel : ObservableObject, IDisposable
 {
+    public const string WeChatVoiceSetup = "在微信输入法设置的「语音输入」页打开「快捷键全局生效」，让语音快捷键在使用其他输入法时也生效。开启「按住说话」，让快捷键与 Remote Buddy 一致，并将麦克风选为 CABLE Output (VB-Audio Virtual Cable)。在 Remote Buddy 中选择「按住说话」。";
+
+    public const string DoubaoVoiceSetup = "在豆包输入法设置的「语音输入」页将「全局唤起语音」设为「持续模式」，让「长按模式」的快捷键与 Remote Buddy 一致，并将麦克风选为 CABLE Output (VB-Audio Virtual Cable)。以管理员身份运行 Remote Buddy，并选择「按住说话」。首次使用时会准备已签名的 USB/IP 虚拟键盘驱动。";
+
     public static IReadOnlyList<VoiceShortcutOption> VoiceShortcutOptions { get; } =
     [
         new("右 Alt (RAlt) — 豆包输入法默认", "RAlt"),
@@ -218,7 +222,16 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     private bool _hasAudioTested = false;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(InputToolSetupInstructions))]
     private TargetInputTool _selectedTool;
+
+    public string InputToolSetupInstructions => SelectedTool switch
+    {
+        TargetInputTool.WeChatInput => WeChatVoiceSetup,
+        TargetInputTool.DoubaoInput => DoubaoVoiceSetup,
+        TargetInputTool.WindowsDictation => "请将 CABLE Output 设为 Windows 默认麦克风。",
+        _ => "请在目标输入工具中将麦克风选为 CABLE Output。"
+    };
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsHoldToTalk))]
