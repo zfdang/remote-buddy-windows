@@ -24,7 +24,7 @@ public enum EtwProtocolKind
 public sealed class ChromecastEtwReceiver : IDisposable
 {
     private static readonly Guid BthPortProviderGuid = new("8a1f9517-3a8c-4a9e-a018-4f17a200f277");
-    private const string SessionNamePrefix = "RemoteBuddy_BthEtw_";
+    private const string FixedSessionName = "RemoteBuddy_BthEtw";
 
     public event Action<RemoteButton, bool>? ButtonEvent;
     public event Action? TruncatedPacketDetected;
@@ -97,7 +97,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 BthPortRegistryHelper.TryConfigure();
             }
 
-            _sessionName = SessionNamePrefix + Process.GetCurrentProcess().Id;
+            _sessionName = FixedSessionName;
             int propSize = Marshal.SizeOf<EVENT_TRACE_PROPERTIES>() + 1024;
             _propertiesBuffer = Marshal.AllocHGlobal(propSize);
 
@@ -438,8 +438,14 @@ public sealed class ChromecastEtwReceiver : IDisposable
 
         if (protocol == EtwProtocolKind.GoogleG9N9N)
         {
-            var allowed = customAttributes ?? _g9n9nAttributesSet;
-            if (!allowed.Contains(attribute)) return false;
+            if (customAttributes != null)
+            {
+                if (!customAttributes.Contains(attribute)) return false;
+            }
+            else if (!IsG9N9NButtonAttribute(attribute))
+            {
+                return false;
+            }
 
             if (incomplete)
             {
@@ -484,7 +490,11 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 return false;
             }
 
-            // Reports with Report ID: must be Report ID 1 (keyboard) or 2 (consumer), discarding mouse (3) or ATVV sync (0x0A)
+            // Exclude non-button reports: ATVV AudioSync (0x0A) and mouse movement (Report ID 3)
+            if (report.Length >= 7 && report[0] == 0x0A) return false;
+            if (report.Length >= 3 && report[0] == 0x03) return false;
+
+            // Reports with Report ID: must be Report ID 1 (keyboard) or 2 (consumer)
             bool isReportWithId = report.Length is >= 3 and <= 9 && (report[0] is 0x01 or 0x02);
             // Reports without Report ID: 2-byte consumer reports (Back 0x0224, VolumeUp 0x00E9, VolumeDown 0x00EA)
             bool isReportWithoutId = report.Length == 2;
@@ -526,11 +536,19 @@ public sealed class ChromecastEtwReceiver : IDisposable
         return false;
     }
 
+    private static bool IsG9N9NButtonAttribute(ushort attribute)
+    {
+        if (_g9n9nAttributesSet.Contains(attribute)) return true;
+        // Range 0x0018..0x0045 corresponds to G9N9N HID-over-GATT service instances
+        if (attribute is >= 0x0018 and <= 0x0045) return true;
+        return false;
+    }
+
     private static bool IsXiaomiButtonAttribute(ushort attribute)
     {
         if (_xiaomiAttributesSet.Contains(attribute)) return true;
-        // Range 0x0055..0x0070 corresponds to Xiaomi HID over GATT service instance
-        if (attribute is >= 0x0055 and <= 0x0070) return true;
+        // Range 0x0050..0x0075 corresponds to Xiaomi HID over GATT service instance
+        if (attribute is >= 0x0050 and <= 0x0075) return true;
         return false;
     }
 

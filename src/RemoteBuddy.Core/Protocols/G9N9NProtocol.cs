@@ -296,10 +296,15 @@ public static class XiaomiProtocol
         buttons = new();
         if (data.IsEmpty) return false;
 
+        // Discard mouse reports (Report ID 3) and ATVV packets (e.g. AudioSync 0x0A)
+        if (data.Length >= 3 && data[0] is 0x03 or 0x0A) return false;
+
         ReadOnlySpan<byte> slice = data;
-        // If odd length, first byte is report ID (1, 2, etc.)
+        // If odd length, first byte is report ID (1 for keyboard, 2 for consumer)
         if (slice.Length > 1 && slice.Length % 2 != 0)
         {
+            byte reportId = slice[0];
+            if (reportId is not (0x01 or 0x02)) return false;
             slice = slice[1..];
         }
 

@@ -199,6 +199,27 @@ public class ChromecastEtwTests
     }
 
     [Fact]
+    public void TryParseAclPacket_Xiaomi_RejectsAtvvAudioSyncPayload()
+    {
+        // Valid ATVV audio-sync payload: 0A 00 00 00 00 52 00
+        byte[] payload = [0x0A, 0x00, 0x00, 0x00, 0x00, 0x52, 0x00];
+
+        // On verified button attribute
+        byte[] packet1 = CreateAclPacket(0x1B, 0x002B, payload);
+        bool success1 = ChromecastEtwReceiver.TryParseAclPacket(packet1, out var button1, out bool isDown1, EtwProtocolKind.Xiaomi);
+        Assert.False(success1);
+        Assert.Equal(RemoteButton.None, button1);
+        Assert.False(isDown1);
+
+        // On non-HID attribute (e.g. 0x0012)
+        byte[] packet2 = CreateAclPacket(0x1B, 0x0012, payload);
+        bool success2 = ChromecastEtwReceiver.TryParseAclPacket(packet2, out var button2, out bool isDown2, EtwProtocolKind.Xiaomi);
+        Assert.False(success2);
+        Assert.Equal(RemoteButton.None, button2);
+        Assert.False(isDown2);
+    }
+
+    [Fact]
     public void TryParseAclPacket_8ByteRelease_ReturnsNoneAndNotDown()
     {
         byte[] payload = [0x00, 0, 0, 0, 0, 0, 0, 0];

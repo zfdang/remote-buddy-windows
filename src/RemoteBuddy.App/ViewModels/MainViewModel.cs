@@ -82,6 +82,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private RemoteButton _lastDedupButton = RemoteButton.None;
     private bool _lastDedupIsDown = false;
     private long _lastDedupTimeMs = 0;
+    private readonly Dictionary<RemoteButton, (long TimestampMs, bool IsDown)> _lastPhysicalEventTimeMs = new();
+    private readonly Dictionary<RemoteButton, long> _lastAppCommandTimeMs = new();
+    private readonly Dictionary<RemoteButton, bool> _suppressNextPhysicalUp = new();
 
     public event Action<WizardMode>? RequestOpenWizard;
 
@@ -128,15 +131,43 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (addr == 0) return;
 
         var name = ConnectedDeviceName;
-        var dev = _configService.Current.Devices.FirstOrDefault(d =>
-            (addr != 0 && d.BluetoothAddress == addr) ||
-            d.Id == _configService.Current.SelectedDeviceId);
+        RemoteDevice? dev = null;
+        if (addr != 0)
+        {
+            dev = _configService.Current.Devices.FirstOrDefault(d => d.BluetoothAddress == addr);
+        }
+        if (dev == null && ActiveOnboardingVm?.SelectedDevice != null &&
+            (addr == 0 || ActiveOnboardingVm.SelectedDevice.BluetoothAddress == addr))
+        {
+            dev = ActiveOnboardingVm.SelectedDevice;
+        }
+        if (dev == null && addr == 0)
+        {
+            dev = _configService.Current.Devices.FirstOrDefault(d => d.Id == _configService.Current.SelectedDeviceId);
+        }
 
-        var protocolKind = (XiaomiProtocol.IsCandidate(name) || (dev != null && dev.IsXiaomi) || (ActiveOnboardingVm?.SelectedDevice != null && ActiveOnboardingVm.SelectedDevice.IsXiaomi))
-            ? EtwProtocolKind.Xiaomi
-            : ((T1RemoteProtocol.IsCandidate(name) || (dev != null && dev.IsT1) || (ActiveOnboardingVm?.SelectedDevice != null && ActiveOnboardingVm.SelectedDevice.IsT1))
-                ? EtwProtocolKind.T1Remote
-                : EtwProtocolKind.GoogleG9N9N);
+        EtwProtocolKind protocolKind;
+        if (dev != null)
+        {
+            if (dev.IsG9N9N)
+                protocolKind = EtwProtocolKind.GoogleG9N9N;
+            else if (dev.IsT1)
+                protocolKind = EtwProtocolKind.T1Remote;
+            else
+                protocolKind = EtwProtocolKind.Xiaomi;
+        }
+        else if (G9N9NProtocol.IsCandidate(name) || (ActiveOnboardingVm?.SelectedDevice != null && ActiveOnboardingVm.SelectedDevice.IsG9N9N))
+        {
+            protocolKind = EtwProtocolKind.GoogleG9N9N;
+        }
+        else if (T1RemoteProtocol.IsCandidate(name) || (ActiveOnboardingVm?.SelectedDevice != null && ActiveOnboardingVm.SelectedDevice.IsT1))
+        {
+            protocolKind = EtwProtocolKind.T1Remote;
+        }
+        else
+        {
+            protocolKind = EtwProtocolKind.Xiaomi;
+        }
 
         var marker = Guid.NewGuid();
         if (_chromecastButtonReceiver.IsRunning)
@@ -196,6 +227,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             IsConnected = connected;
             ConnectedDeviceName = connected ? name : "未连接设备";
+            lock (_buttonDedupLock)
+            {
+                _lastPhysicalEventTimeMs.Clear();
+                _lastAppCommandTimeMs.Clear();
+                _suppressNextPhysicalUp.Clear();
+                _lastDedupButton = RemoteButton.None;
+            }
+
             if (!connected)
             {
                 IsVoiceActive = false;
@@ -205,7 +244,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 _buttonGestures.Reset();
                 _rawInputReceiver.ResetDeviceState();
                 _hidDeviceReader.Stop();
-                _chromecastButtonReceiver.Stop();
+                if (_chromecastButtonReceiver.IsRunning)
+                {
+                    _chromecastButtonReceiver.ResetBinding(Guid.Empty, EtwProtocolKind.GoogleG9N9N);
+                }
+                DevicesVm.Reload();
             }
             else
             {
@@ -215,19 +258,36 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
 
                 ulong addr = _bluetoothManager.ConnectedDeviceAddress;
-                var dev = _configService.Current.Devices.FirstOrDefault(d => 
-                    (addr != 0 && d.BluetoothAddress == addr) || 
-                    d.Id == _configService.Current.SelectedDeviceId);
+                RemoteDevice? dev = null;
+                if (addr != 0)
+                {
+                    dev = _configService.Current.Devices.FirstOrDefault(d => d.BluetoothAddress == addr);
+                }
+                if (dev == null && ActiveOnboardingVm?.SelectedDevice != null &&
+                    (addr == 0 || ActiveOnboardingVm.SelectedDevice.BluetoothAddress == addr))
+                {
+                    dev = ActiveOnboardingVm.SelectedDevice;
+                }
+                if (dev == null && addr == 0)
+                {
+                    dev = _configService.Current.Devices.FirstOrDefault(d => d.Id == _configService.Current.SelectedDeviceId);
+                }
+
                 if (dev != null)
                 {
+                    _configService.Current.SelectedDeviceId = dev.Id;
                     _bluetoothManager.VoiceButtonMode = dev.VoiceButtonMode;
+                    _bluetoothManager.CurrentGain = dev.Gain;
+                    _configService.Save();
                 }
+
+                DevicesVm.Reload();
                 MappingVm.SyncSelectedDeviceWithConfig();
 
-                bool needsEtw = G9N9NProtocol.IsCandidate(name) ||
+                bool needsEtw = (dev != null && (dev.IsG9N9N || dev.IsXiaomi || dev.IsT1)) ||
+                    G9N9NProtocol.IsCandidate(name) ||
                     XiaomiProtocol.IsCandidate(name) ||
                     T1RemoteProtocol.IsCandidate(name) ||
-                    (dev != null && (dev.IsG9N9N || dev.IsXiaomi || dev.IsT1)) ||
                     (ActiveOnboardingVm?.SelectedDevice != null && (ActiveOnboardingVm.SelectedDevice.IsG9N9N || ActiveOnboardingVm.SelectedDevice.IsXiaomi || ActiveOnboardingVm.SelectedDevice.IsT1));
                 if (needsEtw)
                 {
@@ -419,6 +479,68 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public void ProcessRawInput(IntPtr lParam) => _rawInputReceiver.ProcessMessage(lParam);
     internal void HandleRawButtonEvent(IntPtr hDevice, RemoteButton button, bool isDown) => OnRawButtonEvent(hDevice, button, isDown);
 
+    public bool HandleAppCommandButton(RemoteButton button)
+    {
+        long now = Environment.TickCount64;
+
+        // P2 Admission: require an admitted remote connected and ready, or onboarding button testing
+        bool isAdmittedConnected = _bluetoothManager.IsConnected && _bluetoothManager.IsReady;
+        bool isOnboardingButtonTest = ActiveOnboardingVm?.CurrentWizardStep == WizardStep.ButtonTest;
+        if (!isAdmittedConnected && !isOnboardingButtonTest)
+        {
+            // Ordinary keyboard media keys / mouse buttons bypass when no remote is admitted
+            return false;
+        }
+
+        lock (_buttonDedupLock)
+        {
+            // P2 Correlation: if physical ETW/RawInput event arrived within 500ms, suppress AppCommand duplicate
+            if (_lastPhysicalEventTimeMs.TryGetValue(button, out var phys) && (now - phys.TimestampMs) < 500)
+            {
+                AppLogger.Debug($"AppCommand {button} correlated with recent physical event ({now - phys.TimestampMs}ms ago); suppressing duplicate", "MainViewModel");
+                return true;
+            }
+
+            _lastAppCommandTimeMs[button] = now;
+            _suppressNextPhysicalUp[button] = true;
+        }
+
+        AppLogger.Debug($"WM_APPCOMMAND admitted and dispatched for button: {button}", "MainViewModel");
+
+        if (isOnboardingButtonTest)
+        {
+            ActiveOnboardingVm?.NotifyButtonPressed(button);
+            return true;
+        }
+
+        RemoteDevice? sourceDevice = null;
+        ulong connectedAddr = _bluetoothManager.ConnectedDeviceAddress;
+        if (connectedAddr != 0)
+        {
+            sourceDevice = _configService.Current.Devices.FirstOrDefault(d => d.BluetoothAddress == connectedAddr);
+        }
+        sourceDevice ??= _configService.Current.Devices.FirstOrDefault(d => d.Id == _configService.Current.SelectedDeviceId);
+
+        if (ActivePageName == "Mapping")
+        {
+            ShowMappingPress(button, sourceDevice);
+            return true;
+        }
+
+        if (MappingVm.CustomMappingEnabled)
+        {
+            var mapping = sourceDevice?.Mappings?.FirstOrDefault(m => m.Button == button);
+            if (mapping != null && (mapping.ClickAction != ButtonActionType.None || mapping.LongPressAction != ButtonActionType.None || mapping.DoubleClickAction != ButtonActionType.None))
+            {
+                OnRawButtonEvent(IntPtr.Zero, button, true);
+                OnRawButtonEvent(IntPtr.Zero, button, false);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private bool IsTargetDevice(IntPtr hDevice, string devicePath)
     {
         // 1. If currently onboarding a device, evaluate match strictly against the onboarding target
@@ -468,6 +590,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
         lock (_buttonDedupLock)
         {
             long now = Environment.TickCount64;
+
+            // Check correlation against recent AppCommand execution (within 500ms)
+            if (_lastAppCommandTimeMs.TryGetValue(button, out long lastAppCmd) && (now - lastAppCmd) < 500)
+            {
+                AppLogger.Debug($"Suppressing physical {button} isDown={isDown} because AppCommand handled it {now - lastAppCmd}ms ago", "MainViewModel");
+                return;
+            }
+
+            if (_suppressNextPhysicalUp.TryGetValue(button, out bool suppressUp) && suppressUp)
+            {
+                if (!isDown)
+                {
+                    _suppressNextPhysicalUp[button] = false;
+                    AppLogger.Debug($"Suppressing physical up for {button} correlated with AppCommand", "MainViewModel");
+                    return;
+                }
+            }
+
             if (button == _lastDedupButton && isDown == _lastDedupIsDown && (now - _lastDedupTimeMs) < 60)
             {
                 AppLogger.Debug($"Suppressing duplicate button event: {button} isDown={isDown} within {now - _lastDedupTimeMs}ms", "MainViewModel");
@@ -476,6 +616,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _lastDedupButton = button;
             _lastDedupIsDown = isDown;
             _lastDedupTimeMs = now;
+            _lastPhysicalEventTimeMs[button] = (now, isDown);
         }
 
         // 1. Resolve source device strictly

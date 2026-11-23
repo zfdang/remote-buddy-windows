@@ -108,6 +108,11 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
                         (_bt.ConnectedDeviceAddress != 0 && dev.BluetoothAddress == _bt.ConnectedDeviceAddress) ||
                         (_bt.ConnectedDeviceContainerId.HasValue && dev.ContainerId == _bt.ConnectedDeviceContainerId));
                 }
+                var connectedDev = DiscoveredDevices.FirstOrDefault(d => d.IsConnected);
+                if (connectedDev != null)
+                {
+                    SelectedDevice = connectedDev;
+                }
                 RefreshHardwareDetails();
             }
 
@@ -708,9 +713,16 @@ public partial class MappingViewModel : ObservableObject
         if (!string.IsNullOrEmpty(targetId))
         {
             var match = _config.Current.Devices.FirstOrDefault(d => d.Id == targetId);
-            if (match != null && (SelectedDevice == null || SelectedDevice.Id != match.Id))
+            if (match != null)
             {
-                SelectedDevice = match;
+                if (SelectedDevice == null || SelectedDevice.Id != match.Id)
+                {
+                    SelectedDevice = match;
+                }
+                else
+                {
+                    LoadMappings();
+                }
                 return;
             }
         }
