@@ -19,7 +19,7 @@ public class HidDeviceReaderTests
         public bool IsConnected { get; set; } = true;
         public bool IsReady => IsConnected;
         public bool IsStreaming => false;
-        public float CurrentGain { get; set; } = 1.0f;
+        public float CurrentGain { get; set; } = RemoteDevice.DefaultMicrophoneGain;
         public BluetoothSessionState SessionState => BluetoothSessionState.Idle;
         public string ConnectedDeviceName { get; set; } = "Test Remote";
         public ulong ConnectedDeviceAddress => 0x4754514C6FCC;

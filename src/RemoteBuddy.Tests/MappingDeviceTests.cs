@@ -192,4 +192,68 @@ public class MappingDeviceTests
         vm.SelectedDevice = second;
         Assert.Equal("F2", vm.CurrentMappings.Single(m => m.Button == RemoteButton.Up).SingleClick.Shortcut);
     }
+
+    [Fact]
+    public void MappingGesture_DisplaySummaryAndStatus_ReflectsConfiguration()
+    {
+        var mapping = new ButtonMapping { Button = RemoteButton.Up };
+        var item = new MappingItemViewModel(mapping);
+
+        Assert.Equal("未配置", item.SingleClickSummary);
+        Assert.Equal("未配置", item.LongPressSummary);
+        Assert.Equal("未配置", item.DoubleClickSummary);
+        Assert.False(item.SingleClick.IsConfigured);
+
+        item.SingleClick.Action = ButtonActionType.KeyboardShortcut;
+        item.SingleClick.Shortcut = "Ctrl+C";
+        Assert.Equal("快捷键: Ctrl+C", item.SingleClickSummary);
+        Assert.True(item.SingleClick.IsConfigured);
+
+        item.LongPress.Action = ButtonActionType.ContinuousRepeat;
+        Assert.Equal("持续连发", item.LongPressSummary);
+        Assert.True(item.LongPress.IsConfigured);
+
+        item.DoubleClick.Action = ButtonActionType.MediaControl;
+        item.DoubleClick.Media = MediaCommand.PlayPause;
+        Assert.Equal("媒体: 播放/暂停", item.DoubleClickSummary);
+        Assert.True(item.DoubleClick.IsConfigured);
+
+        item.Clear();
+        Assert.Equal("未配置", item.SingleClickSummary);
+        Assert.Equal("未配置", item.LongPressSummary);
+        Assert.Equal("未配置", item.DoubleClickSummary);
+    }
+
+    [Fact]
+    public void MappingViewModel_SelectTrigger_SwitchesActiveGestureAndTitle()
+    {
+        var config = new ConfigService(Path.Combine(Path.GetTempPath(), $"vib-mapping-trig-{Guid.NewGuid():N}.json"));
+        var device = new RemoteDevice { Id = "test_dev", ModelType = RemoteModelType.XiaomiRC003 };
+        config.Current.Devices.Add(device);
+        config.Current.SelectedDeviceId = device.Id;
+
+        var vm = new MappingViewModel(config);
+        Assert.Equal(ButtonTrigger.SingleClick, vm.SelectedTrigger);
+        Assert.NotNull(vm.ActiveGesture);
+        Assert.Equal("👆 单击设置", vm.ActiveTriggerTitle);
+
+        vm.SelectTrigger("LongPress");
+        Assert.Equal(ButtonTrigger.LongPress, vm.SelectedTrigger);
+        Assert.Equal(vm.SelectedMapping!.LongPress, vm.ActiveGesture);
+        Assert.Equal("⏱️ 长按设置", vm.ActiveTriggerTitle);
+
+        vm.SelectTrigger("DoubleClick");
+        Assert.Equal(ButtonTrigger.DoubleClick, vm.SelectedTrigger);
+        Assert.Equal(vm.SelectedMapping!.DoubleClick, vm.ActiveGesture);
+        Assert.Equal("✌️ 双击设置", vm.ActiveTriggerTitle);
+    }
+
+    [Fact]
+    public void RemoteDevice_DefaultMicrophoneGain_IsPlus10dB()
+    {
+        var dev = new RemoteDevice();
+        Assert.Equal(RemoteDevice.DefaultMicrophoneGain, dev.Gain);
+        double db = Math.Round(20.0 * Math.Log10(dev.Gain));
+        Assert.Equal(10.0, db);
+    }
 }

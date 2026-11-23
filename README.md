@@ -1,5 +1,9 @@
 # Remote Buddy (Windows)
 
+> 🍎 **macOS 原生版**：如果您在寻找 macOS 系统上的版本，请前往访问 **[remote-buddy (macOS 原生版)](https://github.com/zfdang/remote-buddy)** —— Remote Buddy 原创 macOS 项目，提供了完整的 ATVV 协议状态机、时序防吞字、虚拟声卡路由架构及优秀的产品设计。
+>
+> 本项目定位为 **remote-buddy 的同源 Windows 原生移植版本**。
+
 **Remote Buddy（遥控搭子）Windows 版** 把蓝牙电视遥控器变成 Windows 电脑上的全局语音输入按钮。拿起遥控器，按住说话、松开结束，即可在当前任意输入框中唤起输入法（微信输入法、豆包输入法等）或系统听写工具进行流畅输入。
 
 本项目基于 **原生 Windows 技术栈（C# / .NET 10 LTS）** 构建，坚持**纯软件方案**，直接利用电脑内置蓝牙连接遥控器，无需额外购买或插拔任何 USB 硬件。

@@ -445,8 +445,12 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 return false;
             }
 
-            // Discard mouse movements and non-button reports: must be Report ID 1 (keyboard) or 2 (consumer)
-            if (report.Length is >= 3 and <= 9 && (report[0] is 0x01 or 0x02) && XiaomiProtocol.TryParseReport(report, out var xiaomiButtons))
+            // Reports with Report ID: must be Report ID 1 (keyboard) or 2 (consumer), discarding mouse (3) or ATVV sync (0x0A)
+            bool isReportWithId = report.Length is >= 3 and <= 9 && (report[0] is 0x01 or 0x02);
+            // Reports without Report ID: 2-byte consumer reports (Back 0x0224, VolumeUp 0x00E9, VolumeDown 0x00EA)
+            bool isReportWithoutId = report.Length == 2;
+
+            if ((isReportWithId || isReportWithoutId) && XiaomiProtocol.TryParseReport(report, out var xiaomiButtons))
             {
                 if (xiaomiButtons.Count > 0)
                 {

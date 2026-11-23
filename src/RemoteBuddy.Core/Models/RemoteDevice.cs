@@ -52,8 +52,10 @@ public partial class RemoteDevice : ObservableObject
     [property: JsonIgnore]
     private RemoteDeviceInformation? _hardwareInformation;
 
+    public const float DefaultMicrophoneGain = 3.1622777f; // +10 dB (20 * log10(3.1622777) = 10.0 dB)
+
     [ObservableProperty]
-    private float _gain = 1.0f;
+    private float _gain = DefaultMicrophoneGain;
 
     [ObservableProperty]
     private G9N9NVoiceButtonMode _voiceButtonMode = G9N9NVoiceButtonMode.SmartToggle;

@@ -35,7 +35,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
     private bool _isScanning;
 
     [ObservableProperty]
-    private float _deviceGain = 1.0f;
+    private float _deviceGain = RemoteDevice.DefaultMicrophoneGain;
 
     public bool HasDevices => DiscoveredDevices.Count > 0;
 
@@ -394,12 +394,23 @@ public partial class MappingItemViewModel : ObservableObject
     public MappingGestureViewModel LongPress { get; }
     public MappingGestureViewModel DoubleClick { get; }
 
+    public string SingleClickSummary => SingleClick.DisplaySummary;
+    public string LongPressSummary => LongPress.DisplaySummary;
+    public string DoubleClickSummary => DoubleClick.DisplaySummary;
+
     public MappingItemViewModel(ButtonMapping source, Action? onModified = null)
     {
         Source = source;
-        SingleClick = new MappingGestureViewModel(source, ButtonTrigger.SingleClick, onModified);
-        LongPress = new MappingGestureViewModel(source, ButtonTrigger.LongPress, onModified);
-        DoubleClick = new MappingGestureViewModel(source, ButtonTrigger.DoubleClick, onModified);
+        Action wrapModified = () =>
+        {
+            OnPropertyChanged(nameof(SingleClickSummary));
+            OnPropertyChanged(nameof(LongPressSummary));
+            OnPropertyChanged(nameof(DoubleClickSummary));
+            onModified?.Invoke();
+        };
+        SingleClick = new MappingGestureViewModel(source, ButtonTrigger.SingleClick, wrapModified);
+        LongPress = new MappingGestureViewModel(source, ButtonTrigger.LongPress, wrapModified);
+        DoubleClick = new MappingGestureViewModel(source, ButtonTrigger.DoubleClick, wrapModified);
     }
 
     public void Clear()
@@ -407,6 +418,9 @@ public partial class MappingItemViewModel : ObservableObject
         SingleClick.Clear();
         LongPress.Clear();
         DoubleClick.Clear();
+        OnPropertyChanged(nameof(SingleClickSummary));
+        OnPropertyChanged(nameof(LongPressSummary));
+        OnPropertyChanged(nameof(DoubleClickSummary));
     }
 }
 
@@ -424,25 +438,66 @@ public partial class MappingGestureViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(Help))]
+    [NotifyPropertyChangedFor(nameof(DisplaySummary))]
+    [NotifyPropertyChangedFor(nameof(IsConfigured))]
     private ButtonActionType _action;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DisplaySummary))]
+    [NotifyPropertyChangedFor(nameof(IsConfigured))]
     private string _shortcut;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DisplaySummary))]
+    [NotifyPropertyChangedFor(nameof(IsConfigured))]
     private MediaCommand _media;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DisplaySummary))]
+    [NotifyPropertyChangedFor(nameof(IsConfigured))]
     private string _text;
+
+    public bool IsConfigured => Action switch
+    {
+        ButtonActionType.None => false,
+        ButtonActionType.KeyboardShortcut => !string.IsNullOrWhiteSpace(Shortcut),
+        ButtonActionType.MediaControl => Media != MediaCommand.None,
+        ButtonActionType.TextSnippet => !string.IsNullOrWhiteSpace(Text),
+        ButtonActionType.ContinuousRepeat => true,
+        _ => false
+    };
+
+    public string DisplaySummary => Action switch
+    {
+        ButtonActionType.None => "未配置",
+        ButtonActionType.KeyboardShortcut => string.IsNullOrWhiteSpace(Shortcut) ? "快捷键 (未配置)" : $"快捷键: {Shortcut}",
+        ButtonActionType.MediaControl => Media switch
+        {
+            MediaCommand.PlayPause => "媒体: 播放/暂停",
+            MediaCommand.VolumeUp => "媒体: 音量加 (+)",
+            MediaCommand.VolumeDown => "媒体: 音量减 (-)",
+            MediaCommand.Mute => "媒体: 静音",
+            MediaCommand.NextTrack => "媒体: 下一首",
+            MediaCommand.PreviousTrack => "媒体: 上一首",
+            _ => "多媒体控制"
+        },
+        ButtonActionType.TextSnippet => string.IsNullOrWhiteSpace(Text) ? "文本短语 (未设置)" : $"短语: \"{(Text.Length > 8 ? Text[..8] + "…" : Text)}\"",
+        ButtonActionType.ContinuousRepeat => "持续连发",
+        _ => "无"
+    };
 
     public static MediaCommand[] AvailableMediaCommands { get; } =
         [MediaCommand.PlayPause, MediaCommand.VolumeUp, MediaCommand.VolumeDown, MediaCommand.Mute, MediaCommand.NextTrack, MediaCommand.PreviousTrack];
 
     public static IReadOnlyList<KeyValuePair<string, string>> ShortcutPresets { get; } =
     [
-        new("复制", "Ctrl+C"), new("粘贴", "Ctrl+V"), new("撤销", "Ctrl+Z"),
-        new("切换应用", "Alt+Tab"), new("任务视图", "Win+Tab"), new("显示桌面", "Win+D"),
-        new("截图", "Win+Shift+S")
+        new("复制 (Ctrl+C)", "Ctrl+C"), new("粘贴 (Ctrl+V)", "Ctrl+V"), new("撤销 (Ctrl+Z)", "Ctrl+Z"),
+        new("全选 (Ctrl+A)", "Ctrl+A"), new("保存 (Ctrl+S)", "Ctrl+S"),
+        new("切换应用 (Alt+Tab)", "Alt+Tab"), new("任务视图 (Win+Tab)", "Win+Tab"),
+        new("显示桌面 (Win+D)", "Win+D"), new("截图 (Win+Shift+S)", "Win+Shift+S"),
+        new("上一页 (PageUp)", "PageUp"), new("下一页 (PageDown)", "PageDown"),
+        new("回车 (Enter)", "Return"), new("空格 (Space)", "Space"), new("Esc 取消", "Escape"),
+        new("全屏 (F11)", "F11")
     ];
 
     public ButtonActionType[] AvailableActions => _trigger == ButtonTrigger.LongPress ? LongPressActions : StandardActions;
@@ -510,6 +565,45 @@ public partial class MappingViewModel : ObservableObject
 
     [ObservableProperty]
     private MappingItemViewModel? _selectedMapping;
+
+    [ObservableProperty]
+    private ButtonTrigger _selectedTrigger = ButtonTrigger.SingleClick;
+
+    public MappingGestureViewModel? ActiveGesture => SelectedMapping == null ? null : SelectedTrigger switch
+    {
+        ButtonTrigger.SingleClick => SelectedMapping.SingleClick,
+        ButtonTrigger.LongPress => SelectedMapping.LongPress,
+        ButtonTrigger.DoubleClick => SelectedMapping.DoubleClick,
+        _ => SelectedMapping.SingleClick
+    };
+
+    public string ActiveTriggerTitle => SelectedTrigger switch
+    {
+        ButtonTrigger.SingleClick => "👆 单击设置",
+        ButtonTrigger.LongPress => "⏱️ 长按设置",
+        ButtonTrigger.DoubleClick => "✌️ 双击设置",
+        _ => "手势设置"
+    };
+
+    partial void OnSelectedMappingChanged(MappingItemViewModel? value)
+    {
+        OnPropertyChanged(nameof(ActiveGesture));
+    }
+
+    partial void OnSelectedTriggerChanged(ButtonTrigger value)
+    {
+        OnPropertyChanged(nameof(ActiveGesture));
+        OnPropertyChanged(nameof(ActiveTriggerTitle));
+    }
+
+    [RelayCommand]
+    public void SelectTrigger(string triggerName)
+    {
+        if (Enum.TryParse<ButtonTrigger>(triggerName, true, out var trigger))
+        {
+            SelectedTrigger = trigger;
+        }
+    }
 
     [ObservableProperty]
     private bool _isMappingSelectionLocked = true;

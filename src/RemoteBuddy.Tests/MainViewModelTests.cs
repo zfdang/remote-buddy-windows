@@ -17,11 +17,11 @@ public class MainViewModelTests
         public bool IsConnected => false;
         public bool IsReady => false;
         public bool IsStreaming => false;
-        public float CurrentGain { get; set; } = 1.0f;
+        public float CurrentGain { get; set; } = RemoteDevice.DefaultMicrophoneGain;
         public BluetoothSessionState SessionState => BluetoothSessionState.Idle;
-        public string ConnectedDeviceName => string.Empty;
-        public ulong ConnectedDeviceAddress => 0;
-        public Guid? ConnectedDeviceContainerId => null;
+        public string ConnectedDeviceName { get; set; } = string.Empty;
+        public ulong ConnectedDeviceAddress { get; set; } = 0;
+        public Guid? ConnectedDeviceContainerId { get; set; } = null;
         public RemoteDeviceInformation? ConnectedDeviceInformation => null;
         public G9N9NVoiceButtonMode VoiceButtonMode { get; set; } = G9N9NVoiceButtonMode.SmartToggle;
 
@@ -33,6 +33,9 @@ public class MainViewModelTests
         public event Action? VoiceSessionStarted { add { } remove { } }
         public event Action? VoiceSessionEnded { add { } remove { } }
 
+        public int StartVoiceSessionCount { get; private set; }
+        public int StopVoiceSessionCount { get; private set; }
+
         public void RaiseConnectionStatusChanged(bool connected, string name) => ConnectionStatusChanged?.Invoke(connected, name);
 
         public void StartScanning() => IsScanning = true;
@@ -42,8 +45,16 @@ public class MainViewModelTests
         public void StopScan() => StopScanning();
         public Task<bool> ConnectAsync(ulong bluetoothAddress) => Task.FromResult(true);
         public void Disconnect() { }
-        public Task<bool> StartVoiceSessionAsync() => Task.FromResult(true);
-        public Task<bool> StopVoiceSessionAsync() => Task.FromResult(true);
+        public Task<bool> StartVoiceSessionAsync()
+        {
+            StartVoiceSessionCount++;
+            return Task.FromResult(true);
+        }
+        public Task<bool> StopVoiceSessionAsync()
+        {
+            StopVoiceSessionCount++;
+            return Task.FromResult(true);
+        }
         public void Dispose() { }
     }
 
@@ -158,6 +169,145 @@ public class MainViewModelTests
             bt.RaiseConnectionStatusChanged(true, "Chromecast Remote");
 
             Assert.Equal(G9N9NVoiceButtonMode.HoldToTalk, bt.VoiceButtonMode);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void MainViewModel_VoiceButtonFromActiveRemote_TriggersVoiceSession()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-mvm-voice-active-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var g9n9n = new RemoteDevice
+            {
+                Id = "DEV_G9N9N",
+                Name = "Chromecast Remote",
+                BluetoothAddress = 0x4754514C6FCC,
+            };
+            config.Current.Devices.Add(g9n9n);
+            config.Current.SelectedDeviceId = g9n9n.Id;
+            config.Current.InputTool.TriggerMode = VoiceTriggerMode.ClickToToggle;
+
+            var bt = new TestBluetoothManager
+            {
+                ConnectedDeviceAddress = 0x4754514C6FCC
+            };
+
+            using var vm = new MainViewModel(config, bt);
+
+            // Press voice button from active remote (ETW / direct stream)
+            vm.HandleRawButtonEvent(IntPtr.Zero, RemoteButton.Voice, true);
+
+            Assert.Equal(1, bt.StartVoiceSessionCount);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void MainViewModel_MappingPress_IsolatedToSelectedDevice()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-mvm-map-iso-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var g9n9n = new RemoteDevice
+            {
+                Id = "DEV_G9N9N",
+                Name = "Chromecast Remote",
+                BluetoothAddress = 0x4754514C6FCC,
+            };
+            var xiaomi = new RemoteDevice
+            {
+                Id = "DEV_XIAOMI",
+                Name = "Xiaomi Remote",
+                BluetoothAddress = 0xA4C138123456,
+            };
+            config.Current.Devices.Add(g9n9n);
+            config.Current.Devices.Add(xiaomi);
+            config.Current.SelectedDeviceId = g9n9n.Id;
+
+            // Connect to G9N9N
+            var bt = new TestBluetoothManager
+            {
+                ConnectedDeviceAddress = 0x4754514C6FCC
+            };
+
+            using var vm = new MainViewModel(config, bt);
+            vm.Navigate("Mapping");
+            vm.MappingVm.SelectedDevice = xiaomi; // Viewing Xiaomi in UI
+
+            RemoteButton? pressedButton = null;
+            vm.MappingVm.HardwareButtonPressed += btn => pressedButton = btn;
+
+            // Event from G9N9N (active Bluetooth address) arrives
+            vm.HandleRawButtonEvent(IntPtr.Zero, RemoteButton.Home, true);
+
+            // Since Xiaomi is selected in Mapping UI but event was from G9N9N, MappingVm should NOT receive press
+            Assert.Null(pressedButton);
+
+            // Now switch Mapping UI to view G9N9N
+            vm.MappingVm.SelectedDevice = g9n9n;
+            vm.HandleRawButtonEvent(IntPtr.Zero, RemoteButton.Back, true);
+
+            // Now it matches, so MappingVm should receive press
+            Assert.Equal(RemoteButton.Back, pressedButton);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void MainViewModel_Onboarding_IgnoresButtonFromOtherRemote()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-mvm-onb-iso-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var g9n9n = new RemoteDevice
+            {
+                Id = "DEV_G9N9N",
+                Name = "Chromecast Remote",
+                BluetoothAddress = 0x4754514C6FCC,
+            };
+            var xiaomi = new RemoteDevice
+            {
+                Id = "DEV_XIAOMI",
+                Name = "Xiaomi Remote",
+                BluetoothAddress = 0xA4C138123456,
+            };
+            config.Current.Devices.Add(g9n9n);
+            config.Current.Devices.Add(xiaomi);
+
+            // System currently connected to G9N9N
+            var bt = new TestBluetoothManager
+            {
+                ConnectedDeviceAddress = 0x4754514C6FCC
+            };
+
+            using var vm = new MainViewModel(config, bt);
+
+            // Start onboarding for Xiaomi
+            var onboardingVm = new OnboardingViewModel(config, bt, WizardMode.DeviceOnly);
+            onboardingVm.SelectedDevice = xiaomi;
+            onboardingVm.CurrentStep = 2; // Step 2 is ButtonTest in DeviceOnly mode
+            vm.ActiveOnboardingVm = onboardingVm;
+
+            // Button event arrives from connected G9N9N (not Xiaomi)
+            vm.HandleRawButtonEvent(IntPtr.Zero, RemoteButton.Back, true);
+
+            // Xiaomi onboarding must NOT receive G9N9N's button press
+            Assert.False(onboardingVm.HasButtonTested);
+            Assert.NotEqual("已按下: 返回键", onboardingVm.LastPressedButtonName);
         }
         finally
         {

@@ -30,6 +30,25 @@ public sealed class BoolToBrushConverter : IValueConverter
         throw new NotSupportedException();
     }
 }
+
+public sealed class BoolToConfiguredBrushConverter : IValueConverter
+{
+    private static readonly SolidColorBrush ConfiguredBrush = new(Color.FromRgb(0x4D, 0xA6, 0xFF));
+    private static readonly SolidColorBrush UnconfiguredBrush = new(Color.FromRgb(0x88, 0x88, 0x88));
+
+    static BoolToConfiguredBrushConverter()
+    {
+        ConfiguredBrush.Freeze();
+        UnconfiguredBrush.Freeze();
+    }
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        return value is true ? ConfiguredBrush : UnconfiguredBrush;
+    }
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotSupportedException();
+}
 public sealed class StringToVisibilityConverter : IValueConverter
 {
     public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
