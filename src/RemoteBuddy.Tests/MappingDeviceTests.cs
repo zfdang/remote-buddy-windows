@@ -55,8 +55,8 @@ public class MappingDeviceTests
 
     [Theory]
     [InlineData(RemoteModelType.Unknown, true, true)]
-    [InlineData(RemoteModelType.XiaomiRC001, true, true)]
-    [InlineData(RemoteModelType.XiaomiRC003, true, true)]
+    [InlineData(RemoteModelType.XiaomiRC001, false, true)]
+    [InlineData(RemoteModelType.XiaomiRC003, false, true)]
     [InlineData(RemoteModelType.XiaomiARN9, true, true)]
     [InlineData(RemoteModelType.GoogleG9N9N, true, true)]
     [InlineData(RemoteModelType.GoogleGY3LE, true, false)]

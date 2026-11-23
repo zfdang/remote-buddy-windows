@@ -37,9 +37,9 @@ public sealed class ChromecastEtwReceiver : IDisposable
     private const byte AclSent = 4;
     private const ushort G9N9NInputAttribute = 0x0029;
     private const ushort XiaomiKeyboardAttribute = 0x0064;
-    public static readonly ushort[] G9N9NVerifiedAttributes = [G9N9NInputAttribute, 0x0025, 0x0028, 0x002D];
+    public static readonly ushort[] G9N9NVerifiedAttributes = [G9N9NInputAttribute];
     public static readonly ushort[] XiaomiVerifiedAttributes = [0x002B, 0x0056, 0x0058, 0x0059, 0x005B, 0x005E];
-    private static readonly HashSet<ushort> _g9n9nAttributesSet = [G9N9NInputAttribute, 0x0025, 0x0028, 0x002D];
+    private static readonly HashSet<ushort> _g9n9nAttributesSet = [G9N9NInputAttribute];
     private static readonly HashSet<ushort> _xiaomiAttributesSet = [0x002B, 0x0056, 0x0058, 0x0059, 0x005B, 0x005E];
 
     private sealed class SourceState(EtwButtonSource source, byte[] request)
@@ -453,14 +453,8 @@ public sealed class ChromecastEtwReceiver : IDisposable
 
         if (protocol == EtwProtocolKind.GoogleG9N9N)
         {
-            if (customAttributes != null)
-            {
-                if (!customAttributes.Contains(attribute)) return false;
-            }
-            else if (!_g9n9nAttributesSet.Contains(attribute))
-            {
-                return false;
-            }
+            var allowed = customAttributes ?? _g9n9nAttributesSet;
+            if (!allowed.Contains(attribute)) return false;
 
             if (incomplete)
             {
@@ -477,7 +471,11 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 return isDown;
             }
 
-            if (report.Length == 2)
+            // Exclude non-button reports: ATVV AudioSync / GetCapabilities (0x0A) and mouse movement (Report ID 3)
+            if (report.Length >= 7 && report[0] == 0x0A) return false;
+            if (report.Length >= 3 && report[0] == 0x03) return false;
+
+            if (attribute == G9N9NInputAttribute && report.Length == 2)
             {
                 ushort usage = BinaryPrimitives.ReadUInt16LittleEndian(report);
                 if (usage == 0) return true;
@@ -485,7 +483,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 return isDown;
             }
 
-            if (report.Length == 3 && report[0] is 0x01 or 0x02 &&
+            if (attribute == G9N9NInputAttribute && report.Length == 3 && report[0] is 0x01 or 0x02 &&
                 G9N9NProtocol.TryParseReport(report, out var g9Buttons))
             {
                 if (g9Buttons.Count > 0)

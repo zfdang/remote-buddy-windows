@@ -246,6 +246,36 @@ public class ChromecastEtwTests
         Assert.False(isDown2);
     }
 
+    [Theory]
+    [InlineData(0x0025)]
+    [InlineData(0x0028)]
+    [InlineData(0x002D)]
+    public void TryParseAclPacket_G9N9N_RejectsNonHidAttributes(ushort attribute)
+    {
+        // 0x0025, 0x0028, 0x002D are non-HID characteristics (e.g. ATVV or control)
+        // Even if payload resembles a button or status (e.g. [0x01, 0x0A, 0x00] or [0x23, 0x02]), it must be rejected
+        byte[] payload1 = [0x01, 0x0A, 0x00];
+        byte[] packet1 = CreateAclPacket(0x1B, attribute, payload1);
+        Assert.False(ChromecastEtwReceiver.TryParseAclPacket(packet1, out _, out _, EtwProtocolKind.GoogleG9N9N));
+
+        byte[] payload2 = [0x23, 0x02];
+        byte[] packet2 = CreateAclPacket(0x1B, attribute, payload2);
+        Assert.False(ChromecastEtwReceiver.TryParseAclPacket(packet2, out _, out _, EtwProtocolKind.GoogleG9N9N));
+    }
+
+    [Fact]
+    public void TryParseAclPacket_G9N9N_RejectsAtvvAudioSyncPayloadOnInputAttribute()
+    {
+        // Valid ATVV audio-sync payload: 0A 00 00 00 00 52 00
+        byte[] payload = [0x0A, 0x00, 0x00, 0x00, 0x00, 0x52, 0x00];
+        byte[] packet = CreateAclPacket(0x1B, 0x0029, payload);
+
+        bool success = ChromecastEtwReceiver.TryParseAclPacket(packet, out var button, out bool isDown, EtwProtocolKind.GoogleG9N9N);
+        Assert.False(success);
+        Assert.Equal(RemoteButton.None, button);
+        Assert.False(isDown);
+    }
+
     [Fact]
     public void TryParseAclPacket_8ByteRelease_ReturnsNoneAndNotDown()
     {
