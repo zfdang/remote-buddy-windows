@@ -84,13 +84,23 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
 
         try
         {
+            // Give ETW trace session 150ms to attach to driver buffers
+            await Task.Delay(150).ConfigureAwait(false);
             var result = await device.GetGattServicesForUuidAsync(marker, BluetoothCacheMode.Uncached);
             foreach (var service in result.Services) service.Dispose();
-            AppLogger.Debug($"Chromecast button source query finished: {result.Status}", "BluetoothManager");
+            AppLogger.Info($"Chromecast button source query finished: {result.Status}", "BluetoothManager");
+
+            if (result.Status != GattCommunicationStatus.Success)
+            {
+                await Task.Delay(250).ConfigureAwait(false);
+                var retryResult = await device.GetGattServicesForUuidAsync(marker, BluetoothCacheMode.Uncached);
+                foreach (var service in retryResult.Services) service.Dispose();
+                AppLogger.Info($"Chromecast button source query retry: {retryResult.Status}", "BluetoothManager");
+            }
         }
         catch (Exception ex)
         {
-            AppLogger.Debug($"Chromecast button source query failed: {ex.Message}", "BluetoothManager");
+            AppLogger.Info($"Chromecast button source query failed: {ex.Message}", "BluetoothManager");
         }
     }
 

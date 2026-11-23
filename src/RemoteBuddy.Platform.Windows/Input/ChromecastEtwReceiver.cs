@@ -46,6 +46,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
     private ushort? _boundConnection;
     private bool _sawPacketEvent;
     private bool _sawRedaction;
+    private long _probeTimestamp;
 
     internal void SetSourceProbe(Guid marker)
     {
@@ -59,6 +60,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
         _probeConnection = null;
         _boundConnection = null;
         _sawPacketEvent = _sawRedaction = false;
+        _probeTimestamp = Environment.TickCount64;
     }
 
     private string? _sessionName;
@@ -356,7 +358,19 @@ public sealed class ChromecastEtwReceiver : IDisposable
             return;
         }
 
-        if (_boundConnection != connection) return;
+        if (_boundConnection != connection)
+        {
+            if (_boundConnection == null && CanAutoBind(connection, att, incomplete))
+            {
+                _boundConnection = connection;
+                _probeConnection = null;
+                AppLogger.Info($"Chromecast ETW auto-bound connection 0x{connection:X4} from verified report on attribute 0x{BinaryPrimitives.ReadUInt16LittleEndian(att[1..]):X4}", "ChromecastEtwReceiver");
+            }
+            else
+            {
+                return;
+            }
+        }
         if (TryParseButtonReport(att, incomplete, _protocolKind, out var button, out bool isDown, out bool truncated, _verifiedAttributes))
             DispatchButtonEvent(button, isDown);
         else if (truncated)
@@ -369,6 +383,15 @@ public sealed class ChromecastEtwReceiver : IDisposable
             DispatchButtonEvent(RemoteButton.None, false);
             TruncatedPacketDetected?.Invoke();
         }
+    }
+
+    private bool CanAutoBind(ushort connection, ReadOnlySpan<byte> att, bool incomplete)
+    {
+        if (_sourceRequest.Length > 0 && (Environment.TickCount64 - _probeTimestamp) < 1000)
+            return false;
+
+        return TryParseButtonReport(att, incomplete, _protocolKind, out var btn, out _, out _, _verifiedAttributes) &&
+               btn != RemoteButton.None;
     }
 
     private static bool TryGetAttPacket(ReadOnlySpan<byte> packet, out ushort connection, out ReadOnlySpan<byte> att, out bool incomplete)
@@ -433,15 +456,17 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 return isDown;
             }
 
-            if ((attribute is (G9N9NInputAttribute or 0x0025 or 0x0028 or 0x002D)) && report.Length == 2)
+            if (report.Length is >= 2 and <= 9 && G9N9NProtocol.TryParseReport(report, out var g9Buttons))
             {
-                ushort usage = BinaryPrimitives.ReadUInt16LittleEndian(report);
-                if (usage == 0) return true;
-                if (G9N9NProtocol.ConsumerButtons.TryGetValue(usage, out button))
+                if (g9Buttons.Count > 0)
                 {
+                    button = g9Buttons[0];
                     isDown = true;
                     return true;
                 }
+                button = RemoteButton.None;
+                isDown = false;
+                return true;
             }
 
             return false;

@@ -222,6 +222,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 {
                     _bluetoothManager.VoiceButtonMode = dev.VoiceButtonMode;
                 }
+                MappingVm.SyncSelectedDeviceWithConfig();
 
                 bool needsEtw = G9N9NProtocol.IsCandidate(name) ||
                     XiaomiProtocol.IsCandidate(name) ||

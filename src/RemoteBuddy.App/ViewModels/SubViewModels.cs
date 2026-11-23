@@ -702,6 +702,25 @@ public partial class MappingViewModel : ObservableObject
         }
     }
 
+    public void SyncSelectedDeviceWithConfig()
+    {
+        var targetId = _config.Current.SelectedDeviceId;
+        if (!string.IsNullOrEmpty(targetId))
+        {
+            var match = _config.Current.Devices.FirstOrDefault(d => d.Id == targetId);
+            if (match != null && (SelectedDevice == null || SelectedDevice.Id != match.Id))
+            {
+                SelectedDevice = match;
+                return;
+            }
+        }
+        else if (SelectedDevice == null && _config.Current.Devices.Count > 0)
+        {
+            SelectedDevice = _config.Current.Devices[0];
+            return;
+        }
+    }
+
     public void LoadMappings()
     {
         CurrentMappings.Clear();

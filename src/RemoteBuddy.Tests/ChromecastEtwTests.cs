@@ -67,6 +67,40 @@ public class ChromecastEtwTests
     }
 
     [Theory]
+    [InlineData(0x03, RemoteButton.Up)]
+    [InlineData(0x04, RemoteButton.Down)]
+    [InlineData(0x05, RemoteButton.Left)]
+    [InlineData(0x06, RemoteButton.Right)]
+    [InlineData(0x07, RemoteButton.Ok)]
+    [InlineData(0x0A, RemoteButton.Home)]
+    [InlineData(0x0B, RemoteButton.Back)]
+    public void TryParseAclPacket_G9N9N3ByteReport_ReturnsCorrectButton(byte code, RemoteButton expected)
+    {
+        // G9N9N Report ID 1: [0x01, code, 0x00]
+        byte[] payload = [0x01, code, 0x00];
+        byte[] packet = CreateAclPacket(0x1B, 0x0029, payload);
+
+        bool success = ChromecastEtwReceiver.TryParseAclPacket(packet, out var button, out bool isDown, EtwProtocolKind.GoogleG9N9N);
+
+        Assert.True(success);
+        Assert.True(isDown);
+        Assert.Equal(expected, button);
+    }
+
+    [Fact]
+    public void TryParseAclPacket_G9N9N3ByteRelease_ReturnsNoneAndNotDown()
+    {
+        byte[] payload = [0x01, 0x00, 0x00];
+        byte[] packet = CreateAclPacket(0x1B, 0x0029, payload);
+
+        bool success = ChromecastEtwReceiver.TryParseAclPacket(packet, out var button, out bool isDown, EtwProtocolKind.GoogleG9N9N);
+
+        Assert.True(success);
+        Assert.False(isDown);
+        Assert.Equal(RemoteButton.None, button);
+    }
+
+    [Theory]
     [InlineData(0x00F1, RemoteButton.Back)]
     [InlineData(0x0080, RemoteButton.VolumeUp)]
     [InlineData(0x0081, RemoteButton.VolumeDown)]
@@ -313,6 +347,22 @@ public class ChromecastEtwTests
         receiver.ProcessPacket(2, [0x05, 0x04, 0x00, 0x40, 0x00, 0x13]);
         receiver.ProcessPacket(3, press);
         Assert.Equal(2, edges.Count);
+    }
+
+    [Fact]
+    public void ProcessPacket_WithoutProbe_AutoBindsOnVerifiedButtonReport()
+    {
+        using var receiver = new ChromecastEtwReceiver();
+        var edges = new List<(RemoteButton, bool)>();
+        receiver.ButtonEvent += (button, isDown) => edges.Add((button, isDown));
+
+        byte[] press = CreateAclPacket(0x1B, 0x0029, [0x01, 0x07, 0x00]); // G9N9N Ok
+        byte[] release = CreateAclPacket(0x1B, 0x0029, [0x01, 0x00, 0x00]);
+
+        receiver.ProcessPacket(3, press);
+        receiver.ProcessPacket(3, release);
+
+        Assert.Equal(new[] { (RemoteButton.Ok, true), (RemoteButton.Ok, false) }, edges);
     }
 
     [Fact]
