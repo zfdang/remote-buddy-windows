@@ -41,7 +41,8 @@ public partial class OnboardingWindow : Window
         }
         else if (msg == 0x0319 /* WM_APPCOMMAND */)
         {
-            if (DataContext is OnboardingViewModel onboardingVm && onboardingVm.CurrentWizardStep == WizardStep.ButtonTest)
+            if (DataContext is OnboardingViewModel onboardingVm && onboardingVm.CurrentWizardStep == WizardStep.ButtonTest &&
+                !onboardingVm.IsTestingChromecast)
             {
                 int cmd = ((int)lParam >> 16) & ~0xF000;
                 var appBtn = cmd switch
@@ -83,7 +84,8 @@ public partial class OnboardingWindow : Window
 
     protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
-        if (DataContext is OnboardingViewModel vm && vm.CurrentWizardStep == WizardStep.ButtonTest)
+        if (DataContext is OnboardingViewModel vm && vm.CurrentWizardStep == WizardStep.ButtonTest &&
+            !vm.IsTestingChromecast)
         {
             // Do not swallow Escape or Tab so dialog cancellation and navigation still work.
             if (e.Key == Key.Escape || e.Key == Key.Tab)

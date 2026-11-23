@@ -16,7 +16,7 @@ public sealed class ChromecastButtonReceiver : IDisposable
 {
     public event Action<RemoteButton, bool>? ButtonEvent;
     public event Action? TruncatedPacketDetected;
-    public event Action<ushort>? ConnectionHandleBound;
+
 
     private readonly ChromecastEtwReceiver _etwReceiver = new();
     private readonly ChromecastWorkerClient _workerClient = new();
@@ -37,11 +37,9 @@ public sealed class ChromecastButtonReceiver : IDisposable
     {
         _etwReceiver.ButtonEvent += (btn, down) => ButtonEvent?.Invoke(btn, down);
         _etwReceiver.TruncatedPacketDetected += () => TruncatedPacketDetected?.Invoke();
-        _etwReceiver.ConnectionHandleBound += (handle) => ConnectionHandleBound?.Invoke(handle);
 
         _workerClient.ButtonEvent += (btn, down) => ButtonEvent?.Invoke(btn, down);
         _workerClient.TruncatedPacketDetected += () => TruncatedPacketDetected?.Invoke();
-        _workerClient.ConnectionHandleBound += (handle) => ConnectionHandleBound?.Invoke(handle);
         _workerClient.Disconnected += OnWorkerDisconnected;
     }
 
@@ -50,19 +48,7 @@ public sealed class ChromecastButtonReceiver : IDisposable
         AppLogger.Warn("ChromecastButtonReceiver: Worker disconnected; status restored to stopped and ready for retry", "ChromecastButtonReceiver");
     }
 
-    public void SetKnownGattHandles(IEnumerable<ushort> handles)
-    {
-        _etwReceiver.SetKnownGattHandles(handles);
-        _workerClient.SendKnownGattHandles(handles);
-    }
-
-    public void ResetConnectionBinding()
-    {
-        _etwReceiver.ResetConnectionBinding();
-        _workerClient.SendResetBinding();
-    }
-
-    public bool Start()
+    public bool Start(Guid marker)
     {
         lock (_lock)
         {
@@ -71,7 +57,7 @@ public sealed class ChromecastButtonReceiver : IDisposable
             // 1. If elevated or permitted, attempt in-process ETW session first
             if (IsAdministrator())
             {
-                if (_etwReceiver.Start())
+                if (_etwReceiver.Start(marker))
                 {
                     AppLogger.Info("Chromecast buttons running via in-process ETW receiver", "ChromecastButtonReceiver");
                     return true;
@@ -80,7 +66,7 @@ public sealed class ChromecastButtonReceiver : IDisposable
             else
             {
                 // Attempt in-process trace (e.g. member of Performance Log Users group)
-                if (_etwReceiver.Start())
+                if (_etwReceiver.Start(marker))
                 {
                     AppLogger.Info("Chromecast buttons running via in-process ETW receiver (non-admin)", "ChromecastButtonReceiver");
                     return true;
@@ -94,7 +80,7 @@ public sealed class ChromecastButtonReceiver : IDisposable
 
                 // 2. Fall back to elevated helper worker via UAC
                 AppLogger.Info("In-process ETW unavailable; activating elevated worker process", "ChromecastButtonReceiver");
-                if (_workerClient.Start())
+                if (_workerClient.Start(marker))
                 {
                     AppLogger.Info("Chromecast buttons running via elevated worker process", "ChromecastButtonReceiver");
                     return true;

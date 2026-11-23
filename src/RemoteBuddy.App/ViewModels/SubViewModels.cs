@@ -1,4 +1,4 @@
-﻿// Copyright (C) 2026 Remote Buddy Contributors
+// Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
 using System.Collections.ObjectModel;
@@ -37,27 +37,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private float _deviceGain = 1.0f;
 
-    public string ConnectedDeviceName => _bt.IsConnected ? _bt.ConnectedDeviceName : "未连接设备";
-    public bool IsConnected => _bt.IsConnected;
     public bool HasDevices => DiscoveredDevices.Count > 0;
-
-    public string VoiceIntegrationSummary
-    {
-        get
-        {
-            var tool = _config.Current.InputTool;
-            string toolName = tool.Tool switch
-            {
-                TargetInputTool.WeChatInput => "微信输入法",
-                TargetInputTool.DoubaoInput => "豆包输入法",
-                TargetInputTool.WindowsDictation => "Windows 听写",
-                TargetInputTool.Typeless => "Typeless",
-                _ => "自定义工具"
-            };
-            string mode = tool.TriggerMode == VoiceTriggerMode.HoldToTalk ? "长按说话" : "点按切换";
-            return $"{toolName} ({mode} · {tool.Shortcut})";
-        }
-    }
 
     public DevicesViewModel(ConfigService config, IBluetoothManager bt, Action<WizardMode>? openWizard = null)
     {
@@ -120,12 +100,11 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         {
             void Update()
             {
-                OnPropertyChanged(nameof(ConnectedDeviceName));
-                OnPropertyChanged(nameof(IsConnected));
                 foreach (var dev in DiscoveredDevices)
                 {
                     dev.IsConnected = connected && (dev.Name == name || dev.BluetoothAddress == _bt.ConnectedDeviceAddress || dev.BluetoothAddress.ToString("X") == _config.Current.SelectedDeviceId);
                 }
+                RefreshHardwareDetails();
             }
 
             if (App.Current?.Dispatcher != null && !App.Current.Dispatcher.CheckAccess())
@@ -138,6 +117,8 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
             }
         };
         _bt.ConnectionStatusChanged += _onConnectionChanged;
+        _bt.ConnectedDeviceInformationChanged += OnConnectedDeviceInformationChanged;
+        RefreshHardwareDetails();
     }
 
     public DevicesViewModel(ConfigService config, IBluetoothManager bt, Action openOnboarding)
@@ -179,8 +160,28 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
             _bt.VoiceButtonMode = SelectedDevice.VoiceButtonMode;
         }
         OnPropertyChanged(nameof(HasDevices));
-        OnPropertyChanged(nameof(ConnectedDeviceName));
-        OnPropertyChanged(nameof(IsConnected));
+        RefreshHardwareDetails();
+    }
+
+    private void OnConnectedDeviceInformationChanged()
+    {
+        if (App.Current?.Dispatcher is { } dispatcher && !dispatcher.CheckAccess())
+        {
+            dispatcher.BeginInvoke(RefreshHardwareDetails);
+        }
+        else
+        {
+            RefreshHardwareDetails();
+        }
+    }
+
+    private void RefreshHardwareDetails()
+    {
+        var information = _bt.ConnectedDeviceInformation;
+        foreach (var device in DiscoveredDevices)
+        {
+            device.HardwareInformation = information?.BluetoothAddress == device.BluetoothAddress ? information : null;
+        }
     }
 
     private void OnDevicePropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -210,6 +211,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
     {
         _bt.DeviceDiscovered -= _onDeviceDiscovered;
         _bt.ConnectionStatusChanged -= _onConnectionChanged;
+        _bt.ConnectedDeviceInformationChanged -= OnConnectedDeviceInformationChanged;
         foreach (var dev in DiscoveredDevices)
         {
             dev.PropertyChanged -= OnDevicePropertyChanged;
@@ -266,8 +268,6 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
                 _config.Current.Devices.Add(device);
             }
             _config.Save();
-            OnPropertyChanged(nameof(ConnectedDeviceName));
-            OnPropertyChanged(nameof(IsConnected));
         }
     }
 
@@ -283,8 +283,6 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         {
             SelectedDevice.IsConnected = false;
         }
-        OnPropertyChanged(nameof(ConnectedDeviceName));
-        OnPropertyChanged(nameof(IsConnected));
     }
 
     [RelayCommand]
@@ -337,8 +335,6 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         }
         _config.Save();
         OnPropertyChanged(nameof(HasDevices));
-        OnPropertyChanged(nameof(ConnectedDeviceName));
-        OnPropertyChanged(nameof(IsConnected));
     }
 
     [RelayCommand]
@@ -390,159 +386,114 @@ public partial class MappingItemViewModel : ObservableObject
         RemoteButton.Home => "主页键", RemoteButton.Menu => "菜单键",
         RemoteButton.VolumeUp => "音量 +", RemoteButton.VolumeDown => "音量 −",
         RemoteButton.LiveTv => "TV 键", RemoteButton.Mute => "静音键",
-        RemoteButton.PlayPause => "播放 / 暂停", _ => Button.ToString()
+        RemoteButton.PlayPause => "播放 / 暂停", RemoteButton.Input => "输入源",
+        _ => Button.ToString()
     };
 
-    [ObservableProperty]
-    private ButtonActionType _clickAction;
+    public MappingGestureViewModel SingleClick { get; }
+    public MappingGestureViewModel LongPress { get; }
+    public MappingGestureViewModel DoubleClick { get; }
 
-    [ObservableProperty]
-    private string _clickShortcut = string.Empty;
+    public MappingItemViewModel(ButtonMapping source, Action? onModified = null)
+    {
+        Source = source;
+        SingleClick = new MappingGestureViewModel(source, ButtonTrigger.SingleClick, onModified);
+        LongPress = new MappingGestureViewModel(source, ButtonTrigger.LongPress, onModified);
+        DoubleClick = new MappingGestureViewModel(source, ButtonTrigger.DoubleClick, onModified);
+    }
 
-    [ObservableProperty]
-    private MediaCommand _clickMedia;
+    public void Clear()
+    {
+        SingleClick.Clear();
+        LongPress.Clear();
+        DoubleClick.Clear();
+    }
+}
 
-    [ObservableProperty]
-    private string _clickText = string.Empty;
-
-    [ObservableProperty]
-    private string _parameterText = string.Empty;
-
-    [ObservableProperty]
-    private ButtonActionType _longPressAction;
-
-    public System.Windows.Visibility TextOrShortcutVisibility =>
-        (ClickAction == ButtonActionType.KeyboardShortcut || ClickAction == ButtonActionType.TextSnippet)
-            ? System.Windows.Visibility.Visible
-            : System.Windows.Visibility.Collapsed;
-
-    public string ParameterLabel => ClickAction == ButtonActionType.TextSnippet ? "常用短语：" : "目标键盘快捷键：";
-
-    public string ParameterHint => ClickAction == ButtonActionType.TextSnippet
-        ? "输入要在按下遥控器按键时插入的文字；留空时不输入内容。"
-        : "提示: 支持组合键，如 'Ctrl+Alt+A'、'Enter'、'Escape'、'Up'、'Alt+Tab'、'Win+D' 等。";
-
-    public System.Windows.Visibility MediaVisibility =>
-        ClickAction == ButtonActionType.MediaControl
-            ? System.Windows.Visibility.Visible
-            : System.Windows.Visibility.Collapsed;
-
-    public static ButtonActionType[] AvailableActions { get; } =
+public partial class MappingGestureViewModel : ObservableObject
+{
+    private static readonly ButtonActionType[] StandardActions =
         [ButtonActionType.None, ButtonActionType.KeyboardShortcut, ButtonActionType.MediaControl, ButtonActionType.TextSnippet];
+
+    private static readonly ButtonActionType[] LongPressActions =
+        [.. StandardActions, ButtonActionType.ContinuousRepeat];
+
+    private readonly ButtonMapping _mapping;
+    private readonly ButtonTrigger _trigger;
+    private readonly Action? _onModified;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(Help))]
+    private ButtonActionType _action;
+
+    [ObservableProperty]
+    private string _shortcut;
+
+    [ObservableProperty]
+    private MediaCommand _media;
+
+    [ObservableProperty]
+    private string _text;
 
     public static MediaCommand[] AvailableMediaCommands { get; } =
         [MediaCommand.PlayPause, MediaCommand.VolumeUp, MediaCommand.VolumeDown, MediaCommand.Mute, MediaCommand.NextTrack, MediaCommand.PreviousTrack];
 
-    public static ButtonActionType[] AvailableLongPressActions { get; } =
-        [ButtonActionType.None, ButtonActionType.ContinuousRepeat];
+    public static IReadOnlyList<KeyValuePair<string, string>> ShortcutPresets { get; } =
+    [
+        new("复制", "Ctrl+C"), new("粘贴", "Ctrl+V"), new("撤销", "Ctrl+Z"),
+        new("切换应用", "Alt+Tab"), new("任务视图", "Win+Tab"), new("显示桌面", "Win+D"),
+        new("截图", "Win+Shift+S")
+    ];
 
-    private readonly Action? _onModified;
-    private bool _isInitializing;
+    public ButtonActionType[] AvailableActions => _trigger == ButtonTrigger.LongPress ? LongPressActions : StandardActions;
 
-    public MappingItemViewModel(ButtonMapping source, Action? onModified = null)
+    public string Help => _trigger switch
     {
-        _isInitializing = true;
-        try
-        {
-            Source = source;
-            _onModified = onModified;
-            ClickAction = source.ClickAction;
-            ClickShortcut = source.ClickShortcut ?? string.Empty;
-            ClickMedia = source.ClickMedia != MediaCommand.None ? source.ClickMedia : MediaCommand.PlayPause;
-            ClickText = source.ClickText ?? string.Empty;
-            LongPressAction = source.LongPressAction;
+        ButtonTrigger.SingleClick => "没有配置其他手势时，按下即执行。配置独立长按后，短按在松开时执行。配置双击后，单击会等待 300 毫秒。",
+        ButtonTrigger.LongPress when Action == ButtonActionType.ContinuousRepeat => "按住 350 毫秒后开始重复单击动作，松开即停。",
+        ButtonTrigger.LongPress => "按住约半秒即可执行长按动作。长按动作与持续连发可任选一种。",
+        _ => "连续按两次并松开即可执行双击动作。设置后，单击会等待 300 毫秒。"
+    };
 
-            if (source.ClickAction == ButtonActionType.TextSnippet)
-            {
-                ParameterText = ClickText;
-            }
-            else
-            {
-                ParameterText = ClickShortcut;
-            }
-        }
-        finally
-        {
-            _isInitializing = false;
-        }
+    public MappingGestureViewModel(ButtonMapping mapping, ButtonTrigger trigger, Action? onModified)
+    {
+        _mapping = mapping;
+        _trigger = trigger;
+        _onModified = onModified;
+        var assignment = mapping.GetAssignment(trigger);
+        _action = assignment.Action;
+        _shortcut = assignment.Shortcut ?? string.Empty;
+        _media = assignment.Media == MediaCommand.None ? MediaCommand.PlayPause : assignment.Media;
+        _text = assignment.Text ?? string.Empty;
     }
 
-    partial void OnClickActionChanged(ButtonActionType value)
+    partial void OnActionChanged(ButtonActionType value) => Apply();
+    partial void OnShortcutChanged(string value) => Apply();
+    partial void OnMediaChanged(MediaCommand value) => Apply();
+    partial void OnTextChanged(string value) => Apply();
+
+    internal void Clear()
     {
-        OnPropertyChanged(nameof(TextOrShortcutVisibility));
-        OnPropertyChanged(nameof(MediaVisibility));
-        OnPropertyChanged(nameof(ParameterLabel));
-        OnPropertyChanged(nameof(ParameterHint));
+        Action = ButtonActionType.None;
+        Shortcut = string.Empty;
+        Media = MediaCommand.PlayPause;
+        Text = string.Empty;
+    }
 
-        if (_isInitializing) return;
-
-        if (value == ButtonActionType.TextSnippet && string.IsNullOrEmpty(ParameterText))
+    private void Apply()
+    {
+        var assignment = Action switch
         {
-            ParameterText = ClickText;
-        }
-        else if (value == ButtonActionType.KeyboardShortcut && string.IsNullOrEmpty(ParameterText))
-        {
-            ParameterText = ClickShortcut;
-        }
-
-        ApplyBack();
+            ButtonActionType.KeyboardShortcut when !string.IsNullOrWhiteSpace(Shortcut) => new ButtonAssignment(Action, Shortcut.Trim()),
+            ButtonActionType.MediaControl => new ButtonAssignment(Action, Media: Media),
+            ButtonActionType.TextSnippet when !string.IsNullOrWhiteSpace(Text) => new ButtonAssignment(Action, Text: Text),
+            _ => new ButtonAssignment(Action)
+        };
+        _mapping.SetAssignment(_trigger, assignment);
         _onModified?.Invoke();
-    }
-
-    partial void OnParameterTextChanged(string value)
-    {
-        if (_isInitializing) return;
-        ApplyBack();
-        _onModified?.Invoke();
-    }
-
-    partial void OnClickMediaChanged(MediaCommand value)
-    {
-        if (_isInitializing) return;
-        ApplyBack();
-        _onModified?.Invoke();
-    }
-
-    partial void OnLongPressActionChanged(ButtonActionType value)
-    {
-        if (_isInitializing) return;
-        ApplyBack();
-        _onModified?.Invoke();
-    }
-
-    public void ApplyBack()
-    {
-        Source.ClickAction = ClickAction;
-        Source.LongPressAction = LongPressAction;
-
-        if (ClickAction == ButtonActionType.KeyboardShortcut)
-        {
-            ClickShortcut = ParameterText;
-            Source.ClickShortcut = string.IsNullOrWhiteSpace(ParameterText) ? null : ParameterText.Trim();
-            Source.ClickText = null;
-            Source.ClickMedia = MediaCommand.None;
-        }
-        else if (ClickAction == ButtonActionType.TextSnippet)
-        {
-            ClickText = ParameterText;
-            Source.ClickText = string.IsNullOrWhiteSpace(ParameterText) ? null : ParameterText;
-            Source.ClickShortcut = null;
-            Source.ClickMedia = MediaCommand.None;
-        }
-        else if (ClickAction == ButtonActionType.MediaControl)
-        {
-            Source.ClickMedia = ClickMedia;
-            Source.ClickShortcut = null;
-            Source.ClickText = null;
-        }
-        else
-        {
-            Source.ClickShortcut = null;
-            Source.ClickText = null;
-            Source.ClickMedia = MediaCommand.None;
-        }
     }
 }
+
 
 public partial class MappingViewModel : ObservableObject
 {
@@ -566,18 +517,17 @@ public partial class MappingViewModel : ObservableObject
     [ObservableProperty]
     private bool _customMappingEnabled = true;
 
-    [ObservableProperty]
-    private RemoteButton _activeHardwareButton = RemoteButton.None;
+    internal event Action<RemoteButton>? HardwareButtonPressed;
 
     public bool IsG9N9N => SelectedDevice?.ModelType is RemoteModelType.GoogleG9N9N or RemoteModelType.GoogleGY3LE;
     public bool IsT1 => SelectedDevice?.ModelType == RemoteModelType.T1Remote;
     public bool IsXiaomi => !IsG9N9N && !IsT1;
 
     public string DeviceNote => IsG9N9N
-        ? "Google G9N9N 遥控器：支持 14 颗实体按键自定义单击与长按动作，支持智能切换免提收音。"
+        ? "选择 Chromecast 遥控器按键，设置单击、长按和双击动作。"
         : IsT1
             ? "T1 飞鼠遥控器：正面 7 颗按键（电源、返回、主页、菜单、音量、静音）支持自定义；确认、方向键、飞鼠与背面 QWERTY 全键盘保持系统默认输入。"
-            : "选择实体按键设置单击与长按动作。点击左侧遥控器按键快速定位，修改后自动保存。";
+            : "选择按键，设置单击、长按和双击动作。";
 
     public MappingViewModel(ConfigService config)
     {
@@ -608,17 +558,18 @@ public partial class MappingViewModel : ObservableObject
         }
     }
 
+    internal void NotifyHardwarePress(RemoteButton button)
+    {
+        if (!IsMappingSelectionLocked) SelectButton(button.ToString());
+        HardwareButtonPressed?.Invoke(button);
+    }
+
     [RelayCommand]
     public void ClearSelectedMapping()
     {
         if (SelectedMapping != null)
         {
-            SelectedMapping.ClickAction = ButtonActionType.None;
-            SelectedMapping.LongPressAction = ButtonActionType.None;
-            SelectedMapping.ParameterText = string.Empty;
-            SelectedMapping.ClickShortcut = string.Empty;
-            SelectedMapping.ClickText = string.Empty;
-            SelectedMapping.ApplyBack();
+            SelectedMapping.Clear();
             SaveMappings();
         }
     }
@@ -694,10 +645,6 @@ public partial class MappingViewModel : ObservableObject
         var selectedDev = SelectedDevice;
         if (selectedDev != null)
         {
-            foreach (var item in CurrentMappings)
-            {
-                item.ApplyBack();
-            }
             var visibleButtons = CurrentMappings.Select(i => i.Button).ToHashSet();
             selectedDev.Mappings = selectedDev.Mappings.Where(m => !visibleButtons.Contains(m.Button))
                 .Concat(CurrentMappings.Select(i => i.Source)).ToList();
@@ -710,25 +657,7 @@ public partial class IntegrationsViewModel : ObservableObject
 {
     private readonly ConfigService _config;
 
-    [ObservableProperty]
-    private TargetInputTool _selectedTool;
-
-    [ObservableProperty]
-    private VoiceTriggerMode _triggerMode;
-
-    public Action? OnConfigurationSaved { get; set; }
-
-    [ObservableProperty]
-    private string _shortcutText = string.Empty;
-
-    partial void OnShortcutTextChanged(string value)
-    {
-        SaveNoticeVisible = false;
-        OnPropertyChanged(nameof(CurrentShortcutDisplay));
-    }
-
-    [ObservableProperty]
-    private bool _saveNoticeVisible;
+    public TargetInputTool SelectedTool => _config.Current.InputTool.Tool;
 
     public string CurrentToolDisplayName => SelectedTool switch
     {
@@ -739,9 +668,9 @@ public partial class IntegrationsViewModel : ObservableObject
         _ => "自定义快捷键"
     };
 
-    public string CurrentShortcutDisplay => string.IsNullOrWhiteSpace(ShortcutText) ? "未配置" : ShortcutText;
+    public string CurrentShortcutDisplay => string.IsNullOrWhiteSpace(_config.Current.InputTool.Shortcut) ? "未配置" : _config.Current.InputTool.Shortcut;
 
-    public string CurrentTriggerModeDisplay => TriggerMode == VoiceTriggerMode.HoldToTalk ? "按住说话 (Hold to Talk)" : "点按切换 (Click to Toggle)";
+    public string CurrentTriggerModeDisplay => _config.Current.InputTool.TriggerMode == VoiceTriggerMode.HoldToTalk ? "按住说话" : "单击切换";
 
     public string VirtualCableStatusDescription
     {
@@ -755,38 +684,6 @@ public partial class IntegrationsViewModel : ObservableObject
                 DriverReadinessStatus.RebootRequired => "VB-CABLE 需要重启系统完成初始化",
                 _ => "虚拟音频设备未就绪"
             };
-        }
-    }
-
-    public bool IsHoldToTalk
-    {
-        get => TriggerMode == VoiceTriggerMode.HoldToTalk;
-        set
-        {
-            if (value && TriggerMode != VoiceTriggerMode.HoldToTalk)
-            {
-                TriggerMode = VoiceTriggerMode.HoldToTalk;
-                OnPropertyChanged(nameof(IsHoldToTalk));
-                OnPropertyChanged(nameof(IsClickToToggle));
-                OnPropertyChanged(nameof(CurrentTriggerModeDisplay));
-                Save();
-            }
-        }
-    }
-
-    public bool IsClickToToggle
-    {
-        get => TriggerMode == VoiceTriggerMode.ClickToToggle;
-        set
-        {
-            if (value && TriggerMode != VoiceTriggerMode.ClickToToggle)
-            {
-                TriggerMode = VoiceTriggerMode.ClickToToggle;
-                OnPropertyChanged(nameof(IsHoldToTalk));
-                OnPropertyChanged(nameof(IsClickToToggle));
-                OnPropertyChanged(nameof(CurrentTriggerModeDisplay));
-                Save();
-            }
         }
     }
 
@@ -804,60 +701,7 @@ public partial class IntegrationsViewModel : ObservableObject
 
     public void Reload()
     {
-        SelectedTool = _config.Current.InputTool.Tool;
-        TriggerMode = _config.Current.InputTool.TriggerMode;
-        ShortcutText = _config.Current.InputTool.Shortcut;
-        SaveNoticeVisible = false;
-        OnPropertyChanged(nameof(IsHoldToTalk));
-        OnPropertyChanged(nameof(IsClickToToggle));
-        OnPropertyChanged(nameof(CurrentToolDisplayName));
-        OnPropertyChanged(nameof(CurrentShortcutDisplay));
-        OnPropertyChanged(nameof(CurrentTriggerModeDisplay));
-        OnPropertyChanged(nameof(VirtualCableStatusDescription));
-    }
-
-    [RelayCommand]
-    public void ApplyPreset(string toolName)
-    {
-        if (Enum.TryParse<TargetInputTool>(toolName, out var tool))
-        {
-            SelectedTool = tool;
-            ShortcutText = tool switch
-            {
-                TargetInputTool.WeChatInput => InputToolConfig.DefaultWeChatShortcut,
-                TargetInputTool.DoubaoInput => "F1",
-                TargetInputTool.WindowsDictation => "Win+H",
-                TargetInputTool.Typeless => "Ctrl+Alt+V",
-                _ => "Ctrl+Shift+V"
-            };
-            TriggerMode = (tool == TargetInputTool.WindowsDictation)
-                ? VoiceTriggerMode.ClickToToggle
-                : VoiceTriggerMode.HoldToTalk;
-            OnPropertyChanged(nameof(IsHoldToTalk));
-            OnPropertyChanged(nameof(IsClickToToggle));
-            OnPropertyChanged(nameof(CurrentToolDisplayName));
-            OnPropertyChanged(nameof(CurrentShortcutDisplay));
-            OnPropertyChanged(nameof(CurrentTriggerModeDisplay));
-            Save();
-        }
-    }
-
-    partial void OnTriggerModeChanged(VoiceTriggerMode value)
-    {
-        OnPropertyChanged(nameof(IsHoldToTalk));
-        OnPropertyChanged(nameof(IsClickToToggle));
-        OnPropertyChanged(nameof(CurrentTriggerModeDisplay));
-    }
-
-    [RelayCommand]
-    public void Save()
-    {
-        _config.Current.InputTool.Tool = SelectedTool;
-        _config.Current.InputTool.TriggerMode = TriggerMode;
-        _config.Current.InputTool.Shortcut = ShortcutText;
-        _config.Save();
-        SaveNoticeVisible = true;
-        OnConfigurationSaved?.Invoke();
+        OnPropertyChanged(nameof(SelectedTool));
         OnPropertyChanged(nameof(CurrentToolDisplayName));
         OnPropertyChanged(nameof(CurrentShortcutDisplay));
         OnPropertyChanged(nameof(CurrentTriggerModeDisplay));
@@ -1145,12 +989,6 @@ public partial class GeneralViewModel : ObservableObject
 
     [RelayCommand]
     public void RerunWizard() => _openWizard(WizardMode.Full);
-
-    [RelayCommand]
-    public void RunDeviceWizard() => _openWizard(WizardMode.DeviceOnly);
-
-    [RelayCommand]
-    public void RunIntegrationWizard() => _openWizard(WizardMode.Integration);
 
     [RelayCommand]
     public void GoToPermissions() => _navigate("Permissions");

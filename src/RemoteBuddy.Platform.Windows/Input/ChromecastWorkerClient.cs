@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
-using System.Buffers.Binary;
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.Security.AccessControl;
@@ -19,7 +18,6 @@ public sealed class ChromecastWorkerClient : IDisposable
 {
     public event Action<RemoteButton, bool>? ButtonEvent;
     public event Action? TruncatedPacketDetected;
-    public event Action<ushort>? ConnectionHandleBound;
     public event Action? Disconnected;
 
     private readonly object _lock = new();
@@ -37,7 +35,7 @@ public sealed class ChromecastWorkerClient : IDisposable
         }
     }
 
-    public bool Start()
+    public bool Start(Guid marker)
     {
         lock (_lock)
         {
@@ -49,7 +47,7 @@ public sealed class ChromecastWorkerClient : IDisposable
             try
             {
                 var pipeSecurity = new PipeSecurity();
-                var currentIdentity = WindowsIdentity.GetCurrent();
+                using var currentIdentity = WindowsIdentity.GetCurrent();
                 pipeSecurity.AddAccessRule(new PipeAccessRule(
                     currentIdentity.User ?? new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null),
                     PipeAccessRights.ReadWrite,
@@ -86,7 +84,7 @@ public sealed class ChromecastWorkerClient : IDisposable
                 var psi = new ProcessStartInfo
                 {
                     FileName = exePath,
-                    Arguments = $"--chromecast-worker \"{pipeName}\"",
+                    Arguments = $"--chromecast-worker {pipeName} {marker:D}",
                     UseShellExecute = true,
                     Verb = "runas",
                     WindowStyle = ProcessWindowStyle.Hidden
@@ -108,7 +106,7 @@ public sealed class ChromecastWorkerClient : IDisposable
                 _pipeServer.WaitForConnectionAsync(linkedCts.Token).GetAwaiter().GetResult();
 
                 byte[] readyBuf = new byte[1];
-                int read = _pipeServer.Read(readyBuf, 0, 1);
+                int read = _pipeServer.ReadAsync(readyBuf.AsMemory(), linkedCts.Token).AsTask().GetAwaiter().GetResult();
                 if (read == 0 || readyBuf[0] != 0x01)
                 {
                     AppLogger.Warn($"Chromecast worker reported startup failure (byte={(read > 0 ? readyBuf[0] : -1)})", "ChromecastWorkerClient");
@@ -119,7 +117,8 @@ public sealed class ChromecastWorkerClient : IDisposable
                 AppLogger.Info("ChromecastWorkerClient: Received ready confirmation (0x01) from worker", "ChromecastWorkerClient");
                 _isRunning = true;
                 var ct = _cts.Token;
-                _readTask = Task.Run(() => ListenToPipeAsync(_pipeServer, ct), ct);
+                var server = _pipeServer;
+                _readTask = Task.Run(() => ListenToPipeAsync(server, ct), ct);
                 return true;
             }
             catch (OperationCanceledException)
@@ -139,49 +138,6 @@ public sealed class ChromecastWorkerClient : IDisposable
                 AppLogger.Error("Exception starting ChromecastWorkerClient", ex, "ChromecastWorkerClient");
                 Cleanup();
                 return false;
-            }
-        }
-    }
-
-    public void SendKnownGattHandles(IEnumerable<ushort> handles)
-    {
-        lock (_lock)
-        {
-            if (!_isRunning || _pipeServer == null || !_pipeServer.IsConnected) return;
-            try
-            {
-                var list = handles.Where(h => h != 0).Take(255).ToList();
-                byte[] buffer = new byte[2 + list.Count * 2];
-                buffer[0] = ChromecastWorkerHost.CmdSetKnownGattHandles;
-                buffer[1] = (byte)list.Count;
-                for (int i = 0; i < list.Count; i++)
-                {
-                    BinaryPrimitives.WriteUInt16LittleEndian(buffer.AsSpan(2 + i * 2, 2), list[i]);
-                }
-                _pipeServer.Write(buffer, 0, buffer.Length);
-                _pipeServer.Flush();
-            }
-            catch (Exception ex)
-            {
-                AppLogger.Debug($"SendKnownGattHandles pipe error: {ex.Message}", "ChromecastWorkerClient");
-            }
-        }
-    }
-
-    public void SendResetBinding()
-    {
-        lock (_lock)
-        {
-            if (!_isRunning || _pipeServer == null || !_pipeServer.IsConnected) return;
-            try
-            {
-                byte[] buffer = [ChromecastWorkerHost.CmdResetBinding];
-                _pipeServer.Write(buffer, 0, 1);
-                _pipeServer.Flush();
-            }
-            catch (Exception ex)
-            {
-                AppLogger.Debug($"SendResetBinding pipe error: {ex.Message}", "ChromecastWorkerClient");
             }
         }
     }
@@ -208,16 +164,7 @@ public sealed class ChromecastWorkerClient : IDisposable
                 }
                 else if (msgType == ChromecastWorkerHost.MsgTypeTruncatedDetected)
                 {
-                    AppLogger.Warn("ChromecastWorkerClient: Received truncated packet notification from worker pipe", "ChromecastWorkerClient");
                     TruncatedPacketDetected?.Invoke();
-                }
-                else if (msgType == ChromecastWorkerHost.MsgTypeConnectionHandleBound)
-                {
-                    byte[] payload = new byte[2];
-                    await ReadExactAsync(server, payload, ct);
-                    ushort handle = BinaryPrimitives.ReadUInt16LittleEndian(payload);
-                    AppLogger.Info($"ChromecastWorkerClient: Received bound ConnectionHandle 0x{handle:X4} from worker pipe", "ChromecastWorkerClient");
-                    ConnectionHandleBound?.Invoke(handle);
                 }
             }
         }
@@ -231,7 +178,17 @@ public sealed class ChromecastWorkerClient : IDisposable
         }
         finally
         {
-            Stop();
+            bool disconnected = false;
+            lock (_lock)
+            {
+                if (ReferenceEquals(_pipeServer, server))
+                {
+                    _isRunning = false;
+                    Cleanup();
+                    disconnected = true;
+                }
+            }
+            if (disconnected) Disconnected?.Invoke();
         }
     }
 
@@ -267,15 +224,8 @@ public sealed class ChromecastWorkerClient : IDisposable
     {
         try { _cts?.Cancel(); } catch { }
         try { _pipeServer?.Dispose(); } catch { }
-        try
-        {
-            if (_workerProcess != null && !_workerProcess.HasExited)
-            {
-                _workerProcess.Kill();
-            }
-            _workerProcess?.Dispose();
-        }
-        catch { }
+        // Closing the pipe lets the worker stop its ETW session and exit.
+        _workerProcess?.Dispose();
 
         _pipeServer = null;
         _workerProcess = null;

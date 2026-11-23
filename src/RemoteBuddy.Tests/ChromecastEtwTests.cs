@@ -159,8 +159,7 @@ public class ChromecastEtwTests
     [Fact]
     public void TryParseAclPacket_EmptyPayloadHeaderOnly_ReturnsFalseAndNeverReportsOk()
     {
-        // 7-byte L2CAP header with 0-byte payload (typical BthPort truncated packet)
-        byte[] packet = CreateAclPacket(0x1B, 0x0029, []);
+        byte[] packet = CreateAclPacket(0x1B, 0x0029, new byte[8])[..11];
 
         bool success = ChromecastEtwReceiver.TryParseAclPacket(packet, out var button, out bool isDown, out bool isTruncated);
 
@@ -171,18 +170,51 @@ public class ChromecastEtwTests
     }
 
     [Fact]
-    public void ChromecastEtwReceiver_ConnectionBinding_CanSetAndReset()
+    public void ProcessPacket_RequiresMatchingProbe_AndSeparatesButtonEventsFromRedaction()
     {
         using var receiver = new ChromecastEtwReceiver();
-        Assert.Null(receiver.BoundConnectionHandle);
+        receiver.SetSourceProbe(new Guid("00112233-4455-6677-8899-aabbccddeeff"));
+        var edges = new List<(RemoteButton, bool)>();
+        int redacted = 0;
+        receiver.ButtonEvent += (button, isDown) => edges.Add((button, isDown));
+        receiver.TruncatedPacketDetected += () => redacted++;
 
-        receiver.BoundConnectionHandle = 0x0042;
-        Assert.Equal((ushort)0x0042, receiver.BoundConnectionHandle);
+        byte[] request = CreateAclPacket(0x06, 0x0001,
+            [0xFF, 0xFF, 0x00, 0x28, 0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0x00]);
+        byte[] response = CreateAclPacket(0x01, 0x0106, [0x00, 0x0A]);
+        byte[] press = CreateAclPacket(0x1B, 0x0029, [0x07, 0, 0, 0, 0, 0, 0, 0]);
+        byte[] release = CreateAclPacket(0x1B, 0x0029, new byte[8]);
 
-        receiver.SetKnownGattHandles([0x001A, 0x001B]);
+        receiver.ProcessPacket(2, request);
+        receiver.ProcessPacket(3, response);
+        receiver.ProcessPacket(3, press);
+        receiver.ProcessPacket(3, press.AsSpan(0, 11));
+        Assert.Empty(edges);
+        Assert.Equal(0, redacted);
 
-        receiver.ResetConnectionBinding();
-        Assert.Null(receiver.BoundConnectionHandle);
+        receiver.ProcessPacket(4, request);
+        receiver.ProcessPacket(3, response);
+        receiver.ProcessPacket(3, press);
+        receiver.ProcessPacket(3, press);
+        receiver.ProcessPacket(3, release);
+        Assert.Equal(new[] { (RemoteButton.Ok, true), (RemoteButton.Ok, false) }, edges);
+
+        receiver.ProcessPacket(3, press.AsSpan(0, 12));
+        Assert.Equal(0, redacted);
+        receiver.ProcessPacket(3, press.AsSpan(0, 11));
+        Assert.Equal(1, redacted);
+        Assert.Equal(2, edges.Count);
+
+        press[0]++;
+        receiver.ProcessPacket(3, press);
+        receiver.ProcessPacket(3, press.AsSpan(0, 11));
+        Assert.Equal(2, edges.Count);
+        Assert.Equal(1, redacted);
+
+        press[0]--;
+        receiver.ProcessPacket(2, [0x05, 0x04, 0x00, 0x40, 0x00, 0x13]);
+        receiver.ProcessPacket(3, press);
+        Assert.Equal(2, edges.Count);
     }
 
     [Fact]

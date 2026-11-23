@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
-using System.Buffers.Binary;
+using System.Security.Principal;
 using System.IO.Pipes;
 using RemoteBuddy.Core.Diagnostics;
 using RemoteBuddy.Core.Models;
@@ -16,12 +16,8 @@ public static class ChromecastWorkerHost
 {
     public const byte MsgTypeButtonEvent = 0x01;
     public const byte MsgTypeTruncatedDetected = 0x02;
-    public const byte MsgTypeConnectionHandleBound = 0x03;
 
-    public const byte CmdSetKnownGattHandles = 0x01;
-    public const byte CmdResetBinding = 0x02;
-
-    public static void RunWorker(string pipeName)
+    public static void RunWorker(string pipeName, Guid marker)
     {
         AppLogger.Info($"ChromecastWorkerHost starting for pipe '{pipeName}' (PID: {Environment.ProcessId})", "ChromecastWorkerHost");
 
@@ -29,7 +25,7 @@ public static class ChromecastWorkerHost
         {
             BthPortRegistryHelper.TryConfigure();
 
-            using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut);
+            using var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.None, TokenImpersonationLevel.Identification);
             pipe.Connect(10000);
             AppLogger.Info("ChromecastWorkerHost connected to parent pipe", "ChromecastWorkerHost");
 
@@ -57,7 +53,6 @@ public static class ChromecastWorkerHost
             {
                 try
                 {
-                    AppLogger.Warn("ChromecastWorkerHost: Dispatched truncated packet notification to pipe", "ChromecastWorkerHost");
                     byte[] msg = [MsgTypeTruncatedDetected];
                     lock (pipe)
                     {
@@ -71,25 +66,7 @@ public static class ChromecastWorkerHost
                 }
             };
 
-            receiver.ConnectionHandleBound += (handle) =>
-            {
-                try
-                {
-                    AppLogger.Info($"ChromecastWorkerHost: Dispatched connection handle 0x{handle:X4} to pipe", "ChromecastWorkerHost");
-                    byte[] msg = [MsgTypeConnectionHandleBound, (byte)(handle & 0xFF), (byte)((handle >> 8) & 0xFF)];
-                    lock (pipe)
-                    {
-                        pipe.Write(msg, 0, 3);
-                        pipe.Flush();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    AppLogger.Debug($"Failed to write bound handle to pipe: {ex.Message}", "ChromecastWorkerHost");
-                }
-            };
-
-            if (!receiver.Start())
+            if (!receiver.Start(marker))
             {
                 AppLogger.Error("ChromecastWorkerHost: receiver.Start() failed", component: "ChromecastWorkerHost");
                 // Notify parent that startup failed (0x00)
@@ -103,32 +80,8 @@ public static class ChromecastWorkerHost
             pipe.Flush();
             AppLogger.Info("ChromecastWorkerHost: Sent ready handshake (0x01) to parent", "ChromecastWorkerHost");
 
-            // Read control commands from parent pipe in the main loop until pipe disconnects
-            byte[] cmdBuf = new byte[1];
-            while (pipe.IsConnected)
-            {
-                int read = pipe.Read(cmdBuf, 0, 1);
-                if (read == 0) break; // Parent closed pipe
-
-                byte cmd = cmdBuf[0];
-                if (cmd == CmdSetKnownGattHandles)
-                {
-                    int count = pipe.ReadByte();
-                    if (count < 0) break;
-                    var handles = new List<ushort>(count);
-                    byte[] hBuf = new byte[2];
-                    for (int i = 0; i < count; i++)
-                    {
-                        if (pipe.Read(hBuf, 0, 2) < 2) break;
-                        handles.Add(BinaryPrimitives.ReadUInt16LittleEndian(hBuf));
-                    }
-                    receiver.SetKnownGattHandles(handles);
-                }
-                else if (cmd == CmdResetBinding)
-                {
-                    receiver.ResetConnectionBinding();
-                }
-            }
+            // The parent holds the pipe open for the lifetime of this receiver.
+            while (pipe.ReadByte() != -1) { }
 
             receiver.Stop();
             AppLogger.Info("ChromecastWorkerHost parent pipe closed, exiting cleanly", "ChromecastWorkerHost");

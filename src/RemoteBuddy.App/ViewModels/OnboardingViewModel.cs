@@ -1,4 +1,4 @@
-﻿// Copyright (C) 2026 Remote Buddy Contributors
+// Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
 using System.Collections.ObjectModel;
@@ -10,6 +10,7 @@ using RemoteBuddy.Core.Bluetooth;
 using RemoteBuddy.Core.Config;
 using RemoteBuddy.Core.Diagnostics;
 using RemoteBuddy.Core.Models;
+using RemoteBuddy.Core.Protocols;
 using RemoteBuddy.Platform.Windows.Audio;
 using RemoteBuddy.Platform.Windows.Bluetooth;
 using RemoteBuddy.Platform.Windows.Input;
@@ -75,7 +76,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
         WizardMode.DeviceOnly => SelectedDevice != null
             ? $"遥控器「{SelectedDevice.Name}」已成功连接并完成测试。点击“完成”即可保存至您的遥控器列表并开始使用。"
             : "遥控器已成功连接并完成测试。点击“完成”即可保存至您的遥控器列表并开始使用。",
-        WizardMode.Integration => $"已成功配置「{SelectedTool}」语音输入法（快捷键 {ShortcutText}）。在任意应用中按住遥控器说话即可体验流畅的语音输入。",
+        WizardMode.Integration => $"已成功配置「{SelectedTool}」语音输入法（快捷键 {ShortcutText}）。语音键已设为{(IsHoldToTalk ? "按住说话" : "单击切换")}。",
         _ => "所有音频链路与输入法快捷键已就绪。在任意应用程序或文档中，拿起遥控器按住说话即可畅享语音输入。"
     };
 
@@ -142,13 +143,19 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
 
     public Visibility RestartBluetoothStatusVisibility => string.IsNullOrEmpty(RestartBluetoothStatusText) ? Visibility.Collapsed : Visibility.Visible;
 
+    public bool IsTestingChromecast => SelectedDevice is { } device &&
+        (device.IsG9N9N || G9N9NProtocol.IsCandidate(device.Name));
+
     public void NotifyTruncatedPacketDetected()
     {
-        if (CurrentWizardStep == WizardStep.ButtonTest)
-        {
-            TruncationWarningMessage = "检测到遥控器按键报文被系统隐私机制脱敏截断（缺少载荷数据）。请点击右侧“重启蓝牙适配器”（或以管理员身份运行本程序），使驱动脱敏规则生效。";
-            OnPropertyChanged(nameof(TruncationWarningVisibility));
-        }
+        if (CurrentWizardStep != WizardStep.ButtonTest || !IsDeviceConnected ||
+            !IsTestingChromecast || TruncationWarningMessage.Length > 0) return;
+
+        LastPressedButtonName = "检测到普通按键活动";
+        HasButtonTested = true;
+        ValidationError = string.Empty;
+        TruncationWarningMessage = "已确认选中的遥控器发来了普通按键报文。Windows 未提供键码，暂时无法显示键名或执行该键的映射。如果刚启用蓝牙详细日志，请重启 Windows，重新连接遥控器后再测试。";
+        OnPropertyChanged(nameof(TruncationWarningVisibility));
     }
 
     [RelayCommand]
@@ -190,7 +197,26 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     private TargetInputTool _selectedTool;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsHoldToTalk))]
+    [NotifyPropertyChangedFor(nameof(IsClickToToggle))]
+    [NotifyPropertyChangedFor(nameof(TranscriptionInstructions))]
     private VoiceTriggerMode _triggerMode;
+
+    public bool IsHoldToTalk
+    {
+        get => TriggerMode == VoiceTriggerMode.HoldToTalk;
+        set { if (value) TriggerMode = VoiceTriggerMode.HoldToTalk; }
+    }
+
+    public bool IsClickToToggle
+    {
+        get => TriggerMode == VoiceTriggerMode.ClickToToggle;
+        set { if (value) TriggerMode = VoiceTriggerMode.ClickToToggle; }
+    }
+
+    public string TranscriptionInstructions => IsHoldToTalk
+        ? "点击下方输入框，按住语音键说一句话，松开后核对转写结果。"
+        : "点击下方输入框，按一下语音键开始说话，再按一下结束，然后核对转写结果。";
 
     [ObservableProperty]
     private string _shortcutText = string.Empty;
@@ -346,8 +372,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             {
                 if (CurrentWizardStep == WizardStep.ButtonTest)
                 {
-                    LastPressedButtonName = "已按下: 语音键 (Voice)";
-                    HasButtonTested = true;
+                    NotifyButtonPressed(RemoteButton.Voice);
                 }
             }
 
@@ -475,8 +500,14 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     {
         AppLogger.Info($"OnboardingViewModel: NotifyButtonPressed: button={button}, step={CurrentWizardStep}", "OnboardingViewModel");
         if (CurrentWizardStep != WizardStep.ButtonTest || button == RemoteButton.None) return;
+        if (IsTestingChromecast && !IsDeviceConnected) return;
+
         LastPressedButtonName = $"已按下: {GetButtonFriendlyName(button)}";
         HasButtonTested = true;
+        ValidationError = string.Empty;
+
+        if (IsTestingChromecast && button == RemoteButton.Voice) return;
+
         TruncationWarningMessage = string.Empty;
         RestartBluetoothStatusText = string.Empty;
         OnPropertyChanged(nameof(TruncationWarningVisibility));
@@ -540,7 +571,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             TriggerMode = (tool == TargetInputTool.WindowsDictation)
                 ? VoiceTriggerMode.ClickToToggle
                 : VoiceTriggerMode.HoldToTalk;
-            SaveToolConfig();
+            ValidationError = string.Empty;
         }
     }
 
@@ -599,7 +630,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             case WizardStep.ButtonTest:
                 if (!HasButtonTested)
                 {
-                    ValidationError = "请先在遥控器上按下一个按键（方向键、OK 或语音键）以验证按键链路正常。";
+                    ValidationError = "请在遥控器上按一个方向键、OK 或语音键，确认收到响应。";
                     return;
                 }
                 break;
@@ -619,7 +650,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             case WizardStep.TranscriptionVerify:
                 if (!_hasVoiceTranscriptionSessionOccurred)
                 {
-                    ValidationError = "请先按住遥控器语音键在下方输入框中完成一次实际语音转写。";
+                    ValidationError = "请使用遥控器语音键在下方输入框中完成一次实际语音转写。";
                     return;
                 }
                 if (string.IsNullOrWhiteSpace(TranscriptionTestText))

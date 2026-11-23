@@ -21,47 +21,41 @@ public sealed class ChromecastEtwReceiver : IDisposable
 
     public event Action<RemoteButton, bool>? ButtonEvent;
     public event Action? TruncatedPacketDetected;
-    public event Action<ushort>? ConnectionHandleBound;
 
+    private const byte HciEvent = 2;
+    private const byte AclReceived = 3;
+    private const byte AclSent = 4;
+    private const ushort G9N9NInputAttribute = 0x0029;
     private readonly object _lock = new();
-    private readonly HashSet<ushort> _knownGattHandles = new();
-    private ushort? _boundConnectionHandle;
-    private readonly object _bindingLock = new();
+    private byte[] _sourceRequest = [];
+    private ushort? _probeConnection;
+    private ushort? _boundConnection;
+    private bool _sawPacketEvent;
+    private bool _sawRedaction;
 
-    public ushort? BoundConnectionHandle
+    internal void SetSourceProbe(Guid marker)
     {
-        get { lock (_bindingLock) return _boundConnectionHandle; }
-        set { lock (_bindingLock) _boundConnectionHandle = value; }
-    }
-
-    public void SetKnownGattHandles(IEnumerable<ushort> handles)
-    {
-        lock (_bindingLock)
-        {
-            _knownGattHandles.Clear();
-            foreach (var h in handles)
-            {
-                if (h != 0) _knownGattHandles.Add(h);
-            }
-        }
-    }
-
-    public void ResetConnectionBinding()
-    {
-        lock (_bindingLock)
-        {
-            _boundConnectionHandle = null;
-        }
+        // ATT Find By Type Value: full range, Primary Service, 128-bit UUID in wire order.
+        _sourceRequest = new byte[23];
+        byte[] header = [0x06, 0x01, 0x00, 0xFF, 0xFF, 0x00, 0x28];
+        header.CopyTo(_sourceRequest, 0);
+        var uuid = _sourceRequest.AsSpan(header.Length);
+        marker.TryWriteBytes(uuid, bigEndian: true, out _);
+        uuid.Reverse();
+        _probeConnection = null;
+        _boundConnection = null;
+        _sawPacketEvent = _sawRedaction = false;
     }
 
     private string? _sessionName;
     private ulong _sessionHandle;
     private ulong _traceHandle = 0xFFFFFFFFFFFFFFFF;
     private Thread? _processThread;
+    private CancellationTokenSource? _flushCancellation;
     private EventRecordCallback? _callbackHolder;
     private IntPtr _logfileBuffer = IntPtr.Zero;
     private IntPtr _propertiesBuffer = IntPtr.Zero;
-    private bool _isRunning;
+    private volatile bool _isRunning;
     private RemoteButton _lastHeldButton = RemoteButton.None;
 
     public bool IsRunning
@@ -72,11 +66,12 @@ public sealed class ChromecastEtwReceiver : IDisposable
         }
     }
 
-    public bool Start()
+    public bool Start(Guid marker)
     {
         lock (_lock)
         {
             if (_isRunning) return true;
+            SetSourceProbe(marker);
 
             // Ensure BthPort registry parameters are configured
             if (!BthPortRegistryHelper.IsConfigured())
@@ -97,7 +92,8 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 {
                     BufferSize = (uint)propSize,
                     Flags = 0x00020000, // WNODE_FLAG_TRACED_GUID
-                    ClientContext = 2   // PerfCounter
+                    Guid = Guid.NewGuid(),
+                    ClientContext = 2   // System time
                 },
                 BufferSize = 64,
                 MinimumBuffers = 4,
@@ -116,12 +112,15 @@ public sealed class ChromecastEtwReceiver : IDisposable
             if (startResult == 183 /* ERROR_ALREADY_EXISTS */)
             {
                 ControlTraceW(0, _sessionName, _propertiesBuffer, 1 /* EVENT_TRACE_CONTROL_STOP */);
+                Marshal.StructureToPtr(prop, _propertiesBuffer, false);
+                Marshal.Copy(nameChars, 0, nameDest, nameChars.Length);
                 startResult = StartTraceW(out _sessionHandle, _sessionName, _propertiesBuffer);
             }
 
             if (startResult != 0)
             {
                 AppLogger.Warn($"Failed to start ETW trace session for BthPort. Win32Error={startResult}", "ChromecastEtwReceiver");
+                _sessionHandle = 0;
                 CleanupUnmanaged();
                 return false;
             }
@@ -132,7 +131,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 ref providerGuid,
                 1,                      // EVENT_CONTROL_CODE_ENABLE_PROVIDER
                 5,                      // TRACE_LEVEL_VERBOSE
-                ulong.MaxValue,         // matchAnyKeyword: match all keywords (HCI, HCIRAW, L2CAP, etc.)
+                ulong.MaxValue,         // Include BthPort packet events across driver keyword layouts
                 0, 0, IntPtr.Zero);
 
             if (enableResult != 0)
@@ -172,9 +171,46 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 IsBackground = true
             };
             _processThread.Start();
+            _flushCancellation = new CancellationTokenSource();
+            _ = FlushBuffersAsync(_sessionHandle, _sessionName, prop.Wnode.Guid, _flushCancellation.Token);
 
             AppLogger.Info($"Chromecast ETW receiver successfully started (Session={_sessionName})", "ChromecastEtwReceiver");
             return true;
+        }
+    }
+
+    private static async Task FlushBuffersAsync(ulong sessionHandle, string sessionName, Guid sessionGuid, CancellationToken cancellationToken)
+    {
+        // ETW's automatic real-time flush uses whole seconds. Flush this session
+        // more often so a single press doesn't wait for the next driver batch.
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(100));
+        int structureSize = Marshal.SizeOf<EVENT_TRACE_PROPERTIES>();
+        int bufferSize = structureSize + (sessionName.Length + 1) * sizeof(char);
+        var properties = new EVENT_TRACE_PROPERTIES
+        {
+            Wnode = new WNODE_HEADER { BufferSize = (uint)bufferSize, Guid = sessionGuid },
+            LoggerNameOffset = (uint)structureSize
+        };
+        IntPtr buffer = Marshal.AllocHGlobal(bufferSize);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+            {
+                Marshal.StructureToPtr(properties, buffer, false);
+                uint result = ControlTraceW(sessionHandle, null, buffer, 3 /* EVENT_TRACE_CONTROL_FLUSH */);
+                if (result == 0) continue;
+
+                if (!cancellationToken.IsCancellationRequested)
+                    AppLogger.Warn($"Could not flush the Chromecast ETW session (Win32Error={result})", "ChromecastEtwReceiver");
+                break;
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
         }
     }
 
@@ -184,7 +220,9 @@ public sealed class ChromecastEtwReceiver : IDisposable
         if (handle == 0 || handle == 0xFFFFFFFFFFFFFFFF) return;
 
         ulong[] handles = [handle];
+        var callback = _callbackHolder;
         uint result = ProcessTrace(handles, 1, IntPtr.Zero, IntPtr.Zero);
+        GC.KeepAlive(callback);
         if (result != 0 && result != 1223 /* ERROR_CANCELLED */)
         {
             AppLogger.Debug($"ProcessTrace exited with code {result}", "ChromecastEtwReceiver");
@@ -200,51 +238,35 @@ public sealed class ChromecastEtwReceiver : IDisposable
             var header = Marshal.PtrToStructure<EVENT_HEADER>(pEventRecord);
             if (header.ProviderId != BthPortProviderGuid) return;
 
-            // 1. Check Event ID: Only Event 402 is BthPort_Event_BipAclData
             if (header.EventDescriptor.Id != 402) return;
-
-            // 2. Try TDH property extraction first
-            byte[]? aclData = null;
-            byte[]? typeBytes = GetEventProperty(pEventRecord, "BIP_Type");
-            if (typeBytes != null && typeBytes.Length >= 1)
+            if (!_sawPacketEvent)
             {
-                byte bipType = typeBytes[0];
-                // 3 = ACL RX (from remote device), 2 = ACL TX (to remote device, used for handle binding)
-                if (bipType != 3 && bipType != 2) return;
+                _sawPacketEvent = true;
+                AppLogger.Info($"BthPort packet event received (version {header.EventDescriptor.Version})", "ChromecastEtwReceiver");
+            }
 
-                aclData = GetEventProperty(pEventRecord, "BIP_Data");
-                if (aclData != null && aclData.Length >= 7)
+            var kind = GetEventProperty(pEventRecord, "BIP_Type");
+            if (kind is { Length: 1 })
+            {
+                if (!IsPacketEventKind(kind[0])) return;
+                var packet = GetEventProperty(pEventRecord, "BIP_Data");
+                var length = GetEventProperty(pEventRecord, "BIP_DataLen");
+                if (packet != null && length is { Length: 4 } &&
+                    BinaryPrimitives.ReadUInt32LittleEndian(length) == packet.Length)
                 {
-                    ProcessAclData(aclData, bipType);
+                    ProcessPacket(kind[0], packet);
                     return;
                 }
             }
 
-            // 3. Fall back to raw UserData inspection (handles missing TDH manifests or custom layouts)
+            // The raw fallback applies only to the version 0 layout.
+            if (header.EventDescriptor.Version != 0) return;
             var record = Marshal.PtrToStructure<EVENT_RECORD>(pEventRecord);
-            if (record.UserDataLength >= 8 && record.UserData != IntPtr.Zero)
-            {
-                byte[] raw = new byte[record.UserDataLength];
-                Marshal.Copy(record.UserData, raw, 0, record.UserDataLength);
-
-                // Event 402 UserData layout:
-                // Offset 0: CommandPacketsAllowed (uint8)
-                // Offset 1..2: AclWriteCredits (uint16)
-                // Offset 3: BIP_Type (uint8) -> must be 3 (ACL RX) or 2 (ACL TX)
-                // Offset 4..7: BIP_DataLen (uint32)
-                // Offset 8..: BIP_Data
-                byte bipType = raw[3];
-                if (bipType != 3 && bipType != 2) return;
-
-                uint dataLen = BinaryPrimitives.ReadUInt32LittleEndian(raw.AsSpan(4, 4));
-                int actualLen = (int)Math.Min((long)dataLen, raw.Length - 8);
-                if (actualLen >= 7)
-                {
-                    byte[] rawAcl = new byte[actualLen];
-                    Array.Copy(raw, 8, rawAcl, 0, actualLen);
-                    ProcessAclData(rawAcl, bipType);
-                }
-            }
+            if (record.UserDataLength <= 8 || record.UserData == IntPtr.Zero) return;
+            byte[] data = new byte[record.UserDataLength];
+            Marshal.Copy(record.UserData, data, 0, data.Length);
+            if (BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(4, 4)) == data.Length - 8)
+                ProcessPacket(data[3], data.AsSpan(8));
         }
         catch (Exception ex)
         {
@@ -252,381 +274,125 @@ public sealed class ChromecastEtwReceiver : IDisposable
         }
     }
 
-    private void ProcessAclData(ReadOnlySpan<byte> aclData, byte bipType)
+    private static bool IsPacketEventKind(byte kind) => kind is HciEvent or AclReceived or AclSent;
+
+    internal void ProcessPacket(byte kind, ReadOnlySpan<byte> packet)
     {
-        if (aclData.Length < 7) return;
-
-        // Extract connection handle from ACL header (bytes 0..1, lowest 12 bits)
-        ushort handleAndFlags = BinaryPrimitives.ReadUInt16LittleEndian(aclData.Slice(0, 2));
-        ushort connectionHandle = (ushort)(handleAndFlags & 0x0FFF);
-
-        // Check if this packet is an ATT transaction on one of our known ATVV characteristic handles
-        ReadOnlySpan<byte> l2cap;
-        if (aclData.Length >= 8 && BinaryPrimitives.ReadUInt16LittleEndian(aclData.Slice(6, 2)) == 4)
+        if (kind == HciEvent)
         {
-            l2cap = aclData.Slice(4);
-        }
-        else if (aclData.Length >= 8)
-        {
-            ushort declaredLen = BinaryPrimitives.ReadUInt16LittleEndian(aclData.Slice(2, 2));
-            if (declaredLen > 0 && declaredLen <= aclData.Length - 4)
+            // Disconnection Complete. A controller can now reuse the handle for another device.
+            if (packet is [0x05, 0x04, 0x00, _, _, _])
             {
-                l2cap = aclData.Slice(4);
-            }
-            else
-            {
-                l2cap = aclData;
-            }
-        }
-        else
-        {
-            l2cap = aclData;
-        }
-
-        if (l2cap.Length >= 7)
-        {
-            ushort cid = BinaryPrimitives.ReadUInt16LittleEndian(l2cap.Slice(2, 2));
-            if (cid == 4) // ATT
-            {
-                ushort attrHandle = BinaryPrimitives.ReadUInt16LittleEndian(l2cap.Slice(5, 2));
-                lock (_bindingLock)
+                ushort disconnected = BinaryPrimitives.ReadUInt16LittleEndian(packet[3..]);
+                if (_boundConnection == disconnected)
                 {
-                    if (_knownGattHandles.Contains(attrHandle))
-                    {
-                        if (_boundConnectionHandle != connectionHandle)
-                        {
-                            _boundConnectionHandle = connectionHandle;
-                            AppLogger.Info($"Chromecast ETW: Bound ACL connection handle 0x{connectionHandle:X4} to target device via ATVV handle 0x{attrHandle:X4}", "ChromecastEtwReceiver");
-                            ConnectionHandleBound?.Invoke(connectionHandle);
-                        }
-                        return; // Known ATVV protocol traffic; not a button report
-                    }
+                    _boundConnection = null;
+                    DispatchButtonEvent(RemoteButton.None, false);
                 }
+                if (_probeConnection == disconnected) _probeConnection = null;
             }
+            return;
         }
 
-        // Button reports must only come from ACL RX (incoming from remote device)
-        if (bipType != 3) return;
+        if (kind is not (AclSent or AclReceived) || !TryGetAttPacket(packet, out ushort connection, out var att, out bool incomplete)) return;
 
-        // Verify that this packet comes from our bound remote device, not another Bluetooth peripheral
-        lock (_bindingLock)
+        if (kind == AclSent)
         {
-            if (_boundConnectionHandle.HasValue && connectionHandle != _boundConnectionHandle.Value)
+            if (!incomplete && att.SequenceEqual(_sourceRequest))
             {
-                return; // From a different Bluetooth device; ignore
+                _probeConnection = connection;
+                AppLogger.Info("BthPort observed the selected-device GATT query", "ChromecastEtwReceiver");
             }
+            return;
         }
 
-        // Parse button event from ACL payload
-        if (TryParseAclPacket(aclData, out RemoteButton button, out bool isDown, out bool isTruncated))
+        // The unique request was sent via WinRT on the selected device. Confirm its ATT response
+        // on the same ACL handle before accepting any input from that connection.
+        if (_probeConnection == connection && !incomplete && att is [0x01, 0x06, 0x01, 0x00, 0x0A])
         {
-            AppLogger.Info($"[ETW BthPort] Detected button: {button}, isDown={isDown} (ConnectionHandle=0x{connectionHandle:X4})", "ChromecastEtwReceiver");
-            DispatchButtonEvent(button, isDown);
+            _boundConnection = connection;
+            _probeConnection = null;
+            AppLogger.Info("Chromecast ETW confirmed the selected Bluetooth connection", "ChromecastEtwReceiver");
+            return;
         }
-        else if (isTruncated)
+
+        if (_boundConnection != connection) return;
+        if (TryParseButtonReport(att, incomplete, out var button, out bool isDown, out bool truncated))
+            DispatchButtonEvent(button, isDown);
+        else if (truncated)
         {
-            AppLogger.Warn($"[ETW BthPort] Detected truncated packet (Len={aclData.Length}, Hex={Convert.ToHexString(aclData.ToArray())}) from ConnectionHandle=0x{connectionHandle:X4}. Discarding event.", "ChromecastEtwReceiver");
+            if (!_sawRedaction)
+            {
+                _sawRedaction = true;
+                AppLogger.Warn("Windows omitted the key code from a verified Chromecast button report", "ChromecastEtwReceiver");
+            }
+            DispatchButtonEvent(RemoteButton.None, false);
             TruncatedPacketDetected?.Invoke();
         }
     }
 
-    public static bool TryParseAclPacket(ReadOnlySpan<byte> aclPacket, out RemoteButton button, out bool isDown)
+    private static bool TryGetAttPacket(ReadOnlySpan<byte> packet, out ushort connection, out ReadOnlySpan<byte> att, out bool incomplete)
     {
-        return TryParseAclPacket(aclPacket, out button, out isDown, out _);
+        connection = 0;
+        att = default;
+        incomplete = false;
+        if (packet.Length < 8) return false;
+
+        ushort header = BinaryPrimitives.ReadUInt16LittleEndian(packet);
+        connection = (ushort)(header & 0x0FFF);
+        if (connection > 0x0EFF || (header & 0xD000) != 0) return false;
+
+        int aclLength = BinaryPrimitives.ReadUInt16LittleEndian(packet[2..]);
+        int l2capLength = BinaryPrimitives.ReadUInt16LittleEndian(packet[4..]);
+        if (aclLength != l2capLength + 4 || packet.Length > aclLength + 4 ||
+            BinaryPrimitives.ReadUInt16LittleEndian(packet[6..]) != 4) return false;
+
+        att = packet[8..];
+        incomplete = att.Length < l2capLength;
+        // The observed redaction keeps the ATT header of the eight-byte G9N9N report.
+        return incomplete ? l2capLength == 11 && att.Length == 3 : !att.IsEmpty;
     }
 
-    public static bool TryParseAclPacket(ReadOnlySpan<byte> aclPacket, out RemoteButton button, out bool isDown, out bool isTruncated)
+    public static bool TryParseAclPacket(ReadOnlySpan<byte> packet, out RemoteButton button, out bool isDown) =>
+        TryParseAclPacket(packet, out button, out isDown, out _);
+
+    public static bool TryParseAclPacket(ReadOnlySpan<byte> packet, out RemoteButton button, out bool isDown, out bool truncated)
     {
         button = RemoteButton.None;
-        isDown = false;
-        isTruncated = false;
-
-        if (aclPacket.Length < 5) return false;
-
-        // 1. Direct structured parse (standard ACL / L2CAP packet alignment)
-        if (TryDirectParse(aclPacket, out button, out isDown, out isTruncated))
-        {
-            return true;
-        }
-
-        if (isTruncated) return false;
-
-        // 2. Fallback pattern scan (scans entire buffer for ATT Handle Value Notification: 0x1B or 0x1D)
-        return ScanAttNotification(aclPacket, out button, out isDown, out isTruncated);
+        isDown = truncated = false;
+        return TryGetAttPacket(packet, out _, out var att, out bool incomplete) &&
+            TryParseButtonReport(att, incomplete, out button, out isDown, out truncated);
     }
 
-    private static bool TryDirectParse(ReadOnlySpan<byte> aclPacket, out RemoteButton button, out bool isDown, out bool isTruncated)
+    private static bool TryParseButtonReport(ReadOnlySpan<byte> att, bool incomplete, out RemoteButton button, out bool isDown, out bool truncated)
     {
         button = RemoteButton.None;
-        isDown = false;
-        isTruncated = false;
+        isDown = truncated = false;
+        if (att.Length < 3 || att[0] is not (0x1B or 0x1D)) return false;
 
-        if (aclPacket.Length < 7) return false;
-
-        ReadOnlySpan<byte> l2capPacket;
-        if (aclPacket.Length >= 8 && BinaryPrimitives.ReadUInt16LittleEndian(aclPacket.Slice(6, 2)) == 4)
+        ushort attribute = BinaryPrimitives.ReadUInt16LittleEndian(att[1..]);
+        var report = att[3..];
+        if (incomplete)
         {
-            // Standard HCI ACL packet with 4-byte HCI header and L2CAP starting at offset 4 (CID at offset 6 is 4)
-            l2capPacket = aclPacket.Slice(4);
-        }
-        else if (aclPacket.Length >= 4 && BinaryPrimitives.ReadUInt16LittleEndian(aclPacket.Slice(2, 2)) == 4)
-        {
-            // Already L2CAP-sliced buffer starting at offset 0 (CID at offset 2 is 4)
-            l2capPacket = aclPacket;
-        }
-        else if (aclPacket.Length >= 8)
-        {
-            ushort declaredLen = BinaryPrimitives.ReadUInt16LittleEndian(aclPacket.Slice(2, 2));
-            if (declaredLen > 0 && declaredLen <= aclPacket.Length - 4)
-            {
-                l2capPacket = aclPacket.Slice(4);
-            }
-            else
-            {
-                l2capPacket = aclPacket;
-            }
-        }
-        else
-        {
-            l2capPacket = aclPacket;
-        }
-
-        if (l2capPacket.Length < 4) return false;
-
-        ushort cid = BinaryPrimitives.ReadUInt16LittleEndian(l2capPacket.Slice(2, 2));
-        if (cid != 4) return false; // ATT CID is 4
-        if (l2capPacket.Length < 5) return false;
-
-        byte attOpcode = l2capPacket[4];
-        if (attOpcode != 0x1B && attOpcode != 0x1D) return false;
-
-        if (l2capPacket.Length < 7) return false;
-        ushort attrHandle = BinaryPrimitives.ReadUInt16LittleEndian(l2capPacket.Slice(5, 2));
-        if (attrHandle != 0x0029 && attrHandle != 0x002D && attrHandle != 0x0025 && attrHandle != 0x0028) return false;
-
-        if (l2capPacket.Length > 7)
-        {
-            ReadOnlySpan<byte> report = l2capPacket.Slice(7);
-            if (report.IsEmpty)
-            {
-                isTruncated = true;
-                return false;
-            }
-
-            if (attrHandle == 0x0029)
-            {
-                if (report.Length >= 8)
-                {
-                    byte code = report[0];
-                    if (code == 0)
-                    {
-                        button = RemoteButton.None;
-                        isDown = false;
-                        return true;
-                    }
-
-                    button = MapG9N9NButtonCode(code);
-                    if (button != RemoteButton.None)
-                    {
-                        isDown = true;
-                        return true;
-                    }
-                }
-
-                if (G9N9NProtocol.TryParseReport(report, out var parsedButtons))
-                {
-                    if (parsedButtons.Count > 0)
-                    {
-                        button = parsedButtons[0];
-                        isDown = true;
-                        return true;
-                    }
-                    else
-                    {
-                        button = RemoteButton.None;
-                        isDown = false;
-                        return true;
-                    }
-                }
-
-                if (report.Length >= 1)
-                {
-                    byte code = report[0];
-                    if (code == 0)
-                    {
-                        button = RemoteButton.None;
-                        isDown = false;
-                        return true;
-                    }
-
-                    button = MapG9N9NButtonCode(code);
-                    if (button != RemoteButton.None)
-                    {
-                        isDown = true;
-                        return true;
-                    }
-                }
-            }
-            else // 0x002D, 0x0025, 0x0028
-            {
-                if (report.Length >= 2)
-                {
-                    ushort usage = BinaryPrimitives.ReadUInt16LittleEndian(report.Slice(0, 2));
-                    if (usage == 0)
-                    {
-                        button = RemoteButton.None;
-                        isDown = false;
-                        return true;
-                    }
-
-                    if (G9N9NProtocol.ConsumerButtons.TryGetValue(usage, out var consumerBtn))
-                    {
-                        button = consumerBtn;
-                        isDown = true;
-                        return true;
-                    }
-                }
-            }
-        }
-        else
-        {
-            // Truncated by BthPort due to sensitive logging pending adapter restart
-            isTruncated = true;
+            truncated = attribute == G9N9NInputAttribute && report.IsEmpty;
             return false;
         }
 
-        return false;
-    }
-
-    private static bool ScanAttNotification(ReadOnlySpan<byte> span, out RemoteButton button, out bool isDown, out bool isTruncated)
-    {
-        button = RemoteButton.None;
-        isDown = false;
-        isTruncated = false;
-
-        for (int i = 2; i <= span.Length - 3; i++)
+        if (attribute == G9N9NInputAttribute && report is [_, 0, 0, 0, 0, 0, 0, 0])
         {
-            byte opcode = span[i];
-            if (opcode != 0x1B && opcode != 0x1D) continue;
-
-            // Verify L2CAP CID is ATT (Channel 4)
-            ushort cid = (ushort)(span[i - 2] | (span[i - 1] << 8));
-            if (cid != 4) continue;
-
-            ushort attrHandle = (ushort)(span[i + 1] | (span[i + 2] << 8));
-            if (attrHandle == 0x0029)
-            {
-                ReadOnlySpan<byte> payload = span.Slice(i + 3);
-                if (payload.IsEmpty)
-                {
-                    isTruncated = true;
-                    return false;
-                }
-
-                if (payload.Length >= 8)
-                {
-                    byte code = payload[0];
-                    if (code == 0)
-                    {
-                        button = RemoteButton.None;
-                        isDown = false;
-                        return true;
-                    }
-
-                    var mapped = MapG9N9NButtonCode(code);
-                    if (mapped != RemoteButton.None)
-                    {
-                        button = mapped;
-                        isDown = true;
-                        return true;
-                    }
-                }
-
-                if (G9N9NProtocol.TryParseReport(payload, out var parsedButtons))
-                {
-                    if (parsedButtons.Count > 0)
-                    {
-                        button = parsedButtons[0];
-                        isDown = true;
-                        return true;
-                    }
-                    else
-                    {
-                        button = RemoteButton.None;
-                        isDown = false;
-                        return true;
-                    }
-                }
-
-                if (payload.Length >= 1)
-                {
-                    byte code = payload[0];
-                    if (code == 0)
-                    {
-                        button = RemoteButton.None;
-                        isDown = false;
-                        return true;
-                    }
-
-                    var mapped = MapG9N9NButtonCode(code);
-                    if (mapped != RemoteButton.None)
-                    {
-                        button = mapped;
-                        isDown = true;
-                        return true;
-                    }
-                }
-            }
-            else if (attrHandle == 0x002D || attrHandle == 0x0025 || attrHandle == 0x0028)
-            {
-                ReadOnlySpan<byte> payload = span.Slice(i + 3);
-                if (payload.IsEmpty)
-                {
-                    isTruncated = true;
-                    return false;
-                }
-
-                if (payload.Length >= 2)
-                {
-                    ushort usage = (ushort)(payload[0] | (payload[1] << 8));
-                    if (usage == 0)
-                    {
-                        button = RemoteButton.None;
-                        isDown = false;
-                        return true;
-                    }
-
-                    if (G9N9NProtocol.ConsumerButtons.TryGetValue(usage, out var consumerBtn))
-                    {
-                        button = consumerBtn;
-                        isDown = true;
-                        return true;
-                    }
-                }
-            }
+            byte code = report[0];
+            if (code == 0) return true;
+            if (code > G9N9NProtocol.IndexedConsumerUsages.Length) return false;
+            isDown = G9N9NProtocol.ConsumerButtons.TryGetValue(G9N9NProtocol.IndexedConsumerUsages[code - 1], out button);
+            return isDown;
         }
 
-        return false;
+        if (attribute is not (G9N9NInputAttribute or 0x0025 or 0x0028 or 0x002D) || report.Length != 2) return false;
+        ushort usage = BinaryPrimitives.ReadUInt16LittleEndian(report);
+        if (usage == 0) return true;
+        isDown = G9N9NProtocol.ConsumerButtons.TryGetValue(usage, out button);
+        return isDown;
     }
-
-    private static RemoteButton MapG9N9NButtonCode(byte code) => code switch
-    {
-        0x01 => RemoteButton.Power,
-        0x03 => RemoteButton.Up,
-        0x04 => RemoteButton.Down,
-        0x05 => RemoteButton.Left,
-        0x06 => RemoteButton.Right,
-        0x07 => RemoteButton.Ok,
-        0x08 => RemoteButton.Mute,
-        0x0A => RemoteButton.Home,
-        0x0B => RemoteButton.Back,
-        0x0C => RemoteButton.VolumeUp,
-        0x0D => RemoteButton.VolumeDown,
-        0x0E => RemoteButton.YouTube,
-        0x0F => RemoteButton.Netflix,
-        0x11 => RemoteButton.Input,
-        _ => RemoteButton.None
-    };
 
     private void DispatchButtonEvent(RemoteButton button, bool isDown)
     {
@@ -637,6 +403,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
         {
             if (isDown)
             {
+                if (button == _lastHeldButton) return;
                 if (_lastHeldButton != RemoteButton.None && _lastHeldButton != button)
                 {
                     buttonToRelease = _lastHeldButton;
@@ -709,13 +476,10 @@ public sealed class ChromecastEtwReceiver : IDisposable
     {
         lock (_lock)
         {
-            if (!_isRunning)
-            {
-                CleanupUnmanaged();
-                return;
-            }
-
             _isRunning = false;
+            _flushCancellation?.Cancel();
+            _flushCancellation?.Dispose();
+            _flushCancellation = null;
 
             if (_traceHandle != 0 && _traceHandle != 0xFFFFFFFFFFFFFFFF)
             {
@@ -887,7 +651,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
     private static extern uint StartTraceW(out ulong pSessionHandle, string sessionName, IntPtr properties);
 
     [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern uint ControlTraceW(ulong sessionHandle, string sessionName, IntPtr properties, uint controlCode);
+    private static extern uint ControlTraceW(ulong sessionHandle, string? sessionName, IntPtr properties, uint controlCode);
 
     [DllImport("advapi32.dll", SetLastError = true)]
     private static extern uint EnableTraceEx2(
