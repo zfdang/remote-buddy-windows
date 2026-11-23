@@ -46,10 +46,13 @@
 
 ## 📚 设计与开发文档
 
-Windows RC003 实机测试中，方向、OK、Home、Menu、TV、电源和语音已有输入处理；返回及音量加减在当前标准输入通道下尚未支持。详细证据及验收边界见 [Windows RC003 实机排查记录](docs/windows-rc003-validation.md)。
+Windows 真机已验证 G9N9N 常用普通键，以及 RC003 的返回和音量加减。设备报告、采集路径和验收范围见下方技术文档。
 
 相关技术细节与规范已在 `docs/` 目录下完成详细归档：
 
+- [G9N9N 按键与 Windows 报告](docs/g9n9n-buttons.md)
+- [小米 RC003 按键与 Windows 报告](docs/xiaomi-rc003-buttons.md)
+- [Windows 按键采集、切换与隔离](docs/windows-remote-input.md)
 - 🕹️ [Google Chromecast (G9N9N) 按键处理方案技术规范](docs/chromecast-g9n9n-button-handling.md)：详细阐述 G9N9N/GY3LE 遥控器在 Windows 上的隔离痛点、多种技术路线对比（Frida 注入 vs ETW 实时流 vs 消息栈）以及 Remote Buddy 采用的原生零注入多轨协同架构；
 - 🏛️ [软件架构设计 (Architecture)](docs/architecture.md)：技术栈选型（.NET 10 LTS + WPF 自包含发布）、分层设计与线程并发模型；
 - 📡 [遥控器与 ATVV 协议规范 (Device Protocols)](docs/device-protocols.md)：支持设备列表、完整 ATVV 控制报文（`0x08`, `0x04`, `0x0A`, `0x0D` 等）、动态 `SessionID` 处理、`AUDIO_SYNC` 解码同步与 HID Usage 码表；

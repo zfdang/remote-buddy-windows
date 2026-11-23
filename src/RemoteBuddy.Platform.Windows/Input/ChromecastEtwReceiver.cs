@@ -17,6 +17,8 @@ public enum EtwProtocolKind
     T1Remote = 2
 }
 
+public readonly record struct EtwButtonSource(ulong Address, Guid Marker, EtwProtocolKind Protocol);
+
 /// <summary>
 /// Captures Chromecast with Google TV Voice Remote (G9N9N) button reports in real time
 /// directly from the Windows Bluetooth driver (BthPort) via an ETW trace session.
@@ -24,43 +26,48 @@ public enum EtwProtocolKind
 public sealed class ChromecastEtwReceiver : IDisposable
 {
     private static readonly Guid BthPortProviderGuid = new("8a1f9517-3a8c-4a9e-a018-4f17a200f277");
-    private const string FixedSessionName = "RemoteBuddy_BthEtw";
+    private const string SessionNamePrefix = "RemoteBuddy_BthEtw_";
 
-    public event Action<RemoteButton, bool>? ButtonEvent;
-    public event Action? TruncatedPacketDetected;
+    public event Action<ulong, RemoteButton, bool>? ButtonEvent;
+    public event Action<ulong>? TruncatedPacketDetected;
+    public event Action<ulong>? DeviceDisconnected;
 
     private const byte HciEvent = 2;
     private const byte AclReceived = 3;
     private const byte AclSent = 4;
     private const ushort G9N9NInputAttribute = 0x0029;
+    private const ushort XiaomiKeyboardAttribute = 0x0064;
     public static readonly ushort[] G9N9NVerifiedAttributes = [G9N9NInputAttribute, 0x0025, 0x0028, 0x002D];
     public static readonly ushort[] XiaomiVerifiedAttributes = [0x002B, 0x0056, 0x0058, 0x0059, 0x005B, 0x005E];
     private static readonly HashSet<ushort> _g9n9nAttributesSet = [G9N9NInputAttribute, 0x0025, 0x0028, 0x002D];
     private static readonly HashSet<ushort> _xiaomiAttributesSet = [0x002B, 0x0056, 0x0058, 0x0059, 0x005B, 0x005E];
 
-    private EtwProtocolKind _protocolKind = EtwProtocolKind.GoogleG9N9N;
-    private IReadOnlySet<ushort>? _verifiedAttributes;
-    private readonly object _lock = new();
-    private byte[] _sourceRequest = [];
-    private ushort? _probeConnection;
-    private ushort? _boundConnection;
-    private bool _sawPacketEvent;
-    private bool _sawRedaction;
-    private long _probeTimestamp;
-
-    internal void SetSourceProbe(Guid marker)
+    private sealed class SourceState(EtwButtonSource source, byte[] request)
     {
-        // ATT Find By Type Value: full range, Primary Service, 128-bit UUID in wire order.
-        _sourceRequest = new byte[23];
-        byte[] header = [0x06, 0x01, 0x00, 0xFF, 0xFF, 0x00, 0x28];
-        header.CopyTo(_sourceRequest, 0);
-        var uuid = _sourceRequest.AsSpan(header.Length);
-        marker.TryWriteBytes(uuid, bigEndian: true, out _);
-        uuid.Reverse();
-        _probeConnection = null;
-        _boundConnection = null;
-        _sawPacketEvent = _sawRedaction = false;
-        _probeTimestamp = Environment.TickCount64;
+        public EtwButtonSource Source { get; } = source;
+        public byte[] Request { get; } = request;
+        public ushort? PendingHandle { get; set; }
+        public ushort? BoundHandle { get; set; }
+        public RemoteButton Held { get; set; }
+        public bool SawRedaction { get; set; }
+    }
+
+    private readonly object _lock = new();
+    private SourceState[] _sources = [];
+    private volatile bool _sawPacketEvent;
+
+    internal void SetSources(IEnumerable<EtwButtonSource> sources)
+    {
+        _sources = sources.Select(source =>
+        {
+            byte[] request = [0x06, 0x01, 0x00, 0xFF, 0xFF, 0x00, 0x28,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+            var uuid = request.AsSpan(7);
+            source.Marker.TryWriteBytes(uuid, bigEndian: true, out _);
+            uuid.Reverse();
+            return new SourceState(source, request);
+        }).ToArray();
+        _sawPacketEvent = false;
     }
 
     private string? _sessionName;
@@ -72,7 +79,6 @@ public sealed class ChromecastEtwReceiver : IDisposable
     private IntPtr _logfileBuffer = IntPtr.Zero;
     private IntPtr _propertiesBuffer = IntPtr.Zero;
     private volatile bool _isRunning;
-    private RemoteButton _lastHeldButton = RemoteButton.None;
 
     public bool IsRunning
     {
@@ -82,14 +88,12 @@ public sealed class ChromecastEtwReceiver : IDisposable
         }
     }
 
-    public bool Start(Guid marker, EtwProtocolKind protocolKind = EtwProtocolKind.GoogleG9N9N, IEnumerable<ushort>? verifiedAttributes = null)
+    public bool Start(IReadOnlyList<EtwButtonSource> sources)
     {
         lock (_lock)
         {
-            _protocolKind = protocolKind;
-            _verifiedAttributes = verifiedAttributes != null ? new HashSet<ushort>(verifiedAttributes) : null;
             if (_isRunning) return true;
-            SetSourceProbe(marker);
+            SetSources(sources);
 
             // Ensure BthPort registry parameters are configured
             if (!BthPortRegistryHelper.IsConfigured())
@@ -97,7 +101,9 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 BthPortRegistryHelper.TryConfigure();
             }
 
-            _sessionName = FixedSessionName;
+            // A trace can outlive its process. Reuse the name so the next instance can reclaim it.
+            using var process = Process.GetCurrentProcess();
+            _sessionName = SessionNamePrefix + "S" + process.SessionId;
             int propSize = Marshal.SizeOf<EVENT_TRACE_PROPERTIES>() + 1024;
             _propertiesBuffer = Marshal.AllocHGlobal(propSize);
 
@@ -148,8 +154,8 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 _sessionHandle,
                 ref providerGuid,
                 1,                      // EVENT_CONTROL_CODE_ENABLE_PROVIDER
-                5,                      // TRACE_LEVEL_VERBOSE
-                ulong.MaxValue,         // Include BthPort packet events across driver keyword layouts
+                4,                      // TRACE_LEVEL_INFORMATION
+                0x8000000000000000UL,   // HCIRAW, the keyword declared for Event 402
                 0, 0, IntPtr.Zero);
 
             if (enableResult != 0)
@@ -192,32 +198,10 @@ public sealed class ChromecastEtwReceiver : IDisposable
             _flushCancellation = new CancellationTokenSource();
             _ = FlushBuffersAsync(_sessionHandle, _sessionName, prop.Wnode.Guid, _flushCancellation.Token);
 
+            _ = CheckSourceBindingAsync(_flushCancellation.Token);
+
             AppLogger.Info($"Chromecast ETW receiver successfully started (Session={_sessionName})", "ChromecastEtwReceiver");
             return true;
-        }
-    }
-
-    public void SetProtocol(EtwProtocolKind protocolKind, IEnumerable<ushort>? verifiedAttributes = null)
-    {
-        lock (_lock)
-        {
-            _protocolKind = protocolKind;
-            _verifiedAttributes = verifiedAttributes != null ? new HashSet<ushort>(verifiedAttributes) : null;
-            AppLogger.Info($"ETW receiver protocol set to {protocolKind}", "ChromecastEtwReceiver");
-        }
-    }
-
-    public void ResetBinding(Guid marker, EtwProtocolKind protocolKind, IEnumerable<ushort>? verifiedAttributes = null)
-    {
-        lock (_lock)
-        {
-            _protocolKind = protocolKind;
-            _verifiedAttributes = verifiedAttributes != null ? new HashSet<ushort>(verifiedAttributes) : null;
-            _boundConnection = null;
-            _probeConnection = null;
-            _sawPacketEvent = _sawRedaction = false;
-            SetSourceProbe(marker);
-            AppLogger.Info($"ETW receiver reset binding for protocol {protocolKind}", "ChromecastEtwReceiver");
         }
     }
 
@@ -256,6 +240,24 @@ public sealed class ChromecastEtwReceiver : IDisposable
         }
     }
 
+    private async Task CheckSourceBindingAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(4), cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        if (cancellationToken.IsCancellationRequested || _sources.All(s => s.BoundHandle.HasValue)) return;
+        AppLogger.Warn(_sawPacketEvent
+            ? "BthPort Event 402 arrived, but the selected remote's GATT probe was not matched."
+            : "ETW started, but no BthPort Event 402 arrived for button capture.",
+            "ChromecastEtwReceiver");
+    }
+
     private void ProcessTraceThread()
     {
         ulong handle = _traceHandle;
@@ -267,7 +269,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
         GC.KeepAlive(callback);
         if (result != 0 && result != 1223 /* ERROR_CANCELLED */)
         {
-            AppLogger.Debug($"ProcessTrace exited with code {result}", "ChromecastEtwReceiver");
+            AppLogger.Warn($"ProcessTrace exited with code {result}", "ChromecastEtwReceiver");
         }
     }
 
@@ -320,82 +322,91 @@ public sealed class ChromecastEtwReceiver : IDisposable
 
     internal void ProcessPacket(byte kind, ReadOnlySpan<byte> packet)
     {
+        var sources = _sources;
         if (kind == HciEvent)
         {
-            // Disconnection Complete. A controller can now reuse the handle for another device.
             if (packet is [0x05, 0x04, 0x00, _, _, _])
             {
-                ushort disconnected = BinaryPrimitives.ReadUInt16LittleEndian(packet[3..]);
-                if (_boundConnection == disconnected)
+                ushort handle = BinaryPrimitives.ReadUInt16LittleEndian(packet[3..]);
+                foreach (var source in sources)
                 {
-                    _boundConnection = null;
-                    DispatchButtonEvent(RemoteButton.None, false);
+                    if (source.PendingHandle == handle) source.PendingHandle = null;
+                    if (source.BoundHandle != handle) continue;
+                    source.BoundHandle = null;
+                    source.Held = RemoteButton.None;
+                    DeviceDisconnected?.Invoke(source.Source.Address);
                 }
-                if (_probeConnection == disconnected) _probeConnection = null;
             }
             return;
         }
 
-        if (kind is not (AclSent or AclReceived) || !TryGetAttPacket(packet, out ushort connection, out var att, out bool incomplete)) return;
-
+        if (kind is not (AclSent or AclReceived) ||
+            !TryGetAttPacket(packet, out ushort connection, out var att, out bool incomplete)) return;
         if (kind == AclSent)
         {
-            if (!incomplete && att.SequenceEqual(_sourceRequest))
+            if (incomplete) return;
+            foreach (var source in sources)
             {
-                _probeConnection = connection;
-                AppLogger.Info("BthPort observed the selected-device GATT query", "ChromecastEtwReceiver");
-            }
-            return;
-        }
-
-        // The unique request was sent via WinRT on the selected device. Confirm its ATT response
-        // on the same ACL handle before accepting any input from that connection.
-        if (_probeConnection == connection && !incomplete && (att is [0x01, 0x06, _, _, _] || att is [0x07, ..]))
-        {
-            _boundConnection = connection;
-            _probeConnection = null;
-            AppLogger.Info($"Chromecast ETW confirmed selected Bluetooth connection 0x{connection:X4}", "ChromecastEtwReceiver");
-            return;
-        }
-
-        if (_boundConnection != connection)
-        {
-            if (_boundConnection == null && CanAutoBind(connection, att, incomplete))
-            {
-                _boundConnection = connection;
-                _probeConnection = null;
-                AppLogger.Info($"Chromecast ETW auto-bound connection 0x{connection:X4} from verified report on attribute 0x{BinaryPrimitives.ReadUInt16LittleEndian(att[1..]):X4}", "ChromecastEtwReceiver");
-            }
-            else
-            {
+                if (!att.SequenceEqual(source.Request)) continue;
+                source.PendingHandle = connection;
+                AppLogger.Info($"BthPort observed GATT query for 0x{source.Source.Address:X12}", "ChromecastEtwReceiver");
                 return;
             }
+            return;
         }
-        if (TryParseButtonReport(att, incomplete, _protocolKind, out var button, out bool isDown, out bool truncated, _verifiedAttributes))
-            DispatchButtonEvent(button, isDown);
-        else if (truncated)
+
+        var pendingSource = sources.FirstOrDefault(source => source.PendingHandle == connection);
+        var boundSource = sources.FirstOrDefault(source => source.BoundHandle == connection);
+        foreach (var source in new[] { pendingSource, boundSource })
         {
-            if (!_sawRedaction)
+            if (source == null) continue;
+            bool pending = source == pendingSource;
+            bool response = pending && !incomplete &&
+                (att is [0x01, 0x06, _, _, _] || att is [0x07, ..]);
+            if (response)
             {
-                _sawRedaction = true;
-                AppLogger.Warn("Windows omitted the key code from a verified Chromecast button report", "ChromecastEtwReceiver");
+                Bind(source);
+                return;
             }
-            DispatchButtonEvent(RemoteButton.None, false);
-            TruncatedPacketDetected?.Invoke();
+            if (!pending && source.BoundHandle != connection) continue;
+            bool parsed = TryParseButtonReport(att, incomplete, source.Source.Protocol,
+                out var button, out bool isDown, out bool truncated);
+            if (pending && parsed && isDown) Bind(source);
+            if (source.BoundHandle != connection) continue;
+            if (parsed)
+            {
+                if (!isDown && source.Source.Protocol == EtwProtocolKind.Xiaomi &&
+                    att.Length == 11 && BinaryPrimitives.ReadUInt16LittleEndian(att[1..]) == XiaomiKeyboardAttribute &&
+                    source.Held is not (RemoteButton.Back or RemoteButton.VolumeUp or RemoteButton.VolumeDown))
+                    return;
+                DispatchButtonEvent(source, button, isDown);
+            }
+            else if (truncated)
+            {
+                if (!source.SawRedaction)
+                {
+                    source.SawRedaction = true;
+                    AppLogger.Warn("Windows omitted a verified button code", "ChromecastEtwReceiver");
+                }
+                DispatchButtonEvent(source, RemoteButton.None, false);
+                TruncatedPacketDetected?.Invoke(source.Source.Address);
+            }
+            return;
         }
-    }
 
-    private bool CanAutoBind(ushort connection, ReadOnlySpan<byte> att, bool incomplete)
-    {
-        // When a source probe is configured for a specific remote, strictly require matching the probed connection handle
-        if (_sourceRequest.Length > 0)
+        void Bind(SourceState source)
         {
-            if (!_probeConnection.HasValue || connection != _probeConnection.Value)
-                return false;
+            foreach (var other in sources)
+            {
+                if (other == source || other.BoundHandle != connection) continue;
+                other.BoundHandle = null;
+                other.Held = RemoteButton.None;
+                DeviceDisconnected?.Invoke(other.Source.Address);
+            }
+            source.BoundHandle = connection;
+            source.PendingHandle = null;
+            AppLogger.Info($"ETW bound 0x{source.Source.Address:X12} to ACL 0x{connection:X4}", "ChromecastEtwReceiver");
         }
-
-        return TryParseButtonReport(att, incomplete, _protocolKind, out var btn, out _, out _, _verifiedAttributes) &&
-               btn != RemoteButton.None;
     }
 
     private static bool TryGetAttPacket(ReadOnlySpan<byte> packet, out ushort connection, out ReadOnlySpan<byte> att, out bool incomplete)
@@ -446,7 +457,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
             {
                 if (!customAttributes.Contains(attribute)) return false;
             }
-            else if (!IsG9N9NButtonAttribute(attribute))
+            else if (!_g9n9nAttributesSet.Contains(attribute))
             {
                 return false;
             }
@@ -466,7 +477,16 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 return isDown;
             }
 
-            if (report.Length is >= 2 and <= 9 && G9N9NProtocol.TryParseReport(report, out var g9Buttons))
+            if (report.Length == 2)
+            {
+                ushort usage = BinaryPrimitives.ReadUInt16LittleEndian(report);
+                if (usage == 0) return true;
+                isDown = G9N9NProtocol.ConsumerButtons.TryGetValue(usage, out button);
+                return isDown;
+            }
+
+            if (report.Length == 3 && report[0] is 0x01 or 0x02 &&
+                G9N9NProtocol.TryParseReport(report, out var g9Buttons))
             {
                 if (g9Buttons.Count > 0)
                 {
@@ -492,6 +512,30 @@ public sealed class ChromecastEtwReceiver : IDisposable
             else if (!IsXiaomiButtonAttribute(attribute))
             {
                 return false;
+            }
+
+            // The RC003 sends an eight-byte keyboard report without a report ID.
+            // Standard keys already arrive through Raw Input. Recover only the dropped usages.
+            if (attribute == XiaomiKeyboardAttribute && report.Length == 8)
+            {
+                if (report[0] != 0 || report[1] != 0) return false;
+                foreach (byte usage in report[2..])
+                {
+                    button = usage switch
+                    {
+                        0xF1 => RemoteButton.Back,
+                        0x80 => RemoteButton.VolumeUp,
+                        0x81 => RemoteButton.VolumeDown,
+                        _ => RemoteButton.None
+                    };
+                    if (button != RemoteButton.None)
+                    {
+                        isDown = true;
+                        return true;
+                    }
+                }
+
+                return report is [0, 0, 0, 0, 0, 0, 0, 0];
             }
 
             // Exclude non-button reports: ATVV AudioSync (0x0A) and mouse movement (Report ID 3)
@@ -540,14 +584,6 @@ public sealed class ChromecastEtwReceiver : IDisposable
         return false;
     }
 
-    private static bool IsG9N9NButtonAttribute(ushort attribute)
-    {
-        if (_g9n9nAttributesSet.Contains(attribute)) return true;
-        // Range 0x0018..0x0045 corresponds to G9N9N HID-over-GATT service instances
-        if (attribute is >= 0x0018 and <= 0x0045) return true;
-        return false;
-    }
-
     private static bool IsXiaomiButtonAttribute(ushort attribute)
     {
         if (_xiaomiAttributesSet.Contains(attribute)) return true;
@@ -556,43 +592,19 @@ public sealed class ChromecastEtwReceiver : IDisposable
         return false;
     }
 
-    private void DispatchButtonEvent(RemoteButton button, bool isDown)
+    private void DispatchButtonEvent(SourceState source, RemoteButton button, bool isDown)
     {
-        RemoteButton buttonToRelease = RemoteButton.None;
-        RemoteButton buttonToPress = RemoteButton.None;
+        var next = isDown ? button : RemoteButton.None;
+        var previous = source.Held;
+        if (next == previous) return;
+        source.Held = next;
+        if (previous != RemoteButton.None) Emit(previous, false);
+        if (next != RemoteButton.None) Emit(next, true);
 
-        lock (_lock)
+        void Emit(RemoteButton edge, bool down)
         {
-            if (isDown)
-            {
-                if (button == _lastHeldButton) return;
-                if (_lastHeldButton != RemoteButton.None && _lastHeldButton != button)
-                {
-                    buttonToRelease = _lastHeldButton;
-                }
-                _lastHeldButton = button;
-                buttonToPress = button;
-            }
-            else
-            {
-                if (_lastHeldButton != RemoteButton.None)
-                {
-                    buttonToRelease = _lastHeldButton;
-                    _lastHeldButton = RemoteButton.None;
-                }
-            }
-        }
-
-        if (buttonToRelease != RemoteButton.None)
-        {
-            AppLogger.Info($"Chromecast ETW button: {buttonToRelease} Up", "ChromecastEtwReceiver");
-            ButtonEvent?.Invoke(buttonToRelease, false);
-        }
-
-        if (buttonToPress != RemoteButton.None)
-        {
-            AppLogger.Info($"Chromecast ETW button: {buttonToPress} Down", "ChromecastEtwReceiver");
-            ButtonEvent?.Invoke(buttonToPress, true);
+            AppLogger.Info($"ETW button 0x{source.Source.Address:X12}: {edge} {(down ? "Down" : "Up")}", "ChromecastEtwReceiver");
+            ButtonEvent?.Invoke(source.Source.Address, edge, down);
         }
     }
 
@@ -639,8 +651,6 @@ public sealed class ChromecastEtwReceiver : IDisposable
         lock (_lock)
         {
             _isRunning = false;
-            _boundConnection = null;
-            _probeConnection = null;
             _flushCancellation?.Cancel();
             _flushCancellation?.Dispose();
             _flushCancellation = null;
@@ -660,12 +670,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 _sessionHandle = 0;
             }
 
-            if (_lastHeldButton != RemoteButton.None)
-            {
-                var held = _lastHeldButton;
-                _lastHeldButton = RemoteButton.None;
-                ButtonEvent?.Invoke(held, false);
-            }
+            _sources = [];
 
             CleanupUnmanaged();
         }

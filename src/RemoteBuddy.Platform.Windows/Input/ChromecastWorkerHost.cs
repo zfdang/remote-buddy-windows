@@ -16,10 +16,11 @@ public static class ChromecastWorkerHost
 {
     public const byte MsgTypeButtonEvent = 0x01;
     public const byte MsgTypeTruncatedDetected = 0x02;
+    public const byte MsgTypeDeviceDisconnected = 0x03;
 
-    public static void RunWorker(string pipeName, Guid marker, EtwProtocolKind protocolKind = EtwProtocolKind.GoogleG9N9N)
+    public static void RunWorker(string pipeName, IReadOnlyList<EtwButtonSource> sources)
     {
-        AppLogger.Info($"ChromecastWorkerHost starting for pipe '{pipeName}' (PID: {Environment.ProcessId}, Protocol: {protocolKind})", "ChromecastWorkerHost");
+        AppLogger.Info($"ChromecastWorkerHost starting for pipe '{pipeName}' (PID: {Environment.ProcessId}, Sources: {sources.Count})", "ChromecastWorkerHost");
 
         try
         {
@@ -31,42 +32,36 @@ public static class ChromecastWorkerHost
 
             using var receiver = new ChromecastEtwReceiver();
 
-            receiver.ButtonEvent += (button, isDown) =>
+            void Send(byte kind, ulong address, RemoteButton button = RemoteButton.None, bool down = false)
             {
                 try
                 {
-                    AppLogger.Info($"ChromecastWorkerHost: Dispatched button {button}, isDown={isDown} to pipe", "ChromecastWorkerHost");
-                    byte[] msg = [MsgTypeButtonEvent, (byte)button, (byte)(isDown ? 1 : 0)];
+                    bool isButton = kind == MsgTypeButtonEvent;
+                    var msg = new byte[isButton ? 11 : 9];
+                    msg[0] = kind;
+                    if (isButton)
+                    {
+                        msg[1] = (byte)button;
+                        msg[2] = down ? (byte)1 : (byte)0;
+                    }
+                    System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(msg.AsSpan(isButton ? 3 : 1), address);
                     lock (pipe)
                     {
-                        pipe.Write(msg, 0, 3);
+                        pipe.Write(msg);
                         pipe.Flush();
                     }
                 }
-                catch (Exception ex)
+                catch (IOException ex)
                 {
-                    AppLogger.Debug($"Failed to write button event to pipe: {ex.Message}", "ChromecastWorkerHost");
+                    AppLogger.Debug($"Button worker pipe closed: {ex.Message}", "ChromecastWorkerHost");
                 }
-            };
+            }
 
-            receiver.TruncatedPacketDetected += () =>
-            {
-                try
-                {
-                    byte[] msg = [MsgTypeTruncatedDetected];
-                    lock (pipe)
-                    {
-                        pipe.Write(msg, 0, 1);
-                        pipe.Flush();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    AppLogger.Debug($"Failed to write truncated packet notification to pipe: {ex.Message}", "ChromecastWorkerHost");
-                }
-            };
+            receiver.ButtonEvent += (address, button, down) => Send(MsgTypeButtonEvent, address, button, down);
+            receiver.TruncatedPacketDetected += address => Send(MsgTypeTruncatedDetected, address);
+            receiver.DeviceDisconnected += address => Send(MsgTypeDeviceDisconnected, address);
 
-            if (!receiver.Start(marker, protocolKind))
+            if (!receiver.Start(sources))
             {
                 AppLogger.Error("ChromecastWorkerHost: receiver.Start() failed", component: "ChromecastWorkerHost");
                 // Notify parent that startup failed (0x00)

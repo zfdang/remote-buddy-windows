@@ -1,4 +1,4 @@
-﻿// Copyright (C) 2026 Remote Buddy Contributors
+// Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
 using RemoteBuddy.App.ViewModels;
@@ -140,4 +140,24 @@ public class OnboardingConnectionTests
         vm.PreviousStep();
         Assert.False(vm.HasButtonTested);
     }
+    [Fact]
+    public void VoiceArbiterAllowsOnlyOneContendingTransportAndReleasesForNextPress()
+    {
+        var arbiter = new VoiceSessionArbiter();
+        using var first = new WinRtBluetoothManager(arbiter);
+        using var second = new WinRtBluetoothManager(arbiter);
+        bool a = false, b = false;
+        Parallel.Invoke(() => a = arbiter.TryAcquire(first), () => b = arbiter.TryAcquire(second));
+
+        Assert.NotEqual(a, b);
+        var winner = a ? first : second;
+        var loser = a ? second : first;
+        Assert.Same(winner, arbiter.Owner);
+        arbiter.Release(loser);
+        Assert.Same(winner, arbiter.Owner);
+        arbiter.Release(winner);
+        Assert.True(arbiter.TryAcquire(loser));
+        Assert.Same(loser, arbiter.Owner);
+    }
+
 }

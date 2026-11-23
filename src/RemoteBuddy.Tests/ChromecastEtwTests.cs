@@ -87,6 +87,16 @@ public class ChromecastEtwTests
         Assert.Equal(expected, button);
     }
 
+    [Theory]
+    [InlineData(0x0029)]
+    [InlineData(0x0031)]
+    public void TryParseAclPacket_G9N9NDoesNotTreatAudioStopAsPlayPause(ushort attribute)
+    {
+        byte[] packet = CreateAclPacket(0x1B, attribute, [0x00, 0x02]);
+
+        Assert.False(ChromecastEtwReceiver.TryParseAclPacket(packet, out _, out _));
+    }
+
     [Fact]
     public void TryParseAclPacket_G9N9N3ByteRelease_ReturnsNoneAndNotDown()
     {
@@ -137,6 +147,23 @@ public class ChromecastEtwTests
         Assert.True(success);
         Assert.True(isDown);
         Assert.Equal(expected, button);
+    }
+
+    [Theory]
+    [InlineData(0xF1, RemoteButton.Back, true, true)]
+    [InlineData(0x80, RemoteButton.VolumeUp, true, true)]
+    [InlineData(0x81, RemoteButton.VolumeDown, true, true)]
+    [InlineData(0x00, RemoteButton.None, false, true)]
+    [InlineData(0x28, RemoteButton.None, false, false)]
+    public void TryParseAclPacket_XiaomiRc003KeyboardReportRecoversOnlyDroppedKeys(
+        byte usage, RemoteButton expected, bool expectedDown, bool expectedSuccess)
+    {
+        byte[] packet = CreateAclPacket(0x1B, 0x0064, [0, 0, usage, 0, 0, 0, 0, 0]);
+        bool success = ChromecastEtwReceiver.TryParseAclPacket(packet, out var button, out bool isDown, EtwProtocolKind.Xiaomi);
+
+        Assert.Equal(expectedSuccess, success);
+        Assert.Equal(expected, button);
+        Assert.Equal(expectedDown, isDown);
     }
 
     [Fact]
@@ -326,11 +353,11 @@ public class ChromecastEtwTests
     public void ProcessPacket_RequiresMatchingProbe_AndSeparatesButtonEventsFromRedaction()
     {
         using var receiver = new ChromecastEtwReceiver();
-        receiver.SetSourceProbe(new Guid("00112233-4455-6677-8899-aabbccddeeff"));
+        receiver.SetSources([new EtwButtonSource(1, new Guid("00112233-4455-6677-8899-aabbccddeeff"), EtwProtocolKind.GoogleG9N9N)]);
         var edges = new List<(RemoteButton, bool)>();
         int redacted = 0;
-        receiver.ButtonEvent += (button, isDown) => edges.Add((button, isDown));
-        receiver.TruncatedPacketDetected += () => redacted++;
+        receiver.ButtonEvent += (_, button, isDown) => edges.Add((button, isDown));
+        receiver.TruncatedPacketDetected += _ => redacted++;
 
         byte[] request = CreateAclPacket(0x06, 0x0001,
             [0xFF, 0xFF, 0x00, 0x28, 0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0x00]);
@@ -374,9 +401,9 @@ public class ChromecastEtwTests
     public void ProcessPacket_ProbeIsolation_RejectsOtherConnections()
     {
         using var receiver = new ChromecastEtwReceiver();
-        receiver.SetSourceProbe(new Guid("00112233-4455-6677-8899-aabbccddeeff"));
+        receiver.SetSources([new EtwButtonSource(1, new Guid("00112233-4455-6677-8899-aabbccddeeff"), EtwProtocolKind.GoogleG9N9N)]);
         var edges = new List<(RemoteButton, bool)>();
-        receiver.ButtonEvent += (button, isDown) => edges.Add((button, isDown));
+        receiver.ButtonEvent += (_, button, isDown) => edges.Add((button, isDown));
 
         // Probing target device on connection 0x0040
         byte[] request = CreateAclPacket(0x06, 0x0001,
@@ -403,11 +430,52 @@ public class ChromecastEtwTests
     }
 
     [Fact]
-    public void ProcessPacket_WithoutProbe_AutoBindsOnVerifiedButtonReport()
+    public void ProcessPacket_ThreeSourcesMaintainSeparateHeldButtonsAndHandleLifetimes()
+    {
+        using var receiver = new ChromecastEtwReceiver();
+        var sources = new[] {
+            new EtwButtonSource(0x100, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N),
+            new EtwButtonSource(0x200, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N),
+            new EtwButtonSource(0x300, Guid.NewGuid(), EtwProtocolKind.Xiaomi)
+        };
+        receiver.SetSources(sources);
+        var edges = new List<(ulong, RemoteButton, bool)>();
+        var disconnected = new List<ulong>();
+        receiver.ButtonEvent += (address, button, down) => edges.Add((address, button, down));
+        receiver.DeviceDisconnected += disconnected.Add;
+        for (int i = 0; i < sources.Length; i++)
+        {
+            ushort handle = (ushort)(0x40 + i);
+            byte[] request = new byte[20];
+            new byte[] {0xFF, 0xFF, 0x00, 0x28}.CopyTo(request, 0);
+            var marker = request.AsSpan(4);
+            sources[i].Marker.TryWriteBytes(marker, bigEndian: true, out _);
+            marker.Reverse();
+            receiver.ProcessPacket(4, CreateAclPacket(0x06, 0x0001, request, connectionHandle: handle));
+            receiver.ProcessPacket(3, CreateAclPacket(0x01, 0x0106, [0, 0x0A], connectionHandle: handle));
+        }
+
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [7, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x40));
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [7, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x41));
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0064, [0, 0, 0xF1, 0, 0, 0, 0, 0], connectionHandle: 0x42));
+        receiver.ProcessPacket(2, [5, 4, 0, 0x40, 0, 0x13]);
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, new byte[8], connectionHandle: 0x40));
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, new byte[8], connectionHandle: 0x41));
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0064, new byte[8], connectionHandle: 0x42));
+
+        Assert.Equal(new (ulong, RemoteButton, bool)[] {
+            (0x100, RemoteButton.Ok, true), (0x200, RemoteButton.Ok, true), (0x300, RemoteButton.Back, true),
+            (0x200, RemoteButton.Ok, false), (0x300, RemoteButton.Back, false)
+        }, edges);
+        Assert.Equal(new ulong[] { 0x100 }, disconnected);
+    }
+
+    [Fact]
+    public void ProcessPacket_WithoutProbe_RejectsButtonReports()
     {
         using var receiver = new ChromecastEtwReceiver();
         var edges = new List<(RemoteButton, bool)>();
-        receiver.ButtonEvent += (button, isDown) => edges.Add((button, isDown));
+        receiver.ButtonEvent += (_, button, isDown) => edges.Add((button, isDown));
 
         byte[] press = CreateAclPacket(0x1B, 0x0029, [0x01, 0x07, 0x00]); // G9N9N Ok
         byte[] release = CreateAclPacket(0x1B, 0x0029, [0x01, 0x00, 0x00]);
@@ -415,7 +483,7 @@ public class ChromecastEtwTests
         receiver.ProcessPacket(3, press);
         receiver.ProcessPacket(3, release);
 
-        Assert.Equal(new[] { (RemoteButton.Ok, true), (RemoteButton.Ok, false) }, edges);
+        Assert.Empty(edges);
     }
 
     [Fact]

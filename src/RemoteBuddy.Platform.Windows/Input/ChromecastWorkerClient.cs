@@ -16,8 +16,9 @@ namespace RemoteBuddy.Platform.Windows.Input;
 /// </summary>
 public sealed class ChromecastWorkerClient : IDisposable
 {
-    public event Action<RemoteButton, bool>? ButtonEvent;
-    public event Action? TruncatedPacketDetected;
+    public event Action<ulong, RemoteButton, bool>? ButtonEvent;
+    public event Action<ulong>? TruncatedPacketDetected;
+    public event Action<ulong>? DeviceDisconnected;
     public event Action? Disconnected;
 
     private readonly object _lock = new();
@@ -35,7 +36,7 @@ public sealed class ChromecastWorkerClient : IDisposable
         }
     }
 
-    public bool Start(Guid marker, EtwProtocolKind protocolKind = EtwProtocolKind.GoogleG9N9N)
+    public bool Start(IReadOnlyList<EtwButtonSource> sources)
     {
         lock (_lock)
         {
@@ -84,7 +85,7 @@ public sealed class ChromecastWorkerClient : IDisposable
                 var psi = new ProcessStartInfo
                 {
                     FileName = exePath,
-                    Arguments = $"--chromecast-worker {pipeName} {marker:D} {protocolKind}",
+                    Arguments = $"--chromecast-worker {pipeName} {Convert.ToBase64String(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(sources))}",
                     UseShellExecute = true,
                     Verb = "runas",
                     WindowStyle = ProcessWindowStyle.Hidden
@@ -155,16 +156,22 @@ public sealed class ChromecastWorkerClient : IDisposable
                 byte msgType = typeBuf[0];
                 if (msgType == ChromecastWorkerHost.MsgTypeButtonEvent)
                 {
-                    byte[] payload = new byte[2];
+                    byte[] payload = new byte[10];
                     await ReadExactAsync(server, payload, ct);
                     var button = (RemoteButton)payload[0];
                     bool isDown = payload[1] != 0;
                     AppLogger.Info($"ChromecastWorkerClient: Received button {button}, isDown={isDown} from worker pipe", "ChromecastWorkerClient");
-                    ButtonEvent?.Invoke(button, isDown);
+                    ButtonEvent?.Invoke(System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(2)), button, isDown);
                 }
-                else if (msgType == ChromecastWorkerHost.MsgTypeTruncatedDetected)
+                else if (msgType is ChromecastWorkerHost.MsgTypeTruncatedDetected or ChromecastWorkerHost.MsgTypeDeviceDisconnected)
                 {
-                    TruncatedPacketDetected?.Invoke();
+                    var payload = new byte[8];
+                    await ReadExactAsync(server, payload, ct);
+                    ulong address = System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(payload);
+                    if (msgType == ChromecastWorkerHost.MsgTypeTruncatedDetected)
+                        TruncatedPacketDetected?.Invoke(address);
+                    else
+                        DeviceDisconnected?.Invoke(address);
                 }
             }
         }

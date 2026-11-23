@@ -1,4 +1,4 @@
-﻿// Copyright (C) 2026 Remote Buddy Contributors
+// Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
 using RemoteBuddy.App.ViewModels;
@@ -16,7 +16,23 @@ public class MainViewModelTests
         public bool IsScanning { get; private set; }
         public bool IsConnected { get; set; } = false;
         public bool IsReady { get; set; } = false;
-        public bool IsStreaming => false;
+        public bool IsStreaming => VoiceDeviceAddress != 0;
+        public HashSet<ulong> ReadyAddresses { get; } = [];
+        public ulong VoiceDeviceAddress { get; set; }
+        public bool IsDeviceReady(ulong address) => ReadyAddresses.Contains(address) ||
+            (IsReady && IsConnected && address != 0 && address == ConnectedDeviceAddress);
+        public Task<bool> StartVoiceSessionAsync(ulong address)
+        {
+            if (VoiceDeviceAddress != 0) return Task.FromResult(false);
+            VoiceDeviceAddress = address;
+            return StartVoiceSessionAsync();
+        }
+        public Task<bool> StopVoiceSessionAsync(ulong address)
+        {
+            if (VoiceDeviceAddress != address) return Task.FromResult(false);
+            VoiceDeviceAddress = 0;
+            return StopVoiceSessionAsync();
+        }
         public float CurrentGain { get; set; } = RemoteDevice.DefaultMicrophoneGain;
         public BluetoothSessionState SessionState => BluetoothSessionState.Idle;
         public string ConnectedDeviceName { get; set; } = string.Empty;
@@ -195,6 +211,8 @@ public class MainViewModelTests
 
             var bt = new TestBluetoothManager
             {
+                IsConnected = true,
+                IsReady = true,
                 ConnectedDeviceAddress = 0x4754514C6FCC
             };
 
@@ -237,6 +255,8 @@ public class MainViewModelTests
             // Connect to G9N9N
             var bt = new TestBluetoothManager
             {
+                IsConnected = true,
+                IsReady = true,
                 ConnectedDeviceAddress = 0x4754514C6FCC
             };
 
@@ -291,6 +311,8 @@ public class MainViewModelTests
             // System currently connected to G9N9N
             var bt = new TestBluetoothManager
             {
+                IsConnected = true,
+                IsReady = true,
                 ConnectedDeviceAddress = 0x4754514C6FCC
             };
 
@@ -308,306 +330,6 @@ public class MainViewModelTests
             // Xiaomi onboarding must NOT receive G9N9N's button press
             Assert.False(onboardingVm.HasButtonTested);
             Assert.NotEqual("已按下: 返回键", onboardingVm.LastPressedButtonName);
-        }
-        finally
-        {
-            if (File.Exists(path)) File.Delete(path);
-        }
-    }
-
-    [Fact]
-    public void HandleAppCommandButton_RequiresAdmittedRemote_RejectsWhenDisconnected()
-    {
-        string path = Path.Combine(Path.GetTempPath(), $"vib-mvm-appcmd-adm-{Guid.NewGuid():N}.json");
-        try
-        {
-            var config = new ConfigService(path);
-            var dev = new RemoteDevice
-            {
-                Id = "DEV_01",
-                Name = "Xiaomi Remote",
-                BluetoothAddress = 0xA4C138123456,
-            };
-            config.Current.Devices.Add(dev);
-            config.Current.SelectedDeviceId = dev.Id;
-
-            // Disconnected manager
-            var bt = new TestBluetoothManager
-            {
-                IsConnected = false,
-                IsReady = false
-            };
-
-            using var vm = new MainViewModel(config, bt);
-
-            // On Mapping page with no remote connected
-            vm.Navigate("Mapping");
-            bool handled = vm.HandleAppCommandButton(RemoteButton.VolumeUp);
-            // Must return false so standard keyboard volume controls are not consumed
-            Assert.False(handled);
-
-            // General page
-            vm.Navigate("General");
-            bool handledBack = vm.HandleAppCommandButton(RemoteButton.Back);
-            Assert.False(handledBack);
-        }
-        finally
-        {
-            if (File.Exists(path)) File.Delete(path);
-        }
-    }
-
-    [Fact]
-    public void HandleAppCommandButton_AdmittedWhenConnectedAndReady()
-    {
-        string path = Path.Combine(Path.GetTempPath(), $"vib-mvm-appcmd-ok-{Guid.NewGuid():N}.json");
-        try
-        {
-            var config = new ConfigService(path);
-            var dev = new RemoteDevice
-            {
-                Id = "DEV_01",
-                Name = "Xiaomi Remote",
-                BluetoothAddress = 0xA4C138123456,
-            };
-            config.Current.Devices.Add(dev);
-            config.Current.SelectedDeviceId = dev.Id;
-
-            // Connected and ready
-            var bt = new TestBluetoothManager
-            {
-                IsConnected = true,
-                IsReady = true,
-                ConnectedDeviceAddress = 0xA4C138123456
-            };
-
-            using var vm = new MainViewModel(config, bt);
-            vm.Navigate("Mapping");
-
-            RemoteButton? pressedButton = null;
-            vm.MappingVm.HardwareButtonPressed += b => pressedButton = b;
-
-            bool handled = vm.HandleAppCommandButton(RemoteButton.VolumeUp);
-            Assert.True(handled);
-            Assert.Equal(RemoteButton.VolumeUp, pressedButton);
-        }
-        finally
-        {
-            if (File.Exists(path)) File.Delete(path);
-        }
-    }
-
-    [Fact]
-    public void HandleAppCommandButton_CorrelatesWithPhysicalEvent_SuppressesDuplicate()
-    {
-        string path = Path.Combine(Path.GetTempPath(), $"vib-mvm-appcmd-dup-{Guid.NewGuid():N}.json");
-        try
-        {
-            var config = new ConfigService(path);
-            var dev = new RemoteDevice
-            {
-                Id = "DEV_01",
-                Name = "Xiaomi Remote",
-                BluetoothAddress = 0xA4C138123456,
-            };
-            config.Current.Devices.Add(dev);
-            config.Current.SelectedDeviceId = dev.Id;
-
-            var bt = new TestBluetoothManager
-            {
-                IsConnected = true,
-                IsReady = true,
-                ConnectedDeviceAddress = 0xA4C138123456
-            };
-
-            using var vm = new MainViewModel(config, bt);
-            vm.Navigate("Mapping");
-
-            int pressCount = 0;
-            vm.MappingVm.HardwareButtonPressed += _ => pressCount++;
-
-            // Physical down event arrives from ETW
-            vm.HandleRawButtonEvent(IntPtr.Zero, RemoteButton.Back, true);
-            Assert.Equal(1, pressCount);
-
-            // Windows subsequently generates WM_APPCOMMAND for the same press
-            bool handled = vm.HandleAppCommandButton(RemoteButton.Back);
-            Assert.True(handled); // Handled/consumed
-            Assert.Equal(1, pressCount); // But duplicate execution suppressed!
-        }
-        finally
-        {
-            if (File.Exists(path)) File.Delete(path);
-        }
-    }
-
-    [Fact]
-    public void HandleAppCommandButton_PrecedesPhysicalEvent_SuppressesSubsequentPhysical()
-    {
-        string path = Path.Combine(Path.GetTempPath(), $"vib-mvm-appcmd-pre-{Guid.NewGuid():N}.json");
-        try
-        {
-            var config = new ConfigService(path);
-            var dev = new RemoteDevice
-            {
-                Id = "DEV_01",
-                Name = "Xiaomi Remote",
-                BluetoothAddress = 0xA4C138123456,
-            };
-            config.Current.Devices.Add(dev);
-            config.Current.SelectedDeviceId = dev.Id;
-
-            var bt = new TestBluetoothManager
-            {
-                IsConnected = true,
-                IsReady = true,
-                ConnectedDeviceAddress = 0xA4C138123456
-            };
-
-            using var vm = new MainViewModel(config, bt);
-            vm.Navigate("Mapping");
-
-            int pressCount = 0;
-            vm.MappingVm.HardwareButtonPressed += _ => pressCount++;
-
-            // WM_APPCOMMAND arrives first
-            bool handled = vm.HandleAppCommandButton(RemoteButton.Back);
-            Assert.True(handled);
-            Assert.Equal(1, pressCount);
-
-            // Subsequent physical ETW event arrives within 500ms
-            vm.HandleRawButtonEvent(IntPtr.Zero, RemoteButton.Back, true);
-            vm.HandleRawButtonEvent(IntPtr.Zero, RemoteButton.Back, false);
-
-            // Should remain 1 (no duplicate execution)
-            Assert.Equal(1, pressCount);
-        }
-        finally
-        {
-            if (File.Exists(path)) File.Delete(path);
-        }
-    }
-
-    [Fact]
-    public void HandleAppCommandButton_ExecutesCustomMapping_WithoutSelfSuppression()
-    {
-        string path = Path.Combine(Path.GetTempPath(), $"vib-mvm-appcmd-map-{Guid.NewGuid():N}.json");
-        try
-        {
-            var config = new ConfigService(path);
-            var dev = new RemoteDevice
-            {
-                Id = "DEV_01",
-                Name = "Xiaomi Remote",
-                BluetoothAddress = 0xA4C138123456,
-            };
-            dev.Mappings.Clear();
-            dev.Mappings.Add(new ButtonMapping
-            {
-                Button = RemoteButton.Back,
-                ClickAction = ButtonActionType.KeyboardShortcut,
-                ClickShortcut = "Ctrl+W"
-            });
-            config.Current.Devices.Add(dev);
-            config.Current.SelectedDeviceId = dev.Id;
-
-            var bt = new TestBluetoothManager
-            {
-                IsConnected = true,
-                IsReady = true,
-                ConnectedDeviceAddress = 0xA4C138123456
-            };
-
-            using var vm = new MainViewModel(config, bt);
-            vm.Navigate("General");
-            vm.MappingVm.CustomMappingEnabled = true;
-
-            var executed = new List<ButtonAssignment>();
-            vm.ActionExecutedForTesting = a => executed.Add(a);
-
-            // WM_APPCOMMAND arrives for Back
-            bool handled = vm.HandleAppCommandButton(RemoteButton.Back);
-            Assert.True(handled);
-            Assert.Single(executed);
-            Assert.Equal(ButtonActionType.KeyboardShortcut, executed[0].Action);
-            Assert.Equal("Ctrl+W", executed[0].Shortcut);
-
-            // Subsequent physical ETW event arrives within 500ms
-            vm.HandleRawButtonEvent(IntPtr.Zero, RemoteButton.Back, true);
-            vm.HandleRawButtonEvent(IntPtr.Zero, RemoteButton.Back, false);
-
-            // Action must not execute a second time
-            Assert.Single(executed);
-        }
-        finally
-        {
-            if (File.Exists(path)) File.Delete(path);
-        }
-    }
-
-    [Fact]
-    public void HandleAppCommandButton_DoesNotSuppressNextClickRelease()
-    {
-        string path = Path.Combine(Path.GetTempPath(), $"vib-mvm-appcmd-rel-{Guid.NewGuid():N}.json");
-        try
-        {
-            var config = new ConfigService(path);
-            var dev = new RemoteDevice
-            {
-                Id = "DEV_01",
-                Name = "Xiaomi Remote",
-                BluetoothAddress = 0xA4C138123456,
-            };
-            dev.Mappings.Clear();
-            dev.Mappings.Add(new ButtonMapping
-            {
-                Button = RemoteButton.Back,
-                ClickAction = ButtonActionType.KeyboardShortcut,
-                ClickShortcut = "Ctrl+W",
-                LongPressAction = ButtonActionType.ContinuousRepeat
-            });
-            config.Current.Devices.Add(dev);
-            config.Current.SelectedDeviceId = dev.Id;
-
-            var bt = new TestBluetoothManager
-            {
-                IsConnected = true,
-                IsReady = true,
-                ConnectedDeviceAddress = 0xA4C138123456
-            };
-
-            using var vm = new MainViewModel(config, bt);
-            vm.Navigate("General");
-            vm.MappingVm.CustomMappingEnabled = true;
-
-            var executed = new List<ButtonAssignment>();
-            vm.ActionExecutedForTesting = a => executed.Add(a);
-
-            // 1. Initial AppCommand arrives
-            bool handled = vm.HandleAppCommandButton(RemoteButton.Back);
-            Assert.True(handled);
-            Assert.Single(executed);
-
-            // Physical down arrives within 500ms and is suppressed
-            vm.HandleRawButtonEvent(IntPtr.Zero, RemoteButton.Back, true);
-
-            // 2. Simulate subsequent click >500ms later by aging the AppCommand timestamp
-            var field = typeof(MainViewModel).GetField("_lastAppCommandTimeMs", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            var appCmdDict = (Dictionary<RemoteButton, long>)field!.GetValue(vm)!;
-            appCmdDict[RemoteButton.Back] = Environment.TickCount64 - 1000;
-
-            // Physical down of next click arrives outside 500ms window
-            vm.HandleRawButtonEvent(IntPtr.Zero, RemoteButton.Back, true);
-
-            // Physical up of next click arrives; must NOT be suppressed by lingering flags
-            vm.HandleRawButtonEvent(IntPtr.Zero, RemoteButton.Back, false);
-
-            // Verify gesture state: the release was NOT dropped, so _presses is cleared and not stuck in held state
-            var gesturesField = typeof(MainViewModel).GetField("_buttonGestures", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            var gestures = gesturesField!.GetValue(vm)!;
-            var pressesField = typeof(RemoteButtonGestures).GetField("_presses", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            var presses = (System.Collections.IDictionary)pressesField!.GetValue(gestures)!;
-            Assert.Empty(presses);
         }
         finally
         {
@@ -666,4 +388,49 @@ public class MainViewModelTests
             if (File.Exists(path)) File.Delete(path);
         }
     }
+    [Fact]
+    public void SameModelButtonsMapIndependentlyAndLosingVoiceKeyCannotStopTheOwner()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"multi-remote-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bluetooth = new TestBluetoothManager();
+            var actions = new List<string?>();
+            foreach (ulong id in new ulong[] { 1, 2, 3 })
+            {
+                var device = new RemoteDevice
+                {
+                    Id = id.ToString(), BluetoothAddress = id, Name = "Chromecast Remote",
+                    ModelType = RemoteModelType.GoogleG9N9N,
+                    Mappings = [new ButtonMapping { Button = RemoteButton.Ok, ClickAction = ButtonActionType.TextSnippet, ClickText = $"remote-{id}" }]
+                };
+                config.Current.Devices.Add(device);
+                bluetooth.ReadyAddresses.Add(id);
+            }
+            config.Current.InputTool.TriggerMode = VoiceTriggerMode.HoldToTalk;
+            using var vm = new MainViewModel(config, bluetooth, action => actions.Add(action.Text));
+
+            vm.HandleDeviceButton(1, RemoteButton.Voice, true);
+            vm.HandleDeviceButton(2, RemoteButton.Voice, true);
+            vm.HandleDeviceButton(2, RemoteButton.Voice, false);
+            Assert.Equal(1UL, bluetooth.VoiceDeviceAddress);
+            foreach (ulong address in bluetooth.ReadyAddresses)
+                vm.HandleDeviceButton(address, RemoteButton.Ok, true);
+            foreach (ulong address in bluetooth.ReadyAddresses)
+                vm.HandleDeviceButton(address, RemoteButton.Ok, false);
+            Assert.Equal(new[] { "remote-1", "remote-2", "remote-3" }, actions);
+
+            vm.HandleDeviceButton(1, RemoteButton.Voice, false);
+            vm.HandleDeviceButton(3, RemoteButton.Voice, true);
+            Assert.Equal(3UL, bluetooth.VoiceDeviceAddress);
+            Assert.Equal(2, bluetooth.StartVoiceSessionCount);
+            Assert.Equal(1, bluetooth.StopVoiceSessionCount);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
 }

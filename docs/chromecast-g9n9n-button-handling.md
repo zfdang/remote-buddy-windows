@@ -1,5 +1,7 @@
 # Google Chromecast (G9N9N / GY3LE) 遥控器按键处理方案技术规范
 
+> 本文记录方案演进。当前 G9N9N 码表和解码规则见 [G9N9N 按键文档](g9n9n-buttons.md)，当前连接与隔离流程见 [Windows 按键采集文档](windows-remote-input.md)。
+
 本文档详细记录在 Windows 平台下针对 **Google Chromecast with Google TV 语音遥控器（G9N9N）** 及 **Google TV Streamer 遥控器（GY3LE）** 实体按键捕获的技术分析、不同方案优缺点对比，以及 Remote Buddy（Windows）采用的**多轨零注入融合架构**。
 
 ---

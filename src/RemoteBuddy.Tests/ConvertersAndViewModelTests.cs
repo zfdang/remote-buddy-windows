@@ -18,7 +18,7 @@ public class ConvertersAndViewModelTests
     {
         public bool IsScanning { get; private set; }
         public bool IsConnected { get; set; } = false;
-        public bool IsReady => false;
+        public bool IsReady => IsConnected;
         public bool IsStreaming => false;
         public float CurrentGain { get; set; } = RemoteDevice.DefaultMicrophoneGain;
         public BluetoothSessionState SessionState => BluetoothSessionState.Idle;

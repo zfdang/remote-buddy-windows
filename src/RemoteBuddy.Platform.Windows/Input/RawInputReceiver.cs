@@ -1,4 +1,4 @@
-﻿// Copyright (C) 2026 Remote Buddy Contributors
+// Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
 using System.Collections.Concurrent;
@@ -120,7 +120,7 @@ public sealed class RawInputReceiver : IDisposable
         out uint propertyType, [Out] byte[] buffer, ref uint bufferSize, uint flags);
 
     public event Action<IntPtr, RemoteButton, bool>? ButtonEvent;
-    public event Action? PhysicalVoiceKeyPressed;
+    public event Action<IntPtr>? PhysicalVoiceKeyPressed;
 
     public Func<IntPtr, string, bool>? DeviceFilter { get; set; }
 
@@ -311,7 +311,7 @@ public sealed class RawInputReceiver : IDisposable
         return false;
     }
 
-    public static bool EvaluateDeviceMatch(Guid? targetContainerId, IntPtr hDevice, string devicePath, ulong targetBluetoothAddress = 0)
+    public static bool EvaluateDeviceMatch(Guid? targetContainerId, IntPtr hDevice, string devicePath, ulong targetBluetoothAddress = 0, bool requireExactIdentity = false)
     {
         // SendInput events have no physical source. Admitting them feeds our
         // shortcut output back into the mapping pipeline indefinitely.
@@ -328,6 +328,8 @@ public sealed class RawInputReceiver : IDisposable
         }
 
         Guid? deviceContainerId = GetDeviceContainerId(devicePath);
+        if (requireExactIdentity)
+            return targetContainerId.HasValue && targetContainerId == deviceContainerId;
 
         if (targetContainerId.HasValue)
         {
@@ -476,7 +478,7 @@ public sealed class RawInputReceiver : IDisposable
 
                     if (shouldArm)
                     {
-                        PhysicalVoiceKeyPressed?.Invoke();
+                        PhysicalVoiceKeyPressed?.Invoke(hDevice);
                     }
                     return; // ATVV owns voice session start/stop.
                 }
@@ -599,7 +601,7 @@ public sealed class RawInputReceiver : IDisposable
                             recognized = true;
                             if (voiceHoldPressed)
                             {
-                                PhysicalVoiceKeyPressed?.Invoke();
+                                PhysicalVoiceKeyPressed?.Invoke(hDevice);
                             }
                         }
                         else if (XiaomiProtocol.TryParseReport(slice, out currentButtons))

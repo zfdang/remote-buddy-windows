@@ -20,13 +20,30 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly ConfigService _configService;
     private readonly IBluetoothManager _bluetoothManager;
     private readonly RawInputReceiver _rawInputReceiver = new();
-    private readonly HidDeviceReader _hidDeviceReader = new();
+    private readonly Dictionary<ulong, HidDeviceReader> _hidReaders = new();
     private readonly ChromecastButtonReceiver _chromecastButtonReceiver = new();
     private readonly RemoteVoiceKeyGuard _voiceKeyGuard;
-    private readonly Dictionary<IntPtr, (Guid? Target, bool Accepted)> _deviceAdmissionLog = new();
     private ActiveVoiceSession? _activeVoiceSession;
 
-    private readonly RemoteButtonGestures _buttonGestures;
+    private readonly Dictionary<ulong, RemoteButtonGestures> _gestures = new();
+    private readonly Dictionary<ulong, (RemoteButton Button, bool Down, long Time)> _dedup = new();
+    private readonly HashSet<ulong> _readyAddresses = new();
+    private readonly Dictionary<IntPtr, ulong> _rawAddresses = new();
+    private readonly Action<ButtonAssignment> _executeMapping;
+    private EtwButtonSource[] _etwSources = [];
+
+    private void ResetGestures()
+    {
+        foreach (var gestures in _gestures.Values) gestures.Reset();
+        _gestures.Clear();
+        _dedup.Clear();
+    }
+
+    private void ResetDeviceGestures(ulong address)
+    {
+        if (_gestures.Remove(address, out var gestures)) gestures.Reset();
+        _dedup.Remove(address);
+    }
 
     [ObservableProperty]
     private string _currentTitle = "Remote Buddy (Windows)";
@@ -62,46 +79,31 @@ public partial class MainViewModel : ObservableObject, IDisposable
         set
         {
             _activeOnboardingVm = value;
-            _buttonGestures.Reset();
-            if (value != null && IsConnected)
-            {
-                bool needsEtw = G9N9NProtocol.IsCandidate(ConnectedDeviceName) ||
-                    XiaomiProtocol.IsCandidate(ConnectedDeviceName) ||
-                    T1RemoteProtocol.IsCandidate(ConnectedDeviceName) ||
-                    (value.SelectedDevice != null && (value.SelectedDevice.IsG9N9N || value.SelectedDevice.IsXiaomi || value.SelectedDevice.IsT1));
-                if (needsEtw && !_chromecastButtonReceiver.IsRunning)
-                {
-                    AppLogger.Info("Activating ETW button receiver for active onboarding session", "MainViewModel");
-                    StartChromecastButtons();
-                }
-            }
+            ResetGestures();
+            RefreshInputSources();
         }
     }
 
-    private readonly object _buttonDedupLock = new();
-    private RemoteButton _lastDedupButton = RemoteButton.None;
-    private bool _lastDedupIsDown = false;
-    private long _lastDedupTimeMs = 0;
-    private readonly Dictionary<RemoteButton, (long TimestampMs, bool IsDown)> _lastPhysicalEventTimeMs = new();
-    private readonly Dictionary<RemoteButton, long> _lastAppCommandTimeMs = new();
-    private readonly Dictionary<RemoteButton, bool> _physicalDownSuppressedByAppCmd = new();
-
-    internal Action<ButtonAssignment>? ActionExecutedForTesting { get; set; }
+    private int _buttonSourceGeneration;
 
     public event Action<WizardMode>? RequestOpenWizard;
 
     public MainViewModel(ConfigService configService, IBluetoothManager bluetoothManager)
+        : this(configService, bluetoothManager, null) { }
+
+    internal MainViewModel(ConfigService configService, IBluetoothManager bluetoothManager, Action<ButtonAssignment>? executeMapping)
     {
+        _executeMapping = executeMapping ?? ExecuteButtonAction;
         _configService = configService;
         _bluetoothManager = bluetoothManager;
-        _buttonGestures = new RemoteButtonGestures(ScheduleButtonGesture, ExecuteButtonAction);
         _voiceKeyGuard = new RemoteVoiceKeyGuard(() =>
             _bluetoothManager.SessionState is BluetoothSessionState.Opening or BluetoothSessionState.Streaming or BluetoothSessionState.Draining);
-        _rawInputReceiver.PhysicalVoiceKeyPressed += _voiceKeyGuard.Arm;
+        _rawInputReceiver.PhysicalVoiceKeyPressed += OnRawVoiceKey;
 
         GeneralVm = new GeneralViewModel(_configService, _bluetoothManager, mode => RequestOpenWizard?.Invoke(mode), Navigate);
         DevicesVm = new DevicesViewModel(_configService, _bluetoothManager, mode => RequestOpenWizard?.Invoke(mode));
         MappingVm = new MappingViewModel(_configService);
+        DevicesVm.DevicesChanged += RefreshInputSources;
         MappingVm.PropertyChanged += OnMappingSettingsChanged;
         IntegrationsVm = new IntegrationsViewModel(_configService, mode => RequestOpenWizard?.Invoke(mode));
         EnvironmentVm = new EnvironmentViewModel();
@@ -118,217 +120,143 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _bluetoothManager.VoiceSessionEnded += OnVoiceSessionEnded;
         _bluetoothManager.VoiceButtonPressed += OnVoiceButtonPressed;
         _rawInputReceiver.ButtonEvent += OnRawButtonEvent;
-        _hidDeviceReader.ButtonEvent += OnHidButtonEvent;
         _chromecastButtonReceiver.ButtonEvent += OnChromecastButtonEvent;
         _chromecastButtonReceiver.TruncatedPacketDetected += OnChromecastTruncatedPacketDetected;
+        _chromecastButtonReceiver.DeviceDisconnected += OnEtwDeviceDisconnected;
     }
 
-    private void StartChromecastButtons()
+    private IEnumerable<RemoteDevice> KnownRemotes()
     {
-        ulong addr = _bluetoothManager.ConnectedDeviceAddress;
-        if (addr == 0 && ActiveOnboardingVm?.SelectedDevice != null)
-        {
-            addr = ActiveOnboardingVm.SelectedDevice.BluetoothAddress;
-        }
-        if (addr == 0) return;
-
-        var name = ConnectedDeviceName;
-        RemoteDevice? dev = null;
-        if (addr != 0)
-        {
-            dev = _configService.Current.Devices.FirstOrDefault(d => d.BluetoothAddress == addr);
-        }
-        if (dev == null && ActiveOnboardingVm?.SelectedDevice != null &&
-            (addr == 0 || ActiveOnboardingVm.SelectedDevice.BluetoothAddress == addr))
-        {
-            dev = ActiveOnboardingVm.SelectedDevice;
-        }
-        if (dev == null && addr == 0)
-        {
-            dev = _configService.Current.Devices.FirstOrDefault(d => d.Id == _configService.Current.SelectedDeviceId);
-        }
-
-        EtwProtocolKind protocolKind;
-        if (dev != null)
-        {
-            if (dev.IsG9N9N)
-                protocolKind = EtwProtocolKind.GoogleG9N9N;
-            else if (dev.IsT1)
-                protocolKind = EtwProtocolKind.T1Remote;
-            else
-                protocolKind = EtwProtocolKind.Xiaomi;
-        }
-        else if (G9N9NProtocol.IsCandidate(name) || (ActiveOnboardingVm?.SelectedDevice != null && ActiveOnboardingVm.SelectedDevice.IsG9N9N))
-        {
-            protocolKind = EtwProtocolKind.GoogleG9N9N;
-        }
-        else if (T1RemoteProtocol.IsCandidate(name) || (ActiveOnboardingVm?.SelectedDevice != null && ActiveOnboardingVm.SelectedDevice.IsT1))
-        {
-            protocolKind = EtwProtocolKind.T1Remote;
-        }
-        else
-        {
-            protocolKind = EtwProtocolKind.Xiaomi;
-        }
-
-        var marker = Guid.NewGuid();
-        if (_chromecastButtonReceiver.IsRunning)
-        {
-            _chromecastButtonReceiver.ResetBinding(marker, protocolKind);
-            _ = _bluetoothManager.ProbeButtonSourceAsync(marker);
-            return;
-        }
-
-        if (_chromecastButtonReceiver.Start(marker, protocolKind))
-            _ = _bluetoothManager.ProbeButtonSourceAsync(marker);
+        if (ActiveOnboardingVm?.SelectedDevice is { BluetoothAddress: not 0 } onboarding)
+            yield return onboarding;
+        foreach (var device in _configService.Current.Devices)
+            if (device.BluetoothAddress != 0)
+                yield return device;
     }
 
-    private void OnChromecastTruncatedPacketDetected()
+    internal void RefreshInputSources()
     {
-        if (System.Windows.Application.Current?.Dispatcher != null && !System.Windows.Application.Current.Dispatcher.CheckAccess())
+        var devices = KnownRemotes().DistinctBy(device => device.BluetoothAddress).ToArray();
+        var ready = devices.Where(device => _bluetoothManager.IsDeviceReady(device.BluetoothAddress)).ToArray();
+        var addresses = ready.Select(device => device.BluetoothAddress).ToHashSet();
+        foreach (ulong address in _readyAddresses.Except(addresses).ToArray())
         {
-            System.Windows.Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+            ResetDeviceGestures(address);
+            foreach (var handle in _rawAddresses.Where(pair => pair.Value == address).Select(pair => pair.Key).ToArray())
             {
-                ActiveOnboardingVm?.NotifyTruncatedPacketDetected();
-            }));
+                _rawAddresses.Remove(handle);
+                _rawInputReceiver.ResetDeviceState(handle);
+            }
+            if (_hidReaders.Remove(address, out var reader)) reader.Dispose();
         }
-        else
-        {
-            ActiveOnboardingVm?.NotifyTruncatedPacketDetected();
-        }
-    }
 
-    private void OnChromecastButtonEvent(RemoteButton button, bool isDown)
-    {
-        AppLogger.Info($"MainViewModel: OnChromecastButtonEvent: button={button}, isDown={isDown}", "MainViewModel");
-        if (System.Windows.Application.Current?.Dispatcher != null && !System.Windows.Application.Current.Dispatcher.CheckAccess())
+        var wanted = devices.Select(device => (device.BluetoothAddress, Protocol: device.IsG9N9N ||
+            G9N9NProtocol.IsCandidate(device.Name) ? EtwProtocolKind.GoogleG9N9N :
+            device.IsT1 ? EtwProtocolKind.T1Remote : EtwProtocolKind.Xiaomi)).ToArray();
+        bool rebuild = !_etwSources.Select(source => (source.Address, source.Protocol)).SequenceEqual(wanted) ||
+            !_chromecastButtonReceiver.IsRunning;
+        if (rebuild && ready.Length > 0)
         {
-            System.Windows.Application.Current.Dispatcher.BeginInvoke(new Action(() => OnRawButtonEvent(IntPtr.Zero, button, isDown)));
+            Interlocked.Increment(ref _buttonSourceGeneration);
+            _chromecastButtonReceiver.Stop();
+            ResetGestures();
+            _etwSources = wanted.Select(source => new EtwButtonSource(source.BluetoothAddress, Guid.NewGuid(), source.Protocol)).ToArray();
+            _chromecastButtonReceiver.Start(_etwSources);
         }
-        else
+        else if (ready.Length == 0 && _chromecastButtonReceiver.IsRunning)
         {
-            OnRawButtonEvent(IntPtr.Zero, button, isDown);
+            Interlocked.Increment(ref _buttonSourceGeneration);
+            _chromecastButtonReceiver.Stop();
         }
-    }
 
-    private void OnHidButtonEvent(RemoteButton button, bool isDown)
-    {
-        if (System.Windows.Application.Current?.Dispatcher != null && !System.Windows.Application.Current.Dispatcher.CheckAccess())
+        foreach (var device in ready)
         {
-            System.Windows.Application.Current.Dispatcher.BeginInvoke(new Action(() => OnRawButtonEvent(IntPtr.Zero, button, isDown)));
-        }
-        else
-        {
-            OnRawButtonEvent(IntPtr.Zero, button, isDown);
-        }
-    }
-
-    private void OnConnectionStatusChanged(bool connected, string name)
-    {
-        void Update()
-        {
-            IsConnected = connected;
-            ConnectedDeviceName = connected ? name : "未连接设备";
-            lock (_buttonDedupLock)
+            ulong address = device.BluetoothAddress;
+            if (rebuild || !_readyAddresses.Contains(address))
             {
-                _lastPhysicalEventTimeMs.Clear();
-                _lastAppCommandTimeMs.Clear();
-                _physicalDownSuppressedByAppCmd.Clear();
-                _lastDedupButton = RemoteButton.None;
+                var source = _etwSources.FirstOrDefault(entry => entry.Address == address);
+                if (source.Address != 0 && _chromecastButtonReceiver.IsRunning)
+                    _ = _bluetoothManager.ProbeButtonSourceAsync(source.Marker, address);
             }
 
-            if (!connected)
+            if (_hidReaders.ContainsKey(address) || _readyAddresses.Contains(address)) continue;
+            var info = HidDeviceReader.FindBestDevice(address);
+            if (info == null) continue;
+            device.HidDevicePath = info.Path;
+            device.HidUsagePage = info.UsagePage;
+            device.HidUsage = info.Usage;
+            device.HidReportLength = info.InputReportByteLength;
+            var reader = new HidDeviceReader();
+            if (reader.Start(info.Path, info.InputReportByteLength))
             {
-                IsVoiceActive = false;
-                CurrentAudioLevel = 0f;
-                ReleaseHeldVoiceShortcut();
-                _voiceKeyGuard.Clear();
-                _buttonGestures.Reset();
-                _rawInputReceiver.ResetDeviceState();
-                _hidDeviceReader.Stop();
-                if (_chromecastButtonReceiver.IsRunning)
+                _hidReaders[address] = reader;
+                reader.ButtonEvent += (button, down) => RunOnUi(() =>
                 {
-                    _chromecastButtonReceiver.ResetBinding(Guid.Empty, EtwProtocolKind.GoogleG9N9N);
-                }
-                DevicesVm.Reload();
+                    if (_hidReaders.GetValueOrDefault(address) == reader)
+                        HandleDeviceButton(address, button, down);
+                });
             }
             else
+                reader.Dispose();
+        }
+        _readyAddresses.Clear();
+        _readyAddresses.UnionWith(addresses);
+    }
+
+    private static void RunOnUi(Action action)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher != null && !dispatcher.CheckAccess()) dispatcher.BeginInvoke(action);
+        else action();
+    }
+
+    private void OnChromecastTruncatedPacketDetected(ulong address) => RunOnUi(() =>
+    {
+        if (ActiveOnboardingVm?.SelectedDevice?.BluetoothAddress == address)
+            ActiveOnboardingVm.NotifyTruncatedPacketDetected();
+    });
+
+    private void OnEtwDeviceDisconnected(ulong address) => RunOnUi(() => ResetDeviceGestures(address));
+
+    private void OnChromecastButtonEvent(ulong address, RemoteButton button, bool isDown)
+    {
+        int generation = Volatile.Read(ref _buttonSourceGeneration);
+        RunOnUi(() =>
+        {
+            if (generation == Volatile.Read(ref _buttonSourceGeneration))
+                HandleDeviceButton(address, button, isDown);
+        });
+    }
+
+    private void OnConnectionStatusChanged(bool connected, string name) => RunOnUi(() =>
+    {
+        IsConnected = connected;
+        ConnectedDeviceName = connected ? name : "未连接设备";
+        if (!connected)
+        {
+            IsVoiceActive = false;
+            CurrentAudioLevel = 0;
+            ReleaseHeldVoiceShortcut();
+            _voiceKeyGuard.Clear();
+            _rawInputReceiver.ResetDeviceState();
+        }
+
+        // The selection is the mapping editor's selection, independent of connection state.
+        if (_bluetoothManager is not MultiRemoteBluetoothManager && connected)
+        {
+            var device = KnownRemotes().FirstOrDefault(d => d.BluetoothAddress == _bluetoothManager.ConnectedDeviceAddress)
+                ?? _configService.Current.Devices.FirstOrDefault(d => d.Id == _configService.Current.SelectedDeviceId);
+            if (device != null)
             {
-                if (_registeredHwnd != IntPtr.Zero)
-                {
-                    _rawInputReceiver.Register(_registeredHwnd);
-                }
-
-                ulong addr = _bluetoothManager.ConnectedDeviceAddress;
-                RemoteDevice? dev = null;
-                if (addr != 0)
-                {
-                    dev = _configService.Current.Devices.FirstOrDefault(d => d.BluetoothAddress == addr);
-                }
-                if (dev == null && ActiveOnboardingVm?.SelectedDevice != null &&
-                    (addr == 0 || ActiveOnboardingVm.SelectedDevice.BluetoothAddress == addr))
-                {
-                    dev = ActiveOnboardingVm.SelectedDevice;
-                }
-                if (dev == null && addr == 0)
-                {
-                    dev = _configService.Current.Devices.FirstOrDefault(d => d.Id == _configService.Current.SelectedDeviceId);
-                }
-
-                if (dev != null)
-                {
-                    _configService.Current.SelectedDeviceId = dev.Id;
-                    _bluetoothManager.VoiceButtonMode = dev.VoiceButtonMode;
-                    _bluetoothManager.CurrentGain = dev.Gain;
-                    _configService.Save();
-                }
-
-                DevicesVm.Reload();
+                _configService.Current.SelectedDeviceId = device.Id;
+                _bluetoothManager.VoiceButtonMode = device.VoiceButtonMode;
+                _bluetoothManager.CurrentGain = device.Gain;
                 MappingVm.SyncSelectedDeviceWithConfig();
-
-                bool needsEtw = (dev != null && (dev.IsG9N9N || dev.IsXiaomi || dev.IsT1)) ||
-                    G9N9NProtocol.IsCandidate(name) ||
-                    XiaomiProtocol.IsCandidate(name) ||
-                    T1RemoteProtocol.IsCandidate(name) ||
-                    (ActiveOnboardingVm?.SelectedDevice != null && (ActiveOnboardingVm.SelectedDevice.IsG9N9N || ActiveOnboardingVm.SelectedDevice.IsXiaomi || ActiveOnboardingVm.SelectedDevice.IsT1));
-                if (needsEtw)
-                {
-                    AppLogger.Info($"Activating ETW button receiver for device '{name}'", "MainViewModel");
-                    StartChromecastButtons();
-                }
-
-                if (addr != 0)
-                {
-                    var hidInfo = HidDeviceReader.FindBestDevice(addr);
-                    if (hidInfo != null)
-                    {
-                        if (dev != null)
-                        {
-                            dev.HidDevicePath = hidInfo.Path;
-                            dev.HidUsagePage = hidInfo.UsagePage;
-                            dev.HidUsage = hidInfo.Usage;
-                            dev.HidReportLength = hidInfo.InputReportByteLength;
-                            dev.HidCaptureStatus = "已就绪 (RawInput & Direct Stream)";
-                        }
-                        _hidDeviceReader.Start(hidInfo.Path, hidInfo.InputReportByteLength);
-                    }
-                    else
-                    {
-                        _hidDeviceReader.StartForRemote(addr);
-                    }
-                }
             }
         }
-
-        if (System.Windows.Application.Current?.Dispatcher != null && !System.Windows.Application.Current.Dispatcher.CheckAccess())
-        {
-            System.Windows.Application.Current.Dispatcher.BeginInvoke(Update);
-        }
-        else
-        {
-            Update();
-        }
-    }
+        DevicesVm.Reload();
+        RefreshInputSources();
+    });
 
     private void OnAudioLevelChanged(float level)
     {
@@ -347,10 +275,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnVoiceSessionStarted()
     {
+        ulong owner = _bluetoothManager.VoiceDeviceAddress;
         void Update()
         {
             IsVoiceActive = true;
-            if (ActiveOnboardingVm != null && ActiveOnboardingVm.CurrentWizardStep != WizardStep.TranscriptionVerify) return;
+            if (ActiveOnboardingVm is { } onboarding && (onboarding.CurrentWizardStep != WizardStep.TranscriptionVerify ||
+                (owner != 0 && onboarding.SelectedDevice?.BluetoothAddress != owner))) return;
             UpdateVoiceKeyGuard();
             // ATVV is itself a verified remote source. Some Windows BLE HID
             // paths do not deliver a source-bearing F5 Raw Input event, so
@@ -419,22 +349,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnVoiceButtonPressed()
     {
-        App.Current?.Dispatcher.BeginInvoke(new Action(() =>
+        ulong address = _bluetoothManager.VoiceDeviceAddress;
+        if (address == 0) address = _bluetoothManager.ConnectedDeviceAddress;
+        RunOnUi(() =>
         {
-            var connectedDev = _configService.Current.Devices.FirstOrDefault(d =>
-                (d.BluetoothAddress != 0 && d.BluetoothAddress == _bluetoothManager.ConnectedDeviceAddress) ||
-                (d.ContainerId.HasValue && d.ContainerId == _bluetoothManager.ConnectedDeviceContainerId));
-
-            if (ActiveOnboardingVm?.CurrentWizardStep == WizardStep.ButtonTest)
-                ActiveOnboardingVm.NotifyButtonPressed(RemoteButton.Voice);
-            else if (ActiveOnboardingVm == null)
-                ShowMappingPress(RemoteButton.Voice, connectedDev);
-        }));
+            var device = KnownRemotes().FirstOrDefault(d => d.BluetoothAddress == address);
+            if (ActiveOnboardingVm is { CurrentWizardStep: WizardStep.ButtonTest } onboarding &&
+                onboarding.SelectedDevice?.BluetoothAddress == address)
+                onboarding.NotifyButtonPressed(RemoteButton.Voice);
+            else if (ActiveOnboardingVm == null && device != null)
+                ShowMappingPress(RemoteButton.Voice, device);
+        });
     }
 
     partial void OnActivePageNameChanged(string value)
     {
-        _buttonGestures.Reset();
+        ResetGestures();
         if (value == "General")
         {
             GeneralVm.RefreshState();
@@ -481,258 +411,86 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public void ProcessRawInput(IntPtr lParam) => _rawInputReceiver.ProcessMessage(lParam);
     internal void HandleRawButtonEvent(IntPtr hDevice, RemoteButton button, bool isDown) => OnRawButtonEvent(hDevice, button, isDown);
 
-    public bool HandleAppCommandButton(RemoteButton button)
+    private RemoteDevice? ResolveRawSource(IntPtr handle, string path) =>
+        KnownRemotes().FirstOrDefault(device => _bluetoothManager.IsDeviceReady(device.BluetoothAddress) &&
+            RawInputReceiver.EvaluateDeviceMatch(_bluetoothManager.GetDeviceContainerId(device.BluetoothAddress) ?? device.ContainerId,
+                handle, path, device.BluetoothAddress, requireExactIdentity: true));
+
+    private bool IsTargetDevice(IntPtr handle, string path)
     {
+        if (_rawAddresses.TryGetValue(handle, out ulong address) &&
+            _bluetoothManager.IsDeviceReady(address)) return true;
+        var device = ResolveRawSource(handle, path);
+        if (device == null) return false;
+        _rawAddresses[handle] = device.BluetoothAddress;
+        return true;
+    }
+
+    private void OnRawVoiceKey(IntPtr handle)
+    {
+        ulong source = _rawAddresses.GetValueOrDefault(handle);
+        ulong owner = _bluetoothManager.VoiceDeviceAddress;
+        if (source != 0 && (owner == 0 || source == owner)) _voiceKeyGuard.Arm();
+    }
+
+    private void OnRawButtonEvent(IntPtr handle, RemoteButton button, bool isDown)
+    {
+        ulong address = handle == IntPtr.Zero ? _bluetoothManager.ConnectedDeviceAddress :
+            _rawAddresses.GetValueOrDefault(handle);
+        HandleDeviceButton(address, button, isDown);
+    }
+
+    internal void HandleDeviceButton(ulong address, RemoteButton button, bool isDown)
+    {
+        if (!_bluetoothManager.IsDeviceReady(address)) return;
+        var source = KnownRemotes().FirstOrDefault(device => device.BluetoothAddress == address);
+        if (source == null) return;
+        if (ActiveOnboardingVm is { } onboarding)
+        {
+            if (onboarding.SelectedDevice?.BluetoothAddress != address) return;
+            if (isDown) onboarding.NotifyButtonPressed(button);
+            if (button != RemoteButton.Voice || onboarding.CurrentWizardStep is not
+                (WizardStep.AudioTest or WizardStep.TranscriptionVerify)) return;
+        }
+
         long now = Environment.TickCount64;
+        if (_dedup.TryGetValue(address, out var last) && last.Button == button &&
+            last.Down == isDown && now - last.Time < 60) return;
+        _dedup[address] = (button, isDown, now);
+        if (ActiveOnboardingVm == null && isDown) ShowMappingPress(button, source);
 
-        // P2 Admission: require an admitted remote connected and ready, or onboarding button testing
-        bool isAdmittedConnected = _bluetoothManager.IsConnected && _bluetoothManager.IsReady;
-        bool isOnboardingButtonTest = ActiveOnboardingVm?.CurrentWizardStep == WizardStep.ButtonTest;
-        if (!isAdmittedConnected && !isOnboardingButtonTest)
-        {
-            // Ordinary keyboard media keys / mouse buttons bypass when no remote is admitted
-            return false;
-        }
-
-        lock (_buttonDedupLock)
-        {
-            // P2 Correlation: if physical ETW/RawInput event arrived within 500ms, suppress AppCommand duplicate
-            if (_lastPhysicalEventTimeMs.TryGetValue(button, out var phys) && (now - phys.TimestampMs) < 500)
-            {
-                AppLogger.Debug($"AppCommand {button} correlated with recent physical event ({now - phys.TimestampMs}ms ago); suppressing duplicate", "MainViewModel");
-                return true;
-            }
-
-            _lastAppCommandTimeMs[button] = now;
-        }
-
-        AppLogger.Debug($"WM_APPCOMMAND admitted and dispatched for button: {button}", "MainViewModel");
-
-        if (isOnboardingButtonTest)
-        {
-            ActiveOnboardingVm?.NotifyButtonPressed(button);
-            return true;
-        }
-
-        RemoteDevice? sourceDevice = null;
-        ulong connectedAddr = _bluetoothManager.ConnectedDeviceAddress;
-        if (connectedAddr != 0)
-        {
-            sourceDevice = _configService.Current.Devices.FirstOrDefault(d => d.BluetoothAddress == connectedAddr);
-        }
-        sourceDevice ??= _configService.Current.Devices.FirstOrDefault(d => d.Id == _configService.Current.SelectedDeviceId);
-
-        if (ActivePageName == "Mapping")
-        {
-            ShowMappingPress(button, sourceDevice);
-            return true;
-        }
-
-        if (MappingVm.CustomMappingEnabled)
-        {
-            var mapping = sourceDevice?.Mappings?.FirstOrDefault(m => m.Button == button);
-            if (mapping != null)
-            {
-                var assignment = mapping.GetAssignment(ButtonTrigger.SingleClick);
-                if (assignment.Action != ButtonActionType.None)
-                {
-                    ExecuteButtonAction(assignment);
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
-
-    private bool IsTargetDevice(IntPtr hDevice, string devicePath)
-    {
-        // 1. If currently onboarding a device, evaluate match strictly against the onboarding target
-        if (ActiveOnboardingVm?.SelectedDevice is { } onboardingDev)
-        {
-            bool match = RawInputReceiver.EvaluateDeviceMatch(onboardingDev.ContainerId, hDevice, devicePath, onboardingDev.BluetoothAddress);
-            LogAdmission(hDevice, onboardingDev.ContainerId, onboardingDev.BluetoothAddress, match, devicePath);
-            return match;
-        }
-
-        // 2. Normal operation: when a remote is actively connected, ONLY admit that connected remote
-        Guid? connectedContainerId = _bluetoothManager.ConnectedDeviceContainerId;
-        ulong connectedAddress = _bluetoothManager.ConnectedDeviceAddress;
-        if (_bluetoothManager.IsConnected && (connectedContainerId.HasValue || connectedAddress != 0))
-        {
-            bool match = RawInputReceiver.EvaluateDeviceMatch(connectedContainerId, hDevice, devicePath, connectedAddress);
-            LogAdmission(hDevice, connectedContainerId, connectedAddress, match, devicePath);
-            return match;
-        }
-
-        // 3. Fallback: only if no remote is actively connected, check the user's selected remote
-        var selectedDev = _configService.Current.Devices.FirstOrDefault(d => d.Id == _configService.Current.SelectedDeviceId);
-        if (selectedDev != null && (selectedDev.ContainerId.HasValue || selectedDev.BluetoothAddress != 0))
-        {
-            bool match = RawInputReceiver.EvaluateDeviceMatch(selectedDev.ContainerId, hDevice, devicePath, selectedDev.BluetoothAddress);
-            LogAdmission(hDevice, selectedDev.ContainerId, selectedDev.BluetoothAddress, match, devicePath);
-            return match;
-        }
-
-        return false;
-    }
-
-    private void LogAdmission(IntPtr hDevice, Guid? targetContainerId, ulong targetAddress, bool accepted, string devicePath)
-    {
-        if (!_deviceAdmissionLog.TryGetValue(hDevice, out var previous) ||
-            previous != (targetContainerId, accepted))
-        {
-            if (_deviceAdmissionLog.Count > 100) _deviceAdmissionLog.Clear();
-            _deviceAdmissionLog[hDevice] = (targetContainerId, accepted);
-            AppLogger.Info($"RawInput device admission: Accepted={accepted}, TargetContainer={targetContainerId}, " +
-                $"TargetAddress=0x{targetAddress:X12}, InputContainer={RawInputReceiver.GetDeviceContainerId(devicePath)}, Path='{devicePath}'", "MainViewModel");
-        }
-    }
-
-    private void OnRawButtonEvent(IntPtr hDevice, RemoteButton button, bool isDown)
-    {
-        lock (_buttonDedupLock)
-        {
-            long now = Environment.TickCount64;
-
-            // Check correlation against recent AppCommand execution (within 500ms)
-            if (_lastAppCommandTimeMs.TryGetValue(button, out long lastAppCmd) && (now - lastAppCmd) < 500)
-            {
-                if (isDown)
-                {
-                    _physicalDownSuppressedByAppCmd[button] = true;
-                }
-                AppLogger.Debug($"Suppressing physical {button} isDown={isDown} because AppCommand handled it {now - lastAppCmd}ms ago", "MainViewModel");
-                return;
-            }
-
-            if (isDown)
-            {
-                _physicalDownSuppressedByAppCmd[button] = false;
-            }
-            else if (_physicalDownSuppressedByAppCmd.TryGetValue(button, out bool wasSuppressed) && wasSuppressed)
-            {
-                _physicalDownSuppressedByAppCmd[button] = false;
-                AppLogger.Debug($"Suppressing physical up for {button} whose down was suppressed by AppCommand", "MainViewModel");
-                return;
-            }
-
-            if (button == _lastDedupButton && isDown == _lastDedupIsDown && (now - _lastDedupTimeMs) < 60)
-            {
-                AppLogger.Debug($"Suppressing duplicate button event: {button} isDown={isDown} within {now - _lastDedupTimeMs}ms", "MainViewModel");
-                return;
-            }
-            _lastDedupButton = button;
-            _lastDedupIsDown = isDown;
-            _lastDedupTimeMs = now;
-            _lastPhysicalEventTimeMs[button] = (now, isDown);
-        }
-
-        // 1. Resolve source device strictly
-        RemoteDevice? sourceDevice = null;
-        if (hDevice != IntPtr.Zero)
-        {
-            string? devPath = RawInputReceiver.GetDevicePath(hDevice);
-            if (!string.IsNullOrEmpty(devPath))
-            {
-                var inputContainerId = RawInputReceiver.GetDeviceContainerId(devPath);
-                sourceDevice = _configService.Current.Devices.FirstOrDefault(d =>
-                    (d.ContainerId.HasValue && inputContainerId.HasValue && d.ContainerId.Value == inputContainerId.Value) ||
-                    (d.BluetoothAddress != 0 && devPath.ToUpperInvariant().Contains(d.BluetoothAddress.ToString("X").ToUpperInvariant())));
-            }
-        }
-        else
-        {
-            // Event from ETW or HID direct stream: comes from the active connected BLE remote (or onboarding target)
-            ulong connectedAddr = _bluetoothManager.ConnectedDeviceAddress;
-            Guid? connectedContainer = _bluetoothManager.ConnectedDeviceContainerId;
-            sourceDevice = _configService.Current.Devices.FirstOrDefault(d =>
-                (connectedAddr != 0 && d.BluetoothAddress == connectedAddr) ||
-                (connectedContainer.HasValue && d.ContainerId == connectedContainer.Value));
-            if (sourceDevice == null && ActiveOnboardingVm?.SelectedDevice != null)
-            {
-                sourceDevice = ActiveOnboardingVm.SelectedDevice;
-            }
-        }
-        sourceDevice ??= _configService.Current.Devices.FirstOrDefault(d => d.Id == _configService.Current.SelectedDeviceId)
-            ?? _configService.Current.Devices.FirstOrDefault();
-
-        // 2. Onboarding Isolation: if onboarding, strictly enforce device match
-        if (ActiveOnboardingVm != null)
-        {
-            if (ActiveOnboardingVm.SelectedDevice != null && sourceDevice != null &&
-                sourceDevice.BluetoothAddress != 0 && ActiveOnboardingVm.SelectedDevice.BluetoothAddress != 0 &&
-                sourceDevice.BluetoothAddress != ActiveOnboardingVm.SelectedDevice.BluetoothAddress)
-            {
-                AppLogger.Info($"Ignoring button {button} from device '{sourceDevice.Name}' (0x{sourceDevice.BluetoothAddress:X}) during onboarding of '{ActiveOnboardingVm.SelectedDevice.Name}' (0x{ActiveOnboardingVm.SelectedDevice.BluetoothAddress:X})", "MainViewModel");
-                return;
-            }
-
-            _buttonGestures.Reset();
-            if (isDown)
-            {
-                ActiveOnboardingVm.NotifyButtonPressed(button);
-            }
-            if (button != RemoteButton.Voice || (ActiveOnboardingVm.CurrentWizardStep is not (WizardStep.AudioTest or WizardStep.TranscriptionVerify)))
-                return;
-        }
-
-        // 3. Absolute device isolation: when a remote is actively connected, completely drop buttons from any other remote
-        ulong activeAddress = _bluetoothManager.ConnectedDeviceAddress;
-        if (_bluetoothManager.IsConnected && activeAddress != 0 && sourceDevice != null &&
-            sourceDevice.BluetoothAddress != 0 && sourceDevice.BluetoothAddress != activeAddress)
-        {
-            AppLogger.Debug($"Ignoring button {button} from inactive device '{sourceDevice.Name}' (0x{sourceDevice.BluetoothAddress:X}). Active device is 0x{activeAddress:X}", "MainViewModel");
-            return;
-        }
-
-        // 4. Mapping page visual feedback (isolated to the remote currently viewed in Mapping UI)
-        if (isDown && ActiveOnboardingVm == null)
-            ShowMappingPress(button, sourceDevice);
-
-        // 5. Voice key handling
         if (button == RemoteButton.Voice)
         {
-
-            var currentMode = _configService.Current.InputTool.TriggerMode;
-            if (currentMode == VoiceTriggerMode.HoldToTalk)
+            ulong owner = _bluetoothManager.VoiceDeviceAddress;
+            if (owner != 0 && owner != address) return;
+            if (_configService.Current.InputTool.TriggerMode == VoiceTriggerMode.HoldToTalk)
             {
-                if (isDown)
-                {
-                    _ = _bluetoothManager.StartVoiceSessionAsync();
-                }
+                if (isDown) _ = _bluetoothManager.StartVoiceSessionAsync(address);
+                else _ = _bluetoothManager.StopVoiceSessionAsync(address);
+            }
+            else if (isDown)
+            {
+                if (_bluetoothManager.IsStreaming || _bluetoothManager.SessionState == BluetoothSessionState.Opening)
+                    _ = _bluetoothManager.StopVoiceSessionAsync(address);
                 else
-                {
-                    _ = _bluetoothManager.StopVoiceSessionAsync();
-                }
-            }
-            else // ClickToToggle
-            {
-                if (isDown)
-                {
-                    if (_bluetoothManager.IsStreaming || _bluetoothManager.SessionState == BluetoothSessionState.Opening)
-                    {
-                        _ = _bluetoothManager.StopVoiceSessionAsync();
-                    }
-                    else
-                    {
-                        _ = _bluetoothManager.StartVoiceSessionAsync();
-                    }
-                }
+                    _ = _bluetoothManager.StartVoiceSessionAsync(address);
             }
             return;
         }
 
-        // 5. Custom button mappings: apply mappings belonging to sourceDevice
         if (!MappingVm.CustomMappingEnabled) return;
-        if (!isDown)
+        if (!_gestures.TryGetValue(address, out var gestures))
         {
-            _buttonGestures.HandleUp(button);
-            return;
+            if (!isDown) return;
+            gestures = new RemoteButtonGestures(ScheduleButtonGesture, assignment =>
+            {
+                if (_bluetoothManager.IsDeviceReady(address)) _executeMapping(assignment);
+            });
+            _gestures[address] = gestures;
         }
-
-        var mapping = sourceDevice?.Mappings?.FirstOrDefault(m => m.Button == button);
-        if (mapping != null) _buttonGestures.HandleDown(mapping);
+        if (!isDown) gestures.HandleUp(button);
+        else if (source.Mappings?.FirstOrDefault(mapping => mapping.Button == button) is { } mapping)
+            gestures.HandleDown(mapping);
     }
 
     private void ShowMappingPress(RemoteButton button, RemoteDevice? sourceDevice = null)
@@ -774,7 +532,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         AppLogger.Info($"Device removal notification received for hDevice=0x{hDevice:X}", "MainViewModel");
         _rawInputReceiver.ResetDeviceState(hDevice);
-        _buttonGestures.Reset();
+        if (_rawAddresses.Remove(hDevice, out ulong address)) ResetDeviceGestures(address);
     }
 
     private static Action ScheduleButtonGesture(int delayMilliseconds, Action callback)
@@ -802,12 +560,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnMappingSettingsChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
     {
-        if (args.PropertyName == nameof(MappingViewModel.CustomMappingEnabled)) _buttonGestures.Reset();
+        if (args.PropertyName == nameof(MappingViewModel.CustomMappingEnabled)) ResetGestures();
     }
 
     private void ExecuteButtonAction(ButtonAssignment assignment)
     {
-        ActionExecutedForTesting?.Invoke(assignment);
         if (!_bluetoothManager.IsConnected || ActiveOnboardingVm != null || !MappingVm.CustomMappingEnabled) return;
 
         switch (assignment.Action)
@@ -838,17 +595,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _bluetoothManager.VoiceSessionEnded -= OnVoiceSessionEnded;
         _bluetoothManager.VoiceButtonPressed -= OnVoiceButtonPressed;
         _rawInputReceiver.ButtonEvent -= OnRawButtonEvent;
-        _rawInputReceiver.PhysicalVoiceKeyPressed -= _voiceKeyGuard.Arm;
-        _hidDeviceReader.ButtonEvent -= OnHidButtonEvent;
-        _hidDeviceReader.Dispose();
+        _rawInputReceiver.PhysicalVoiceKeyPressed -= OnRawVoiceKey;
+        foreach (var reader in _hidReaders.Values) reader.Dispose();
+        _hidReaders.Clear();
         _chromecastButtonReceiver.ButtonEvent -= OnChromecastButtonEvent;
         _chromecastButtonReceiver.TruncatedPacketDetected -= OnChromecastTruncatedPacketDetected;
+        _chromecastButtonReceiver.DeviceDisconnected -= OnEtwDeviceDisconnected;
         _chromecastButtonReceiver.Dispose();
 
         ReleaseHeldVoiceShortcut();
         _voiceKeyGuard.Dispose();
-        _buttonGestures.Reset();
+        ResetGestures();
         MappingVm.PropertyChanged -= OnMappingSettingsChanged;
+        DevicesVm.DevicesChanged -= RefreshInputSources;
         DevicesVm.Dispose();
         _rawInputReceiver.Dispose();
     }
