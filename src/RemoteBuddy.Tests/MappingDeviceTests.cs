@@ -53,14 +53,23 @@ public class MappingDeviceTests
             input.GetAssignment(ButtonTrigger.SingleClick));
     }
 
-    [Fact]
-    public void G9N9NDefaultsRepeatOnlyNavigationVolumeAndPower()
+    [Theory]
+    [InlineData(RemoteModelType.Unknown, true, true)]
+    [InlineData(RemoteModelType.XiaomiRC001, true, true)]
+    [InlineData(RemoteModelType.XiaomiRC003, true, true)]
+    [InlineData(RemoteModelType.XiaomiARN9, true, true)]
+    [InlineData(RemoteModelType.GoogleG9N9N, true, true)]
+    [InlineData(RemoteModelType.GoogleGY3LE, true, false)]
+    [InlineData(RemoteModelType.T1Remote, false, true)]
+    public void DefaultsRepeatOnlyNavigationVolumeAndBackspacePower(
+        RemoteModelType model, bool hasNavigationMappings, bool hasBackspacePower)
     {
-        RemoteButton[] expected = [
-            RemoteButton.Up, RemoteButton.Down, RemoteButton.Left, RemoteButton.Right, RemoteButton.Ok,
-            RemoteButton.VolumeUp, RemoteButton.VolumeDown, RemoteButton.Power
-        ];
-        var mappings = RemoteDevice.CreateDefaultMappings(RemoteModelType.GoogleG9N9N);
+        var expected = new List<RemoteButton> { RemoteButton.VolumeUp, RemoteButton.VolumeDown };
+        if (hasNavigationMappings)
+            expected.AddRange([RemoteButton.Up, RemoteButton.Down, RemoteButton.Left, RemoteButton.Right, RemoteButton.Ok]);
+        if (hasBackspacePower) expected.Add(RemoteButton.Power);
+
+        var mappings = RemoteDevice.CreateDefaultMappings(model);
 
         Assert.Equal(expected.Order(), mappings
             .Where(mapping => mapping.LongPressAction != ButtonActionType.None)

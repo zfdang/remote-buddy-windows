@@ -170,16 +170,20 @@ public partial class RemoteDevice : ObservableObject
         var list = new List<ButtonMapping>();
         void Add(RemoteButton btn, ButtonActionType click, MediaCommand media = MediaCommand.None, string? shortcut = null)
         {
+            bool repeats = btn switch
+            {
+                RemoteButton.Up or RemoteButton.Down or RemoteButton.Left or RemoteButton.Right or
+                    RemoteButton.Ok or RemoteButton.VolumeUp or RemoteButton.VolumeDown => true,
+                RemoteButton.Power => click == ButtonActionType.KeyboardShortcut && shortcut == "Backspace",
+                _ => false
+            };
             list.Add(new ButtonMapping
             {
                 Button = btn,
                 ClickAction = click,
                 ClickMedia = media,
                 ClickShortcut = shortcut,
-                LongPressAction = !isG9N9N || btn is RemoteButton.Up or RemoteButton.Down or
-                    RemoteButton.Left or RemoteButton.Right or RemoteButton.Ok or RemoteButton.VolumeUp or RemoteButton.VolumeDown or RemoteButton.Power
-                    ? ButtonActionType.ContinuousRepeat
-                    : ButtonActionType.None
+                LongPressAction = repeats ? ButtonActionType.ContinuousRepeat : ButtonActionType.None
             });
         }
 
