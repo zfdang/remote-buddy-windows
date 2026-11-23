@@ -11,14 +11,11 @@
 * **微软 DSE 机制**：Windows 内核强制要求音频驱动必须具有微软官方硬件认证（WHQL 签名）；
 * **自签名完全无效**：未经微软签名的内核驱动直接报错 Code 52 拒绝加载；开启“测试模式（Test Mode）”会产生桌面水印并破坏反作弊游戏环境，无法面向普通用户。
 
-### 2. 第三方驱动许可与分发策略
-目前 Windows 平台上广泛普及且拥有合法微软 WHQL 认证的虚拟音频驱动是 **[VB-CABLE](https://vb-audio.com/Cable/)**（由 VB-Audio Software 出品）。
+### 2. 在应用里安装 VB-CABLE
 
-> [!IMPORTANT]
-> **开源许可与分发合规边界**：
-> 1. 本项目采用 GPL-3.0-only 许可证。根据项目规范，分发的公共二进制包必须随附完整源码。VB-CABLE 为闭源商业/Donationware 软件，[其分发条款](https://vb-audio.com/Services/licensing.htm) 要求商业分发必须获得专门授权，不能将其视作可随意打包集成的开源依赖；
-> 2. **初期交付决策**：**本项目安装包内严禁私自捆绑或内置 VB-CABLE 安装器**；
-> 3. **引导方案**：在应用设置向导的第一步，若检测到缺少虚拟麦克风，界面展示官方来源声明、Donationware 属性提示，并提供官方下载链接，引导用户自行下载安装。
+首次设置向导和「权限与驱动」检测到缺少 VB-CABLE 时，会显示「安装 VB-CABLE」。Buddy 优先从 Remote Buddy 网站下载固定的 Pack 46，下载失败或校验失败时回退到 VB-Audio 官网。两处下载使用相同的 SHA-256。用户确认管理员授权后，在官方安装程序中选择「Install Driver」。Buddy 会在安装程序退出后重新检测设备。
+
+VB-CABLE 由 VB-Audio Software 提供，采用 Donationware 模式。 [VB-CABLE 官网与支持入口](https://vb-audio.com/Cable/)
 
 ---
 
@@ -34,8 +31,8 @@ stateDiagram-v2
     Detecting --> Ready: 成功初始化 WASAPI 实例
     Detecting --> NotInstalled: 未发现对应端点
     
-    NotInstalled --> GuidingUser: 弹出向导，引导从官网下载
-    GuidingUser --> AwaitingReboot: 驱动安装完成，但端点未激活
+    NotInstalled --> Installing: 点击安装并确认管理员授权
+    Installing --> AwaitingReboot: 驱动安装完成，但端点未激活
     AwaitingReboot --> Detecting: 用户重启电脑后恢复向导
     
     Ready --> Streaming: 语音会话激活

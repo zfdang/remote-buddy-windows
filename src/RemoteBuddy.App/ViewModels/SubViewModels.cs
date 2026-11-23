@@ -1096,7 +1096,21 @@ public partial class EnvironmentViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(DriverStatusBadgeColor))]
     [NotifyPropertyChangedFor(nameof(DriverStatusBadgeBgColor))]
     [NotifyPropertyChangedFor(nameof(DriverStatusBadgeBorderColor))]
+    [NotifyPropertyChangedFor(nameof(CanInstallCable))]
+    [NotifyCanExecuteChangedFor(nameof(InstallCableCommand))]
     private DriverReadinessStatus _driverStatus;
+
+    [ObservableProperty]
+    private string _cableInstallMessage = string.Empty;
+
+    public bool CanInstallCable => DriverStatus == DriverReadinessStatus.NotInstalled;
+
+    [RelayCommand(CanExecute = nameof(CanInstallCable))]
+    private async Task InstallCableAsync()
+    {
+        CableInstallMessage = await VbCableInstaller.InstallAsync(new Progress<string>(message => CableInstallMessage = message));
+        RefreshStatus();
+    }
 
     public string DriverStatusBadgeText => DriverStatus switch
     {
@@ -1236,7 +1250,7 @@ public partial class EnvironmentViewModel : ObservableObject
         StatusDescription = DriverStatus switch
         {
             DriverReadinessStatus.Ready => "VB-CABLE 虚拟麦克风已就绪，音频服务工作正常。",
-            DriverReadinessStatus.NotInstalled => "未检测到 VB-CABLE。请从官方网站下载并安装。",
+            DriverReadinessStatus.NotInstalled => "未检测到 VB-CABLE。可在这里下载并安装。",
             DriverReadinessStatus.Disabled => "检测到 CABLE Input 虚拟扬声器设备已被禁用。请打开 Windows 声音设置启用 “CABLE Input”。",
             DriverReadinessStatus.RebootRequired => "检测到虚拟声卡安装未完全生效，请重启电脑完成系统音频服务初始化。",
             _ => "虚拟麦克风初始化失败，请在设备管理器中检查设备状态。"

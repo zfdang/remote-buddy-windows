@@ -31,19 +31,12 @@
 
                     <Border Height="1" Background="{StaticResource BorderColorBrush}" Margin="0,0,0,16"/>
 
-                    <TextBlock Text="驱动安装与配置指南：" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,8"/>
-                    <TextBlock FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" LineHeight="20">
-                        <Run Text="1. VB-CABLE 为获微软官方 WHQL 认证签名的虚拟音频驱动；"/>
-                        <LineBreak/>
-                        <Run Text="2. 若尚未安装，请访问 "/>
-                        <Hyperlink NavigateUri="https://vb-audio.com/Cable/" RequestNavigate="OnDownloadLinkRequested"
-                                   Foreground="#4DA6FF">VB-Audio 官网</Hyperlink>
-                        <Run Text=" 下载 Driver Pack；"/>
-                        <LineBreak/>
-                        <Run Text="3. 解压后右键管理员身份运行 VBCABLE_Setup_x64.exe 进行安装；"/>
-                        <LineBreak/>
-                        <Run Text="4. 安装完成后若提示需要重启，请重启电脑完成系统音频服务初始化。"/>
-                    </TextBlock>
+                    <Button Content="安装 VB-CABLE" Padding="14,8" HorizontalAlignment="Left"
+                            Command="{Binding InstallCableCommand}"
+                            Visibility="{Binding CanInstallCable, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                    <TextBlock Text="{Binding CableInstallMessage}" Margin="0,10,0,0" TextWrapping="Wrap"
+                               Foreground="{StaticResource SecondaryTextBrush}"
+                               Visibility="{Binding CableInstallMessage, Converter={StaticResource StringToVisibilityConverter}}"/>
                 </StackPanel>
             </Border>
 
