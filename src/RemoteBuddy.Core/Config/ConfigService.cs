@@ -151,62 +151,135 @@ public class ConfigService
         return false;
     }
 
+    public void Update(Action<AppConfig> mutator, bool save = true)
+    {
+        ArgumentNullException.ThrowIfNull(mutator);
+        lock (_lock)
+        {
+            mutator(Current);
+            if (save)
+            {
+                SaveLocked();
+            }
+        }
+    }
+
     public void Save()
     {
         lock (_lock)
         {
-            string tempFile = _configFilePath + $".{Guid.NewGuid():N}.tmp";
-            bool cleanupNeeded = true;
-            try
+            SaveLocked();
+        }
+    }
+
+    private void SaveLocked()
+    {
+        var snapshot = CreateSnapshot(Current);
+        string tempFile = _configFilePath + $".{Guid.NewGuid():N}.tmp";
+        bool cleanupNeeded = true;
+        try
+        {
+            string? dir = Path.GetDirectoryName(_configFilePath);
+            if (!string.IsNullOrEmpty(dir))
             {
-                string? dir = Path.GetDirectoryName(_configFilePath);
-                if (!string.IsNullOrEmpty(dir))
-                {
-                    Directory.CreateDirectory(dir);
-                }
+                Directory.CreateDirectory(dir);
+            }
 
-                string json = JsonSerializer.Serialize(Current, JsonOptions);
-                File.WriteAllText(tempFile, json);
+            string json = JsonSerializer.Serialize(snapshot, JsonOptions);
+            File.WriteAllText(tempFile, json);
 
-                if (File.Exists(_configFilePath))
+            if (File.Exists(_configFilePath))
+            {
+                try
                 {
-                    try
-                    {
-                        File.Replace(tempFile, _configFilePath, _backupFilePath, ignoreMetadataErrors: true);
-                        cleanupNeeded = false;
-                    }
-                    catch (Exception ex) when (ex is IOException or PlatformNotSupportedException)
-                    {
-                        AppLogger.Warn($"File.Replace failed ({ex.Message}), falling back to direct copy", "ConfigService");
-                        File.Copy(_configFilePath, _backupFilePath, overwrite: true);
-                        File.Move(tempFile, _configFilePath, overwrite: true);
-                        cleanupNeeded = false;
-                    }
+                    File.Replace(tempFile, _configFilePath, _backupFilePath, ignoreMetadataErrors: true);
+                    cleanupNeeded = false;
                 }
-                else
+                catch (Exception ex) when (ex is IOException or PlatformNotSupportedException)
                 {
+                    AppLogger.Warn($"File.Replace failed ({ex.Message}), falling back to direct copy", "ConfigService");
+                    File.Copy(_configFilePath, _backupFilePath, overwrite: true);
                     File.Move(tempFile, _configFilePath, overwrite: true);
                     cleanupNeeded = false;
-                    try
-                    {
-                        File.Copy(_configFilePath, _backupFilePath, overwrite: true);
-                    }
-                    catch { }
                 }
-
-                AppLogger.Info($"Configuration safely saved to {_configFilePath}", "ConfigService");
             }
-            catch (Exception ex)
+            else
             {
-                AppLogger.Error($"Failed to save configuration to {_configFilePath}", ex, "ConfigService");
-            }
-            finally
-            {
-                if (cleanupNeeded && File.Exists(tempFile))
+                File.Move(tempFile, _configFilePath, overwrite: true);
+                cleanupNeeded = false;
+                try
                 {
-                    try { File.Delete(tempFile); } catch { }
+                    File.Copy(_configFilePath, _backupFilePath, overwrite: true);
                 }
+                catch { }
+            }
+
+            AppLogger.Info($"Configuration safely saved to {_configFilePath}", "ConfigService");
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Error($"Failed to save configuration to {_configFilePath}", ex, "ConfigService");
+        }
+        finally
+        {
+            if (cleanupNeeded && File.Exists(tempFile))
+            {
+                try { File.Delete(tempFile); } catch { }
             }
         }
+    }
+
+    private static AppConfig CreateSnapshot(AppConfig source)
+    {
+        var input = source.InputTool ?? new InputToolConfig();
+        return new AppConfig
+        {
+            Version = source.Version,
+            Language = source.Language,
+            LaunchAtStartup = source.LaunchAtStartup,
+            MinimizeToTrayOnClose = source.MinimizeToTrayOnClose,
+            HasCompletedOnboarding = source.HasCompletedOnboarding,
+            SelectedDeviceId = source.SelectedDeviceId,
+            InputTool = new InputToolConfig
+            {
+                Tool = input.Tool,
+                TriggerMode = input.TriggerMode,
+                Shortcut = input.Shortcut,
+                PreferredAudioInputDevice = input.PreferredAudioInputDevice
+            },
+            AppIntegrations = source.AppIntegrations != null
+                ? new Dictionary<string, bool>(source.AppIntegrations)
+                : new(),
+            Devices = (source.Devices ?? [])
+                .Select(d => new RemoteDevice
+                {
+                    Id = d.Id,
+                    BluetoothAddress = d.BluetoothAddress,
+                    ContainerId = d.ContainerId,
+                    Name = d.Name,
+                    ModelType = d.ModelType,
+                    Gain = d.Gain,
+                    VoiceButtonMode = d.VoiceButtonMode,
+                    Mappings = (d.Mappings ?? [])
+                        .Select(m => new ButtonMapping
+                        {
+                            Button = m.Button,
+                            ClickAction = m.ClickAction,
+                            ClickShortcut = m.ClickShortcut,
+                            ClickText = m.ClickText,
+                            ClickMedia = m.ClickMedia,
+                            DoubleClickAction = m.DoubleClickAction,
+                            DoubleClickShortcut = m.DoubleClickShortcut,
+                            DoubleClickText = m.DoubleClickText,
+                            DoubleClickMedia = m.DoubleClickMedia,
+                            LongPressAction = m.LongPressAction,
+                            LongPressShortcut = m.LongPressShortcut,
+                            LongPressText = m.LongPressText,
+                            LongPressMedia = m.LongPressMedia
+                        })
+                        .ToList()
+                })
+                .ToList()
+        };
     }
 }

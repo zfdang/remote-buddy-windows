@@ -65,6 +65,7 @@ public partial class MainWindow : Window
     private System.Drawing.Icon? _trayIcon;
     private bool _trayIconCreated = false;
     private uint _wmTaskbarCreated = 0;
+    private HwndSource? _hwndSource;
     public bool IsExplicitExit { get; set; } = false;
 
     private GeneralPage? _generalPage;
@@ -86,8 +87,13 @@ public partial class MainWindow : Window
         Closed += OnWindowClosed;
         if (Application.Current != null)
         {
-            Application.Current.SessionEnding += (_, _) => { _isSystemShutdown = true; };
+            Application.Current.SessionEnding += OnSessionEnding;
         }
+    }
+
+    private void OnSessionEnding(object sender, SessionEndingCancelEventArgs e)
+    {
+        _isSystemShutdown = true;
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -99,7 +105,8 @@ public partial class MainWindow : Window
             vm.RegisterRawInput(hwnd);
         }
         _wmTaskbarCreated = RegisterWindowMessage("TaskbarCreated");
-        HwndSource.FromHwnd(hwnd)?.AddHook(WndProc);
+        _hwndSource = HwndSource.FromHwnd(hwnd);
+        _hwndSource?.AddHook(WndProc);
         InitializeTrayIcon(hwnd);
     }
 
@@ -252,6 +259,14 @@ public partial class MainWindow : Window
 
     private void OnWindowClosed(object? sender, EventArgs e)
     {
+        _hwndSource?.RemoveHook(WndProc);
+        _hwndSource = null;
+
+        if (Application.Current != null)
+        {
+            Application.Current.SessionEnding -= OnSessionEnding;
+        }
+
         if (DataContext is MainViewModel vm)
         {
             vm.PropertyChanged -= OnViewModelPropertyChanged;

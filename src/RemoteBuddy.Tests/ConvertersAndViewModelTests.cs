@@ -420,4 +420,129 @@ public class ConvertersAndViewModelTests
             if (File.Exists(path)) File.Delete(path);
         }
     }
+
+    [Fact]
+    public void DevicesViewModel_DiscoveredUnknownDevice_PopulatesNearbyDevicesWithoutPollutingDiscovered()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-nearby-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new DummyBluetoothManager();
+            using var vm = new DevicesViewModel(config, bt);
+
+            Assert.False(vm.HasNearbyDevices);
+            bt.RaiseDeviceDiscovered(new RemoteDevice
+            {
+                Id = "nearby-1",
+                Name = "Nearby Chromecast",
+                BluetoothAddress = 0x112233445566,
+                ModelType = RemoteModelType.GoogleG9N9N
+            });
+
+            Assert.Empty(vm.DiscoveredDevices);
+            Assert.True(vm.HasNearbyDevices);
+            Assert.Single(vm.NearbyDevices);
+
+            vm.ToggleScan(); // starts scan and clears previous nearby scan results
+            Assert.True(vm.IsScanning);
+            Assert.False(vm.HasNearbyDevices);
+            Assert.Empty(vm.NearbyDevices);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void DevicesViewModel_GainChangesDebounce_AndFlushOnDispose()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-debounce-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var dev = new RemoteDevice
+            {
+                Id = "dev1",
+                Name = "Test Remote",
+                BluetoothAddress = 0x112233445566,
+                ModelType = RemoteModelType.GoogleG9N9N,
+                Gain = 2.0f
+            };
+            config.Current.Devices.Add(dev);
+            config.Current.SelectedDeviceId = dev.Id;
+            config.Save();
+
+            var bt = new DummyBluetoothManager
+            {
+                IsConnected = true,
+                ConnectedDeviceAddress = dev.BluetoothAddress
+            };
+            var vm = new DevicesViewModel(config, bt);
+
+            // Rapid slider changes must update live BT settings immediately without synchronous disk save
+            dev.Gain = 4.0f;
+            dev.Gain = 6.5f;
+            Assert.Equal(6.5f, bt.CurrentGain);
+            Assert.Equal(2.0f, new ConfigService(path).Current.Devices.Single().Gain);
+
+            // Disposing must flush the debounced gain write synchronously
+            vm.Dispose();
+            Assert.Equal(6.5f, new ConfigService(path).Current.Devices.Single().Gain);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void DevicesViewModel_ConnectionStatusChanged_PreservesUserSelectedDevice_AndReloadSkipsSave()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-sel-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var dev1 = new RemoteDevice
+            {
+                Id = "dev1",
+                Name = "Remote 1",
+                BluetoothAddress = 0x111111111111,
+                ModelType = RemoteModelType.GoogleG9N9N
+            };
+            var dev2 = new RemoteDevice
+            {
+                Id = "dev2",
+                Name = "Remote 2",
+                BluetoothAddress = 0x222222222222,
+                ModelType = RemoteModelType.XiaomiRC003
+            };
+            config.Current.Devices.AddRange([dev1, dev2]);
+            config.Current.SelectedDeviceId = dev2.Id;
+            config.Save();
+
+            var bt = new DummyBluetoothManager();
+            using var vm = new DevicesViewModel(config, bt);
+            Assert.Same(dev2, vm.SelectedDevice);
+
+            // Connecting dev1 must not overwrite the user's valid dev2 selection
+            bt.IsConnected = true;
+            bt.ConnectedDeviceAddress = dev1.BluetoothAddress;
+            bt.RaiseConnectionStatusChanged(true, dev1.Name, dev1.BluetoothAddress);
+
+            Assert.True(dev1.IsConnected);
+            Assert.Same(dev2, vm.SelectedDevice);
+
+            // Reload must refresh UI collections without writing config.json
+            var pastWrite = DateTime.UtcNow.AddMinutes(-10);
+            File.SetLastWriteTimeUtc(path, pastWrite);
+            vm.Reload();
+            Assert.Equal(pastWrite, File.GetLastWriteTimeUtc(path), TimeSpan.FromSeconds(1));
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
 }

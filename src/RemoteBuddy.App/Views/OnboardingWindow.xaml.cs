@@ -12,6 +12,8 @@ namespace RemoteBuddy.App.Views;
 
 public partial class OnboardingWindow : Window
 {
+    private HwndSource? _hwndSource;
+
     public OnboardingWindow()
     {
         InitializeComponent();
@@ -23,7 +25,8 @@ public partial class OnboardingWindow : Window
     {
         base.OnSourceInitialized(e);
         var hwnd = new WindowInteropHelper(this).Handle;
-        HwndSource.FromHwnd(hwnd)?.AddHook(WndProc);
+        _hwndSource = HwndSource.FromHwnd(hwnd);
+        _hwndSource?.AddHook(WndProc);
         if (Application.Current?.MainWindow?.DataContext is MainViewModel vm)
         {
             vm.RegisterRawInput(hwnd);
@@ -67,6 +70,9 @@ public partial class OnboardingWindow : Window
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        _hwndSource?.RemoveHook(WndProc);
+        _hwndSource = null;
+
         if (Application.Current?.MainWindow is { } mw)
         {
             var hwnd = new WindowInteropHelper(mw).Handle;

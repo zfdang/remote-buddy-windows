@@ -104,4 +104,92 @@ public class ConfigServiceTests : IDisposable
         Assert.Single(corruptFiles);
         Assert.Equal("THIS IS INVALID NOT JSON", File.ReadAllText(corruptFiles[0]));
     }
+
+    [Fact]
+    public void Save_OmitsRuntimeAndComputedPropertiesFromJson()
+    {
+        string path = Path.Combine(_tempDir, "config.json");
+        var service = new ConfigService(path);
+        var device = new RemoteDevice
+        {
+            Id = "DEV_SANITIZED",
+            Name = "Chromecast",
+            BluetoothAddress = 0x112233445566,
+            ModelType = RemoteModelType.GoogleG9N9N,
+            IsConnected = true,
+            BatteryLevel = 92,
+            HidDevicePath = @"\\?\hid#test",
+            HidUsagePage = 0x0C,
+            HidUsage = 0x01,
+            HidReportLength = 3,
+            HidCaptureStatus = "Ready",
+            HardwareInformation = new RemoteDeviceInformation(0x112233445566, null, "Chromecast", "G9N9N", null)
+        };
+        service.Current.Devices.Add(device);
+        service.Save();
+
+        string json = File.ReadAllText(path);
+        foreach (string forbidden in new[]
+        {
+            "IsConnected", "BatteryLevel", "HardwareInformation",
+            "HidDevicePath", "HidUsagePage", "HidUsage", "HidReportLength", "HidCaptureStatus",
+            "HasHidInfo", "HidSpecSummary", "IsG9N9N", "IsT1", "IsXiaomi",
+            "FormattedAddress", "ModelDisplayName", "IllustrationSource",
+            "VoiceModeHelp", "IsSmartToggleMode", "IsHoldToTalkMode"
+        })
+        {
+            Assert.DoesNotContain($"\"{forbidden}\"", json);
+        }
+
+        foreach (string expected in new[]
+        {
+            "\"Id\"", "\"BluetoothAddress\"", "\"Name\"", "\"ModelType\"", "\"Gain\"", "\"VoiceButtonMode\"", "\"Mappings\""
+        })
+        {
+            Assert.Contains(expected, json);
+        }
+    }
+
+    [Fact]
+    public async Task Save_WithConcurrentUpdates_DoesNotThrowCollectionModified()
+    {
+        string path = Path.Combine(_tempDir, "config.json");
+        var service = new ConfigService(path);
+
+        var writer = Task.Run(() =>
+        {
+            for (int i = 0; i < 60; i++)
+            {
+                int idx = i;
+                service.Update(cfg =>
+                {
+                    if (cfg.Devices.Count > 5) cfg.Devices.RemoveAt(0);
+                    cfg.Devices.Add(new RemoteDevice
+                    {
+                        Id = $"dev_{idx}",
+                        Name = $"Remote {idx}",
+                        BluetoothAddress = (ulong)(0x1000 + idx),
+                        ModelType = RemoteModelType.GoogleG9N9N,
+                        Mappings = RemoteDevice.CreateDefaultMappings(RemoteModelType.GoogleG9N9N)
+                    });
+                    cfg.SelectedDeviceId = $"dev_{idx}";
+                }, save: false);
+            }
+        });
+
+        var saver = Task.Run(() =>
+        {
+            for (int i = 0; i < 60; i++)
+            {
+                service.Save();
+            }
+        });
+
+        await Task.WhenAll(writer, saver);
+        service.Save();
+
+        var reloaded = new ConfigService(path);
+        Assert.NotNull(reloaded.Current);
+        Assert.NotEmpty(reloaded.Current.Devices);
+    }
 }
