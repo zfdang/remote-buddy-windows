@@ -166,6 +166,7 @@ public partial class RemoteDevice : ObservableObject
 
     public static List<ButtonMapping> CreateDefaultMappings(RemoteModelType type)
     {
+        bool isG9N9N = type == RemoteModelType.GoogleG9N9N;
         var list = new List<ButtonMapping>();
         void Add(RemoteButton btn, ButtonActionType click, MediaCommand media = MediaCommand.None, string? shortcut = null)
         {
@@ -175,7 +176,10 @@ public partial class RemoteDevice : ObservableObject
                 ClickAction = click,
                 ClickMedia = media,
                 ClickShortcut = shortcut,
-                LongPressAction = ButtonActionType.ContinuousRepeat
+                LongPressAction = !isG9N9N || btn is RemoteButton.Up or RemoteButton.Down or
+                    RemoteButton.Left or RemoteButton.Right or RemoteButton.VolumeUp or RemoteButton.VolumeDown or RemoteButton.Power
+                    ? ButtonActionType.ContinuousRepeat
+                    : ButtonActionType.None
             });
         }
 
@@ -199,7 +203,6 @@ public partial class RemoteDevice : ObservableObject
         Add(RemoteButton.Right, ButtonActionType.KeyboardShortcut, shortcut: "Right");
         Add(RemoteButton.Ok, ButtonActionType.KeyboardShortcut, shortcut: "Enter");
         Add(RemoteButton.Back, ButtonActionType.KeyboardShortcut, shortcut: "Escape");
-        bool isG9N9N = type == RemoteModelType.GoogleG9N9N;
         bool isGoogle = isG9N9N || type == RemoteModelType.GoogleGY3LE;
         bool isRc003 = type == RemoteModelType.XiaomiRC003;
         Add(RemoteButton.Home, ButtonActionType.KeyboardShortcut, shortcut: type == RemoteModelType.GoogleGY3LE ? "Alt+Tab" : "Win+Tab");

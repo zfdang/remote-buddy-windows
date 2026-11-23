@@ -33,6 +33,8 @@ ETW 解码接受属性 `0x0029` 上首字节为索引、其余七字节为零的
 | YouTube | Ctrl+R |
 | Netflix | Ctrl+W |
 
+默认长按仅为方向上、下、左、右、音量加、音量减和电源键启用连发。连发重复该键的单击动作，电源键因此重复发送 Backspace。其他键默认没有长按动作。
+
 新设备及「恢复默认」使用这套配置。已保存的映射可在「按键映射」中单独编辑。
 
 参见 [Windows 按键采集与隔离](windows-remote-input.md) 和 [G9N9N 历史排查](chromecast-g9n9n-button-handling.md)。实现见 [G9N9N 协议](../src/RemoteBuddy.Core/Protocols/G9N9NProtocol.cs) 和 [ETW 接收器](../src/RemoteBuddy.Platform.Windows/Input/ChromecastEtwReceiver.cs)。

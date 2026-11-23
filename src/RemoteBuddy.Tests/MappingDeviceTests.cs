@@ -54,6 +54,22 @@ public class MappingDeviceTests
     }
 
     [Fact]
+    public void G9N9NDefaultsRepeatOnlyDirectionVolumeAndPower()
+    {
+        RemoteButton[] expected = [
+            RemoteButton.Up, RemoteButton.Down, RemoteButton.Left, RemoteButton.Right,
+            RemoteButton.VolumeUp, RemoteButton.VolumeDown, RemoteButton.Power
+        ];
+        var mappings = RemoteDevice.CreateDefaultMappings(RemoteModelType.GoogleG9N9N);
+
+        Assert.Equal(expected.Order(), mappings
+            .Where(mapping => mapping.LongPressAction != ButtonActionType.None)
+            .Select(mapping => mapping.Button).Order());
+        Assert.All(mappings.Where(mapping => expected.Contains(mapping.Button)), mapping =>
+            Assert.Equal(ButtonActionType.ContinuousRepeat, mapping.LongPressAction));
+    }
+
+    [Fact]
     public void T1RemoteDefaults_CreateExpectedFrontButtons_WithoutInterceptingKeyboard()
     {
         var mappings = RemoteDevice.CreateDefaultMappings(RemoteModelType.T1Remote);
