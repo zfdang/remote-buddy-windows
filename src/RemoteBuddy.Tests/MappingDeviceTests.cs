@@ -54,10 +54,10 @@ public class MappingDeviceTests
     }
 
     [Fact]
-    public void G9N9NDefaultsRepeatOnlyDirectionVolumeAndPower()
+    public void G9N9NDefaultsRepeatOnlyNavigationVolumeAndPower()
     {
         RemoteButton[] expected = [
-            RemoteButton.Up, RemoteButton.Down, RemoteButton.Left, RemoteButton.Right,
+            RemoteButton.Up, RemoteButton.Down, RemoteButton.Left, RemoteButton.Right, RemoteButton.Ok,
             RemoteButton.VolumeUp, RemoteButton.VolumeDown, RemoteButton.Power
         ];
         var mappings = RemoteDevice.CreateDefaultMappings(RemoteModelType.GoogleG9N9N);

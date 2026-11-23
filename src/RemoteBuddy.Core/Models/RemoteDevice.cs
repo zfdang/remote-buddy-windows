@@ -177,7 +177,7 @@ public partial class RemoteDevice : ObservableObject
                 ClickMedia = media,
                 ClickShortcut = shortcut,
                 LongPressAction = !isG9N9N || btn is RemoteButton.Up or RemoteButton.Down or
-                    RemoteButton.Left or RemoteButton.Right or RemoteButton.VolumeUp or RemoteButton.VolumeDown or RemoteButton.Power
+                    RemoteButton.Left or RemoteButton.Right or RemoteButton.Ok or RemoteButton.VolumeUp or RemoteButton.VolumeDown or RemoteButton.Power
                     ? ButtonActionType.ContinuousRepeat
                     : ButtonActionType.None
             });
