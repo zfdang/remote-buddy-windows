@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 using System.Collections.ObjectModel;
-using System.Diagnostics;
 using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -123,12 +122,19 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(DriverStatusMessage))]
+    [NotifyPropertyChangedFor(nameof(CanInstallCable))]
+    [NotifyCanExecuteChangedFor(nameof(InstallCableCommand))]
     private DriverReadinessStatus _driverStatus = DriverReadinessStatus.NotInstalled;
+
+    [ObservableProperty]
+    private string _cableInstallMessage = string.Empty;
+
+    public bool CanInstallCable => DriverStatus == DriverReadinessStatus.NotInstalled;
 
     public string DriverStatusMessage => DriverStatus switch
     {
         DriverReadinessStatus.Ready => "✅ VB-CABLE 虚拟麦克风已就绪，音频服务工作正常。",
-        DriverReadinessStatus.NotInstalled => "❌ 未检测到 VB-CABLE。请点击下方按钮前往官网下载安装。",
+        DriverReadinessStatus.NotInstalled => "未检测到 VB-CABLE。可在这里下载并安装。",
         DriverReadinessStatus.Disabled => "⚠️ 检测到 CABLE Input 音频设备已被禁用，请在 Windows 声音设置中启用后再继续。",
         DriverReadinessStatus.RebootRequired => "⚠️ 检测到虚拟声卡安装未完全生效，请重启电脑完成系统音频服务初始化。",
         _ => "❌ 虚拟麦克风初始化失败，请在设备管理器中检查设备状态。"
@@ -534,18 +540,11 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(DriverStatusMessage));
     }
 
-    [RelayCommand]
-    public void OpenOfficialWebsite()
+    [RelayCommand(CanExecute = nameof(CanInstallCable))]
+    private async Task InstallCableAsync()
     {
-        try
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "https://vb-audio.com/Cable/",
-                UseShellExecute = true
-            });
-        }
-        catch { }
+        CableInstallMessage = await VbCableInstaller.InstallAsync(new Progress<string>(message => CableInstallMessage = message));
+        RefreshDriverStatus();
     }
 
     [RelayCommand]

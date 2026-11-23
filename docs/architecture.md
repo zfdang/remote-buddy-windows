@@ -35,7 +35,7 @@ Remote Buddy for Windows 是面向 Windows 10/11 的纯软件版硬件语音桥�
 | **蓝牙通信 (BLE)** | **WinRT API (`Windows.Devices.Bluetooth`)** | 微软官方公开第一方蓝牙栈，支持 GATT 服务发现、特征值写入与数据通知（Notification），与 Windows 蓝牙系统设置深度集成。 |
 | **音频推流** | **NAudio (基于 WASAPI Render)** | 成熟的低延迟音频写入库，以共享模式（Shared Event-Driven）将解码后的 PCM 音频推入虚拟声卡端点。 |
 | **音频解码** | **纯 C# 实现 IMA ADPCM 解码器** | 纯内存计算，结合 `Span<byte>` 与查表法，实现 `AUDIO_SYNC` 状态同步与动态会话恢复。 |
-| **虚拟麦克风** | **VB-CABLE (用户独立安装)** | 规避 Windows 内核驱动签名限制（DSE）。初期版本严格遵守开源许可约束，**不随安装包私自重新打包分发闭源二进制**，向导中引导用户从官方网站独立下载安装。 |
+| **虚拟麦克风** | **VB-CABLE** | 向导和「权限与驱动」使用同一个安装入口。应用优先从 Remote Buddy 网站下载固定版本，失败时回退到 VB-Audio，校验文件后启动官方安装程序。 |
 | **按键监控与注入** | **Raw Input、直接 HID、BthPort ETW、`SendInput`** | 采集来源可确认的普通键，通过 `SendInput` 执行映射和输入法快捷键，受 UIPI 权限边界约束。 |
 | **打包与安装** | **Inno Setup** | 制作独立的轻量安装包，负责快捷方式生成、开机启动项注册与卸载清理。 |
 

@@ -71,7 +71,7 @@ Windows 11 已验证一只 RC003 与一只 G9N9N 共存，两只普通键各用�
 | **UI 框架** | **WPF** (配合 [lepoco/wpfui](https://github.com/lepoco/wpfui) 现代化控件库)，采用自包含单文件发布 |
 | **蓝牙通信** | Windows 10/11 原生 WinRT BLE API (`Windows.Devices.Bluetooth`) |
 | **音频处理** | [NAudio](https://github.com/naudio/NAudio) (WASAPI Render 模式) + 纯 C# IMA ADPCM 解码器（含 `AUDIO_SYNC` 校准） |
-| **虚拟麦克风** | [VB-CABLE](https://vb-audio.com/Cable/) (引导用户从官网独立安装，已获微软 WHQL 认证) |
+| **虚拟麦克风** | [VB-CABLE](https://vb-audio.com/Cable/)（可在向导或「权限与驱动」下载并启动安装） |
 | **输入注入** | Win32 API (`SendInput` 40字节完整结构体 + `RegisterRawInputDevices`) |
 | **打包分发** | Inno Setup 轻量安装包 |
 
