@@ -834,4 +834,19 @@ public class AudioDecoderAndProtocolTests
         Assert.Equal(0, decoder.StepIndex);
         Assert.True(decoder.LowNibbleFirst);
     }
+
+    [Fact]
+    public void RawInputEvaluateDeviceMatch_Matches12CharZeroPaddedMacAndRejectsShortSubstring()
+    {
+        const ulong mac = 0x001122334455UL;
+        string paddedPath = @"\\?\HID#BTHLEDevice_{00001812-0000-1000-8000-00805f9b34fb}_Dev_VID&02005d_PID&0001#8&1234&0&001122334455#";
+        string shortPath = @"\\?\HID#BTHLEDevice_{00001812-0000-1000-8000-00805f9b34fb}_Dev_VID&02005d_PID&0001#8&1234&0&1122334455#";
+
+        Assert.False(RemoteBuddy.Platform.Windows.Input.RawInputReceiver.EvaluateDeviceMatch(
+            null, IntPtr.Zero, paddedPath, mac, requireExactIdentity: true));
+        Assert.True(RemoteBuddy.Platform.Windows.Input.RawInputReceiver.EvaluateDeviceMatch(
+            null, (IntPtr)1, paddedPath, mac, requireExactIdentity: true));
+        Assert.False(RemoteBuddy.Platform.Windows.Input.RawInputReceiver.EvaluateDeviceMatch(
+            null, (IntPtr)1, shortPath, mac, requireExactIdentity: true));
+    }
 }

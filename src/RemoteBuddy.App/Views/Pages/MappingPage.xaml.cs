@@ -100,12 +100,32 @@ public partial class MappingPage : UserControl
         if (modifiers.HasFlag(ModifierKeys.Alt)) parts.Add("Alt");
         if (modifiers.HasFlag(ModifierKeys.Shift)) parts.Add("Shift");
         if (modifiers.HasFlag(ModifierKeys.Windows)) parts.Add("Win");
-        parts.Add(key is >= Key.D0 and <= Key.D9 ? ((int)(key - Key.D0)).ToString() : key.ToString());
+        parts.Add(FormatRecordedKey(key));
 
         var shortcut = string.Join("+", parts);
         if (!NativeInputSender.TryParseShortcut(shortcut, out _, out _)) return;
         gesture.Shortcut = shortcut;
         recorder.IsChecked = false;
+    }
+
+    private static string FormatRecordedKey(Key key)
+    {
+        if (key is >= Key.D0 and <= Key.D9) return ((int)(key - Key.D0)).ToString();
+        return key switch
+        {
+            Key.OemComma => ",",
+            Key.OemPeriod => ".",
+            Key.OemQuestion => "/",
+            Key.OemOpenBrackets => "[",
+            Key.OemCloseBrackets => "]",
+            Key.OemSemicolon => ";",
+            Key.OemQuotes => "'",
+            Key.OemMinus => "-",
+            Key.OemPlus => "=",
+            Key.OemPipe => "\\",
+            Key.OemTilde => "`",
+            _ => key.ToString()
+        };
     }
 
     private void StopRecordingShortcut(object sender, KeyboardFocusChangedEventArgs e)

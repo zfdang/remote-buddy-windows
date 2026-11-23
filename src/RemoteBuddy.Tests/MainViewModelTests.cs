@@ -812,4 +812,143 @@ public class MainViewModelTests
             if (File.Exists(path)) File.Delete(path);
         }
     }
+
+    [Fact]
+    public void HandleDeviceButton_DualStreamShortClickInterleave_ExecutesOnlyOnce()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"dedup-interleave-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new TestBluetoothManager { IsConnected = true, IsReady = true };
+            const ulong addr = 0x4754514C6FCC;
+            bt.ReadyAddresses.Add(addr);
+            var executed = new List<string?>();
+            var device = new RemoteDevice
+            {
+                Id = "g9",
+                BluetoothAddress = addr,
+                Name = "Chromecast Remote",
+                ModelType = RemoteModelType.GoogleG9N9N,
+                Mappings =
+                [
+                    new ButtonMapping
+                    {
+                        Button = RemoteButton.Home,
+                        ClickAction = ButtonActionType.TextSnippet,
+                        ClickText = "home"
+                    }
+                ]
+            };
+            config.Current.Devices.Add(device);
+            config.Current.SelectedDeviceId = device.Id;
+
+            using var vm = new MainViewModel(config, bt, a => executed.Add(a.Text));
+            vm.HandleDeviceButton(addr, RemoteButton.Home, true, MainViewModel.InputSource.RawInput);
+            vm.HandleDeviceButton(addr, RemoteButton.Home, false, MainViewModel.InputSource.RawInput);
+            vm.HandleDeviceButton(addr, RemoteButton.Home, true, MainViewModel.InputSource.Etw);
+            vm.HandleDeviceButton(addr, RemoteButton.Home, false, MainViewModel.InputSource.Etw);
+
+            Assert.Equal(["home"], executed);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void HandleDeviceButton_CrossButtonInterleave_DedupsBothButtonsWithoutClobbering()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"dedup-crossbtn-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new TestBluetoothManager { IsConnected = true, IsReady = true };
+            const ulong addr = 0x4754514C6FCC;
+            bt.ReadyAddresses.Add(addr);
+            var executed = new List<string?>();
+            var device = new RemoteDevice
+            {
+                Id = "g9",
+                BluetoothAddress = addr,
+                Name = "Chromecast Remote",
+                ModelType = RemoteModelType.GoogleG9N9N,
+                Mappings =
+                [
+                    new ButtonMapping
+                    {
+                        Button = RemoteButton.Home,
+                        ClickAction = ButtonActionType.TextSnippet,
+                        ClickText = "home"
+                    },
+                    new ButtonMapping
+                    {
+                        Button = RemoteButton.Back,
+                        ClickAction = ButtonActionType.TextSnippet,
+                        ClickText = "back"
+                    }
+                ]
+            };
+            config.Current.Devices.Add(device);
+            config.Current.SelectedDeviceId = device.Id;
+
+            using var vm = new MainViewModel(config, bt, a => executed.Add(a.Text));
+            vm.HandleDeviceButton(addr, RemoteButton.Home, true, MainViewModel.InputSource.RawInput);
+            vm.HandleDeviceButton(addr, RemoteButton.Back, true, MainViewModel.InputSource.RawInput);
+            vm.HandleDeviceButton(addr, RemoteButton.Home, true, MainViewModel.InputSource.Etw);
+
+            Assert.Equal(["home", "back"], executed);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void HandleDeviceButton_FastSameSourceDoubleClick_Preserved()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"dedup-dbl-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new TestBluetoothManager { IsConnected = true, IsReady = true };
+            const ulong addr = 0x4754514C6FCC;
+            bt.ReadyAddresses.Add(addr);
+            var executed = new List<string?>();
+            var device = new RemoteDevice
+            {
+                Id = "g9",
+                BluetoothAddress = addr,
+                Name = "Chromecast Remote",
+                ModelType = RemoteModelType.GoogleG9N9N,
+                Mappings =
+                [
+                    new ButtonMapping
+                    {
+                        Button = RemoteButton.Home,
+                        ClickAction = ButtonActionType.TextSnippet,
+                        ClickText = "home-single",
+                        DoubleClickAction = ButtonActionType.TextSnippet,
+                        DoubleClickText = "home-double"
+                    }
+                ]
+            };
+            config.Current.Devices.Add(device);
+            config.Current.SelectedDeviceId = device.Id;
+
+            using var vm = new MainViewModel(config, bt, a => executed.Add(a.Text));
+            vm.HandleDeviceButton(addr, RemoteButton.Home, true, MainViewModel.InputSource.Direct);
+            vm.HandleDeviceButton(addr, RemoteButton.Home, false, MainViewModel.InputSource.Direct);
+            vm.HandleDeviceButton(addr, RemoteButton.Home, true, MainViewModel.InputSource.Direct);
+            vm.HandleDeviceButton(addr, RemoteButton.Home, false, MainViewModel.InputSource.Direct);
+
+            Assert.Equal(["home-double"], executed);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
 }

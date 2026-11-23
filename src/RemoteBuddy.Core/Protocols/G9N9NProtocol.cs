@@ -157,7 +157,7 @@ public static class G9N9NProtocol
         }
 
         // With Report ID 1 (Report 1 is 1 byte ID + 1 or 2 bytes data)
-        if (data.Length >= 2 && data[0] == 1)
+        if (data.Length is 2 or 3 && data[0] == 1)
         {
             return TryParseReport1(data, out buttons);
         }
@@ -220,6 +220,23 @@ public static class G9N9NProtocol
 
 public static class XiaomiProtocol
 {
+    public static readonly Dictionary<ushort, RemoteButton> KeyboardUsages = new()
+    {
+        // Standard HID Keyboard usages (1-byte codes in boot keyboard reports)
+        [0x0052] = RemoteButton.Up,
+        [0x0051] = RemoteButton.Down,
+        [0x0050] = RemoteButton.Left,
+        [0x004F] = RemoteButton.Right,
+        [0x0028] = RemoteButton.Ok,
+        [0x00F1] = RemoteButton.Back,
+        [0x004A] = RemoteButton.Home,
+        [0x0065] = RemoteButton.Menu,
+        [0x0080] = RemoteButton.VolumeUp,
+        [0x0081] = RemoteButton.VolumeDown,
+        [0x0035] = RemoteButton.LiveTv,
+        [0x0066] = RemoteButton.Power
+    };
+
     public static readonly Dictionary<ushort, RemoteButton> Usages = new()
     {
         // Standard HID Keyboard usages
@@ -300,11 +317,13 @@ public static class XiaomiProtocol
         if (data.Length >= 3 && data[0] is 0x03 or 0x0A) return false;
 
         ReadOnlySpan<byte> slice = data;
+        bool hasKeyboardReportId = false;
         // If odd length, first byte is report ID (1 for keyboard, 2 for consumer)
         if (slice.Length > 1 && slice.Length % 2 != 0)
         {
             byte reportId = slice[0];
             if (reportId is not (0x01 or 0x02)) return false;
+            hasKeyboardReportId = reportId == 0x01;
             slice = slice[1..];
         }
 
@@ -319,6 +338,20 @@ public static class XiaomiProtocol
         if (allZero)
         {
             return true;
+        }
+
+        // Standard 8-byte HID boot keyboard report ([Modifier, Reserved, Key1..Key6]): parse 1-byte usages individually
+        if (slice.Length == 8 && (data.Length == 8 || hasKeyboardReportId))
+        {
+            for (int i = 2; i < slice.Length; i++)
+            {
+                ushort usage = slice[i];
+                if (usage != 0 && KeyboardUsages.TryGetValue(usage, out var btn))
+                {
+                    buttons.Add(btn);
+                }
+            }
+            return buttons.Count > 0;
         }
 
         for (int i = 0; i < slice.Length; i += 2)

@@ -55,6 +55,7 @@ public partial class MainWindow : Window
     private const int WM_TRAYICON = WM_USER + 101;
     private const int WM_INPUT = 0x00FF;
     private const int WM_INPUT_DEVICE_CHANGE = 0x00FE;
+    private const int GIDC_ARRIVAL = 1;
     private const int GIDC_REMOVAL = 2;
     private const int WM_LBUTTONUP = 0x0202;
     private const int WM_LBUTTONDBLCLK = 0x0203;
@@ -166,7 +167,12 @@ public partial class MainWindow : Window
         }
         else if (msg == WM_INPUT_DEVICE_CHANGE && DataContext is MainViewModel vmDevice)
         {
-            if (wParam.ToInt32() == GIDC_REMOVAL)
+            int change = wParam.ToInt32();
+            if (change == GIDC_ARRIVAL)
+            {
+                vmDevice.HandleDeviceArrival(lParam);
+            }
+            else if (change == GIDC_REMOVAL)
             {
                 vmDevice.HandleDeviceRemoval(lParam);
             }

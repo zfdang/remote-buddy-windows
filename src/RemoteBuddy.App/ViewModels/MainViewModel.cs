@@ -30,10 +30,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private long _liveVoiceToken;
     private ulong _voiceKeyGuardOwnerAddress;
 
+    internal enum InputSource { Direct, RawInput, HidReader, Etw }
+
     private readonly Dictionary<ulong, RemoteButtonGestures> _gestures = new();
-    private readonly Dictionary<ulong, (RemoteButton Button, bool Down, long Time)> _dedup = new();
+    private readonly Dictionary<ulong, Dictionary<(RemoteButton Button, bool Down), (long Time, InputSource Source)>> _dedup = new();
+    private readonly Dictionary<(ulong Address, RemoteButton Button), bool> _buttonLogicalDown = new();
     private readonly HashSet<ulong> _readyAddresses = new();
     private readonly Dictionary<IntPtr, ulong> _rawAddresses = new();
+    private readonly HashSet<IntPtr> _nonTargetRawHandles = new();
     private readonly Action<ButtonAssignment> _executeMapping;
     private EtwButtonSource[] _etwSources = [];
     private CancellationTokenSource? _etwStartCts;
@@ -47,12 +51,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
         foreach (var gestures in _gestures.Values) gestures.Reset();
         _gestures.Clear();
         _dedup.Clear();
+        _buttonLogicalDown.Clear();
     }
 
     private void ResetDeviceGestures(ulong address)
     {
         if (_gestures.Remove(address, out var gestures)) gestures.Reset();
         _dedup.Remove(address);
+        foreach (var key in _buttonLogicalDown.Keys.Where(k => k.Address == address).ToArray())
+            _buttonLogicalDown.Remove(key);
     }
 
     [ObservableProperty]
@@ -123,6 +130,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         UpdateVoiceKeyGuard();
 
         _rawInputReceiver.DeviceFilter = IsTargetDevice;
+        _rawInputReceiver.DeviceModelResolver = ResolveRawModelType;
 
         _bluetoothManager.ConnectionStatusChanged += OnConnectionStatusChanged;
         _bluetoothManager.AudioLevelChanged += OnAudioLevelChanged;
@@ -151,6 +159,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     internal void RefreshInputSources(bool forceRetry)
     {
         if (forceRetry) _etwElevationDeclined = false;
+        _nonTargetRawHandles.Clear();
 
         var devices = KnownRemotes().DistinctBy(device => device.BluetoothAddress).ToArray();
         var ready = devices.Where(device => _bluetoothManager.IsDeviceReady(device.BluetoothAddress)).ToArray();
@@ -225,13 +234,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
             device.HidUsage = info.Usage;
             device.HidReportLength = info.InputReportByteLength;
             var reader = new HidDeviceReader();
-            if (reader.Start(info.Path, info.InputReportByteLength))
+            if (reader.Start(info.Path, info.InputReportByteLength, device.ModelType))
             {
                 _hidReaders[address] = reader;
                 reader.ButtonEvent += (button, down) => RunOnUi(() =>
                 {
                     if (_hidReaders.GetValueOrDefault(address) == reader)
-                        HandleDeviceButton(address, button, down);
+                        HandleDeviceButton(address, button, down, InputSource.HidReader);
                 });
             }
             else
@@ -374,7 +383,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         RunOnUi(() =>
         {
             if (generation == Volatile.Read(ref _buttonSourceGeneration))
-                HandleDeviceButton(address, button, isDown);
+                HandleDeviceButton(address, button, isDown, InputSource.Etw);
         });
     }
 
@@ -669,12 +678,25 @@ public partial class MainViewModel : ObservableObject, IDisposable
             RawInputReceiver.EvaluateDeviceMatch(_bluetoothManager.GetDeviceContainerId(device.BluetoothAddress) ?? device.ContainerId,
                 handle, path, device.BluetoothAddress, requireExactIdentity: true));
 
+    private RemoteModelType ResolveRawModelType(IntPtr handle, string path)
+    {
+        if (_rawAddresses.TryGetValue(handle, out ulong address) &&
+            KnownRemotes().FirstOrDefault(device => device.BluetoothAddress == address) is { } known)
+            return known.ModelType;
+        return ResolveRawSource(handle, path)?.ModelType ?? RemoteModelType.Unknown;
+    }
+
     private bool IsTargetDevice(IntPtr handle, string path)
     {
         if (_rawAddresses.TryGetValue(handle, out ulong address) &&
             _bluetoothManager.IsDeviceReady(address)) return true;
+        if (_nonTargetRawHandles.Contains(handle)) return false;
         var device = ResolveRawSource(handle, path);
-        if (device == null) return false;
+        if (device == null)
+        {
+            _nonTargetRawHandles.Add(handle);
+            return false;
+        }
         _rawAddresses[handle] = device.BluetoothAddress;
         return true;
     }
@@ -694,14 +716,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         ulong address = handle == IntPtr.Zero ? _bluetoothManager.ConnectedDeviceAddress :
             _rawAddresses.GetValueOrDefault(handle);
-        HandleDeviceButton(address, button, isDown);
+        HandleDeviceButton(address, button, isDown, InputSource.RawInput);
     }
 
-    internal void HandleDeviceButton(ulong address, RemoteButton button, bool isDown)
+    internal void HandleDeviceButton(ulong address, RemoteButton button, bool isDown, InputSource source = InputSource.Direct)
     {
         if (!_bluetoothManager.IsDeviceReady(address)) return;
-        var source = KnownRemotes().FirstOrDefault(device => device.BluetoothAddress == address);
-        if (source == null) return;
+        var sourceDevice = KnownRemotes().FirstOrDefault(device => device.BluetoothAddress == address);
+        if (sourceDevice == null) return;
         if (ActiveOnboardingVm is { } onboarding)
         {
             if (onboarding.SelectedDevice?.BluetoothAddress != address) return;
@@ -711,10 +733,27 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
 
         long now = Environment.TickCount64;
-        if (_dedup.TryGetValue(address, out var last) && last.Button == button &&
-            last.Down == isDown && now - last.Time < 60) return;
-        _dedup[address] = (button, isDown, now);
-        if (ActiveOnboardingVm == null && isDown) ShowMappingPress(button, source);
+        if (!_dedup.TryGetValue(address, out var deviceDedup))
+        {
+            deviceDedup = new Dictionary<(RemoteButton, bool), (long, InputSource)>();
+            _dedup[address] = deviceDedup;
+        }
+        bool wasDown = _buttonLogicalDown.GetValueOrDefault((address, button), false);
+        if (deviceDedup.TryGetValue((button, isDown), out var last))
+        {
+            long elapsed = now - last.Time;
+            if (last.Source != source && elapsed < 150)
+            {
+                return;
+            }
+            if (last.Source == source && wasDown == isDown && elapsed < 60)
+            {
+                return;
+            }
+        }
+        deviceDedup[(button, isDown)] = (now, source);
+        _buttonLogicalDown[(address, button)] = isDown;
+        if (ActiveOnboardingVm == null && isDown) ShowMappingPress(button, sourceDevice);
 
         if (button == RemoteButton.Voice)
         {
@@ -747,7 +786,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _gestures[address] = gestures;
         }
         if (!isDown) gestures.HandleUp(button);
-        else if (source.Mappings?.FirstOrDefault(mapping => mapping.Button == button) is { } mapping)
+        else if (sourceDevice.Mappings?.FirstOrDefault(mapping => mapping.Button == button) is { } mapping)
             gestures.HandleDown(mapping);
     }
 
@@ -819,10 +858,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
         NativeInputSender.ReleaseAllHeldSyntheticKeys();
     }
 
+    public void HandleDeviceArrival(IntPtr hDevice)
+    {
+        AppLogger.Info($"Device arrival notification received for hDevice=0x{hDevice:X}", "MainViewModel");
+        _nonTargetRawHandles.Remove(hDevice);
+        _rawAddresses.Remove(hDevice);
+        _rawInputReceiver.InvalidateDeviceCache(hDevice);
+    }
+
     public void HandleDeviceRemoval(IntPtr hDevice)
     {
         AppLogger.Info($"Device removal notification received for hDevice=0x{hDevice:X}", "MainViewModel");
-        _rawInputReceiver.ResetDeviceState(hDevice);
+        _nonTargetRawHandles.Remove(hDevice);
+        _rawInputReceiver.InvalidateDeviceCache(hDevice);
         if (_rawAddresses.Remove(hDevice, out ulong address)) ResetDeviceGestures(address);
     }
 

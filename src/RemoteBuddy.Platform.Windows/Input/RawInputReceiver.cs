@@ -123,6 +123,7 @@ public sealed class RawInputReceiver : IDisposable
     public event Action<IntPtr>? PhysicalVoiceKeyPressed;
 
     public Func<IntPtr, string, bool>? DeviceFilter { get; set; }
+    public Func<IntPtr, string, RemoteModelType>? DeviceModelResolver { get; set; }
 
     private IntPtr _hwnd;
     private bool _isRegistered;
@@ -135,16 +136,13 @@ public sealed class RawInputReceiver : IDisposable
     {
         if (string.IsNullOrEmpty(devicePath)) return null;
 
-        if (_containerIdCache.TryGetValue(devicePath, out var cached) && cached.HasValue)
+        if (_containerIdCache.TryGetValue(devicePath, out var cached))
         {
             return cached;
         }
 
         var resolved = ResolveDeviceContainerIdInternal(devicePath);
-        if (resolved.HasValue)
-        {
-            _containerIdCache[devicePath] = resolved;
-        }
+        _containerIdCache[devicePath] = resolved;
 
         return resolved;
     }
@@ -210,7 +208,10 @@ public sealed class RawInputReceiver : IDisposable
                     }
                     _deviceReportButtons.Remove(hDevice.Value);
                 }
-                _devicePathCache.Remove(hDevice.Value);
+                if (_devicePathCache.Remove(hDevice.Value, out var oldPath) && !string.IsNullOrEmpty(oldPath))
+                {
+                    _containerIdCache.TryRemove(oldPath, out _);
+                }
                 _devicesHoldingF5.Remove(hDevice.Value);
             }
             else
@@ -222,6 +223,10 @@ public sealed class RawInputReceiver : IDisposable
                         foreach (var btn in btns) releasesToDispatch.Add((dev, btn));
                     }
                 }
+                foreach (var oldPath in _devicePathCache.Values)
+                {
+                    if (!string.IsNullOrEmpty(oldPath)) _containerIdCache.TryRemove(oldPath, out _);
+                }
                 _deviceReportButtons.Clear();
                 _devicePathCache.Clear();
                 _devicesHoldingF5.Clear();
@@ -232,6 +237,47 @@ public sealed class RawInputReceiver : IDisposable
         {
             ButtonEvent?.Invoke(dev, btn, false);
         }
+    }
+
+    public void InvalidateDeviceCache(IntPtr hDevice)
+    {
+        string? cachedPath = null;
+        lock (_lock)
+        {
+            _devicePathCache.Remove(hDevice, out cachedPath);
+        }
+        if (!string.IsNullOrEmpty(cachedPath))
+        {
+            _containerIdCache.TryRemove(cachedPath, out _);
+        }
+        else if (hDevice != IntPtr.Zero)
+        {
+            string? path = GetDevicePath(hDevice);
+            if (!string.IsNullOrEmpty(path)) _containerIdCache.TryRemove(path, out _);
+        }
+    }
+
+    internal static RemoteModelType InferModelTypeFromDevice(IntPtr hDevice, string devicePath)
+    {
+        if (GetHidDeviceInfo(hDevice, out uint vid, out _))
+        {
+            if (vid == G9N9NProtocol.VendorId) return RemoteModelType.GoogleG9N9N;
+            if (vid == T1RemoteProtocol.VendorId) return RemoteModelType.T1Remote;
+            if (vid == 0x2717) return RemoteModelType.XiaomiRC003;
+        }
+
+        if (!string.IsNullOrEmpty(devicePath))
+        {
+            string upper = devicePath.ToUpperInvariant();
+            if (upper.Contains("VID_18D1") || upper.Contains("VID&000218D1") || upper.Contains("VID&0118D1") || upper.Contains("PID_9450") || upper.Contains("PID&9450"))
+                return RemoteModelType.GoogleG9N9N;
+            if (upper.Contains("VID_620A") || upper.Contains("VID&0002620A") || upper.Contains("VID&01620A") || upper.Contains("T1-REMOTE"))
+                return RemoteModelType.T1Remote;
+            if (upper.Contains("VID_2717") || upper.Contains("VID&00022717") || upper.Contains("VID&012717") || upper.Contains("PID_32B8") || upper.Contains("PID&32B8"))
+                return RemoteModelType.XiaomiRC003;
+        }
+
+        return RemoteModelType.Unknown;
     }
 
     public static bool GetHidDeviceInfo(IntPtr hDevice, out uint vendorId, out uint productId)
@@ -317,11 +363,11 @@ public sealed class RawInputReceiver : IDisposable
         // shortcut output back into the mapping pipeline indefinitely.
         if (hDevice == IntPtr.Zero) return false;
 
-        // 1. Direct match by Bluetooth MAC address in device path
+        // 1. Direct match by zero-padded 12-char Bluetooth MAC address in device path
         if (targetBluetoothAddress != 0)
         {
-            string macHex = targetBluetoothAddress.ToString("X").ToUpperInvariant();
-            if (macHex.Length >= 6 && devicePath.ToUpperInvariant().Contains(macHex))
+            string macHex = targetBluetoothAddress.ToString("X12");
+            if (devicePath.Contains(macHex, StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }
@@ -542,6 +588,13 @@ public sealed class RawInputReceiver : IDisposable
 
             int reportSize = (int)dwSizeHid;
             var hidEvents = new List<(RemoteButton Button, bool IsDown)>();
+            bool notifyVoiceHold = false;
+
+            var modelType = DeviceModelResolver?.Invoke(hDevice, devicePath) ?? RemoteModelType.Unknown;
+            if (modelType == RemoteModelType.Unknown)
+            {
+                modelType = InferModelTypeFromDevice(hDevice, devicePath);
+            }
 
             lock (_lock)
             {
@@ -574,6 +627,7 @@ public sealed class RawInputReceiver : IDisposable
                                 {
                                     for (int u = 0; u < usageLength; u++)
                                     {
+                                        if (modelType == RemoteModelType.T1Remote && usages[u] == 0x0221) continue;
                                         if (G9N9NProtocol.ConsumerButtons.TryGetValue(usages[u], out var btn))
                                         {
                                             currentButtons.Add(btn);
@@ -589,24 +643,46 @@ public sealed class RawInputReceiver : IDisposable
                         }
                     }
 
-                    // 2. Fallback to protocol report parsers
+                    // 2. Fallback to model-appropriate protocol report parser
                     if (!recognized || currentButtons.Count == 0)
                     {
-                        if (G9N9NProtocol.TryParseReport(slice, out currentButtons))
+                        if (modelType is RemoteModelType.GoogleG9N9N or RemoteModelType.GoogleGY3LE)
                         {
-                            recognized = true;
-                        }
-                        else if (T1RemoteProtocol.TryParseReport(slice, out currentButtons, out bool voiceHoldPressed))
-                        {
-                            recognized = true;
-                            if (voiceHoldPressed)
+                            if (G9N9NProtocol.TryParseReport(slice, out currentButtons))
                             {
-                                PhysicalVoiceKeyPressed?.Invoke(hDevice);
+                                recognized = true;
                             }
                         }
-                        else if (XiaomiProtocol.TryParseReport(slice, out currentButtons))
+                        else if (modelType == RemoteModelType.T1Remote)
                         {
-                            recognized = true;
+                            if (T1RemoteProtocol.TryParseReport(slice, out currentButtons, out bool voiceHoldPressed))
+                            {
+                                recognized = true;
+                                if (voiceHoldPressed) notifyVoiceHold = true;
+                            }
+                        }
+                        else if (modelType is RemoteModelType.XiaomiRC003 or RemoteModelType.XiaomiRC001 or RemoteModelType.XiaomiARN9)
+                        {
+                            if (XiaomiProtocol.TryParseReport(slice, out currentButtons))
+                            {
+                                recognized = true;
+                            }
+                        }
+                        else
+                        {
+                            if (G9N9NProtocol.TryParseReport(slice, out currentButtons))
+                            {
+                                recognized = true;
+                            }
+                            else if (T1RemoteProtocol.TryParseReport(slice, out currentButtons, out bool voiceHoldPressed))
+                            {
+                                recognized = true;
+                                if (voiceHoldPressed) notifyVoiceHold = true;
+                            }
+                            else if (XiaomiProtocol.TryParseReport(slice, out currentButtons))
+                            {
+                                recognized = true;
+                            }
                         }
                     }
 
@@ -632,7 +708,7 @@ public sealed class RawInputReceiver : IDisposable
                         continue;
                     }
 
-                    if (currentButtons.Count > 1)
+                    if (currentButtons.Count > 1 && modelType is RemoteModelType.GoogleG9N9N or RemoteModelType.GoogleGY3LE or RemoteModelType.Unknown)
                     {
                         // G9N9N multi-key chords drop release frames; dispatch as momentary taps
                         foreach (var btn in currentButtons)
@@ -676,6 +752,11 @@ public sealed class RawInputReceiver : IDisposable
                         }
                     }
                 }
+            }
+
+            if (notifyVoiceHold)
+            {
+                PhysicalVoiceKeyPressed?.Invoke(hDevice);
             }
 
             foreach (var (btn, isDown) in hidEvents)
