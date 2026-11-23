@@ -143,7 +143,7 @@
                             <TextBlock Text="✓ 正在生效" Foreground="#00CC66" FontSize="12" VerticalAlignment="Center" Margin="10,0,0,0"
                                        Visibility="{Binding SelectedTool, Converter={StaticResource EqualValueToVisibilityConverter}, ConverterParameter=DoubaoInput}"/>
                         </StackPanel>
-                        <TextBlock Text="支持豆包悬浮麦克风实时 AI 语音识别与文本润色。按住说话，松开即刻完成识别。（默认快捷键 F1）"
+                        <TextBlock Text="支持豆包悬浮麦克风实时 AI 语音识别与文本润色。按住说话，松开即刻完成识别。（默认快捷键 RAlt / 右 Alt）"
                                    FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,14"/>
                     </DockPanel>
                 </Border>

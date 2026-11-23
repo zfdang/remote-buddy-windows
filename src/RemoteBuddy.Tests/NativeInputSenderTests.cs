@@ -19,6 +19,8 @@ public class NativeInputSenderTests
     [Theory]
     [InlineData("Ctrl+Alt+V", new ushort[] { 0xA2, 0xA4 }, (ushort)'V')]
     [InlineData("RCtrl+RAlt+V", new ushort[] { 0xA3, 0xA5 }, (ushort)'V')]
+    [InlineData("RAlt", new ushort[] { 0xA5 }, (ushort)0)]
+    [InlineData("RightAlt", new ushort[] { 0xA5 }, (ushort)0)]
     [InlineData("LShift+RShift", new ushort[] { 0xA0, 0xA1 }, (ushort)0)]
     [InlineData("Win+F5", new ushort[] { 0x5B }, (ushort)0x74)]
     [InlineData("Win+Tab", new ushort[] { 0x5B }, (ushort)0x09)]
@@ -44,7 +46,7 @@ public class NativeInputSenderTests
     [InlineData("InvalidModifier+A")]
     [InlineData("Ctrl+A+B")]
     [InlineData("F0")]
-    [InlineData("F13")]
+    [InlineData("F25")]
     public void TryParseShortcut_RejectsInvalidShortcuts(string shortcut)
     {
         bool success = NativeInputSender.TryParseShortcut(shortcut, out _, out _);
@@ -54,6 +56,8 @@ public class NativeInputSenderTests
     [Theory]
     [InlineData("F1", true)]
     [InlineData("F12", true)]
+    [InlineData("F13", true)]
+    [InlineData("F24", true)]
     [InlineData("Alt+9", true)]
     [InlineData("Home", true)]
     [InlineData("End", true)]
@@ -70,11 +74,22 @@ public class NativeInputSenderTests
     [InlineData(0x28, true)]  // VK_DOWN
     [InlineData(0x5B, true)]  // VK_LWIN
     [InlineData(0xA3, true)]  // VK_RCONTROL
+    [InlineData(0xA5, true)]  // VK_RMENU (Right Alt)
     [InlineData(0xA2, false)] // VK_LCONTROL
     [InlineData(0x41, false)] // 'A'
     public void IsExtendedKey_ClassifiesExtendedKeysCorrectly(ushort vk, bool expected)
     {
         Assert.Equal(expected, NativeInputSender.IsExtendedKey(vk));
+    }
+
+    [Fact]
+    public void CreateShortcutReleaseInputs_RAlt_ReleasesRightMenuAsExtendedKey()
+    {
+        var inputs = NativeInputSender.CreateShortcutReleaseInputs("RAlt");
+        var release = Assert.Single(inputs);
+        Assert.Equal(NativeInputSender.VK_RMENU, release.u.ki.wVk);
+        Assert.NotEqual(0u, release.u.ki.dwFlags & NativeInputSender.KEYEVENTF_KEYUP);
+        Assert.NotEqual(0u, release.u.ki.dwFlags & NativeInputSender.KEYEVENTF_EXTENDEDKEY);
     }
 
     [Fact]

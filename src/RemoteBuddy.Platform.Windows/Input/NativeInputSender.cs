@@ -210,14 +210,14 @@ public static class NativeInputSender
         foreach (var p in parts)
         {
             string upper = p.ToUpperInvariant();
-            if (upper is "CTRL" or "CONTROL" or "LCTRL") modifiers.Add(VK_LCONTROL);
-            else if (upper == "RCTRL") modifiers.Add(VK_RCONTROL);
-            else if (upper is "SHIFT" or "LSHIFT") modifiers.Add(VK_LSHIFT);
-            else if (upper == "RSHIFT") modifiers.Add(0xA1 /* VK_RSHIFT */);
-            else if (upper is "ALT" or "LALT") modifiers.Add(VK_LMENU);
-            else if (upper == "RALT") modifiers.Add(VK_RMENU);
-            else if (upper is "WIN" or "WINDOWS" or "LWIN") modifiers.Add(VK_LWIN);
-            else if (upper == "RWIN") modifiers.Add(VK_RWIN);
+            if (upper is "CTRL" or "CONTROL" or "LCTRL" or "LEFTCTRL" or "LEFTCONTROL") modifiers.Add(VK_LCONTROL);
+            else if (upper is "RCTRL" or "RIGHTCTRL" or "RIGHTCONTROL") modifiers.Add(VK_RCONTROL);
+            else if (upper is "SHIFT" or "LSHIFT" or "LEFTSHIFT") modifiers.Add(VK_LSHIFT);
+            else if (upper is "RSHIFT" or "RIGHTSHIFT") modifiers.Add(0xA1 /* VK_RSHIFT */);
+            else if (upper is "ALT" or "LALT" or "LEFTALT") modifiers.Add(VK_LMENU);
+            else if (upper is "RALT" or "RIGHTALT") modifiers.Add(VK_RMENU);
+            else if (upper is "WIN" or "WINDOWS" or "LWIN" or "LEFTWIN") modifiers.Add(VK_LWIN);
+            else if (upper is "RWIN" or "RIGHTWIN") modifiers.Add(VK_RWIN);
             else
             {
                 ushort parsedKey = 0;
@@ -248,7 +248,7 @@ public static class NativeInputSender
                 else if (upper is "=" or "OEMPLUS" or "EQUALS" or "PLUS") parsedKey = 0xBB;
                 else if (upper is "\\" or "OEMPIPE" or "OEM5" or "PIPE" or "BACKSLASH") parsedKey = 0xDC;
                 else if (upper is "`" or "OEMTILDE" or "OEM3" or "TILDE" or "GRAVE") parsedKey = 0xC0;
-                else if (upper.StartsWith("F") && int.TryParse(upper[1..], out int fNum) && fNum >= 1 && fNum <= 12)
+                else if (upper.StartsWith("F") && int.TryParse(upper[1..], out int fNum) && fNum >= 1 && fNum <= 24)
                 {
                     parsedKey = (ushort)(VK_F1 + (fNum - 1));
                 }

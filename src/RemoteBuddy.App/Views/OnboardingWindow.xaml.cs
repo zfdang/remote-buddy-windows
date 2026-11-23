@@ -3,6 +3,7 @@
 
 using System.ComponentModel;
 using System.Windows;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using RemoteBuddy.App.ViewModels;
@@ -13,6 +14,7 @@ namespace RemoteBuddy.App.Views;
 public partial class OnboardingWindow : Window
 {
     private HwndSource? _hwndSource;
+    private readonly VoiceShortcutRecorder _voiceShortcutRecorder = new();
 
     public OnboardingWindow()
     {
@@ -124,6 +126,59 @@ public partial class OnboardingWindow : Window
             }
         }
         base.OnPreviewKeyDown(e);
+    }
+
+    private void OnVoiceShortcutRecordChecked(object sender, RoutedEventArgs e)
+    {
+        _voiceShortcutRecorder.Reset();
+        if (sender is ToggleButton recorder)
+        {
+            recorder.Focus();
+        }
+    }
+
+    private void OnVoiceShortcutRecordKeyDown(object sender, KeyEventArgs e)
+    {
+        if (sender is not ToggleButton { IsChecked: true } recorder || DataContext is not OnboardingViewModel vm)
+            return;
+
+        e.Handled = true;
+        if (_voiceShortcutRecorder.OnKeyDown(e.Key, e.SystemKey, Keyboard.Modifiers, out var captured, out bool cancelled))
+        {
+            if (cancelled)
+            {
+                recorder.IsChecked = false;
+            }
+            else if (!string.IsNullOrEmpty(captured))
+            {
+                vm.ShortcutText = captured;
+                vm.ValidationError = string.Empty;
+                recorder.IsChecked = false;
+            }
+        }
+    }
+
+    private void OnVoiceShortcutRecordKeyUp(object sender, KeyEventArgs e)
+    {
+        if (sender is not ToggleButton { IsChecked: true } recorder || DataContext is not OnboardingViewModel vm)
+            return;
+
+        e.Handled = true;
+        if (_voiceShortcutRecorder.OnKeyUp(e.Key, e.SystemKey, out var captured) && !string.IsNullOrEmpty(captured))
+        {
+            vm.ShortcutText = captured;
+            vm.ValidationError = string.Empty;
+            recorder.IsChecked = false;
+        }
+    }
+
+    private void OnVoiceShortcutRecordLostFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        _voiceShortcutRecorder.Reset();
+        if (sender is ToggleButton recorder)
+        {
+            recorder.IsChecked = false;
+        }
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e)
