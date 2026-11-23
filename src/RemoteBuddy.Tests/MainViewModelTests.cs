@@ -19,6 +19,8 @@ public class MainViewModelTests
         public bool IsReady { get; set; } = false;
         public bool IsStreaming => VoiceDeviceAddress != 0;
         public HashSet<ulong> ReadyAddresses { get; } = [];
+        public Dictionary<ulong, EtwAttributeFilter> EtwFilters { get; } = [];
+        public EtwAttributeFilter GetEtwAttributeFilter(ulong address) => EtwFilters.GetValueOrDefault(address);
         public ulong VoiceDeviceAddress { get; set; }
         public IReadOnlyCollection<ulong> ConnectedDeviceAddresses => ReadyAddresses.Count > 0
             ? ReadyAddresses.ToArray()
@@ -745,7 +747,13 @@ public class MainViewModelTests
     {
         var sources = new[]
         {
-            new RemoteBuddy.Platform.Windows.Input.EtwButtonSource(0x112233445566, Guid.NewGuid(), RemoteBuddy.Platform.Windows.Input.EtwProtocolKind.GoogleG9N9N)
+            new RemoteBuddy.Platform.Windows.Input.EtwButtonSource(
+                0x112233445566,
+                Guid.NewGuid(),
+                RemoteBuddy.Platform.Windows.Input.EtwProtocolKind.GoogleG9N9N,
+                HidHandleStart: 0x0020,
+                HidHandleEnd: 0x004F,
+                ExcludedAttributes: [0x0052, 0x0055])
         };
         string encoded = Convert.ToBase64String(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(sources));
 
@@ -759,7 +767,11 @@ public class MainViewModelTests
         Assert.True(handled4Arg);
         Assert.Equal("pipeA", capturedPipe);
         Assert.Equal(12345, capturedPid);
-        Assert.Single(capturedSources!);
+        Assert.NotNull(capturedSources);
+        Assert.Single(capturedSources);
+        Assert.Equal((ushort)0x0020, capturedSources[0].HidHandleStart);
+        Assert.Equal((ushort)0x004F, capturedSources[0].HidHandleEnd);
+        Assert.Equal(new ushort[] { 0x0052, 0x0055 }, capturedSources[0].ExcludedAttributes);
 
         bool handled3Arg = RemoteBuddy.App.App.TryRunChromecastWorker(
             ["--chromecast-worker", "pipeB", encoded],
@@ -1159,6 +1171,67 @@ public class MainViewModelTests
             vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Home, false);
 
             Assert.Equal(["Win+Tab"], executed);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void RefreshInputSources_PreservesG9N9NCachedFilterWhenG9N9NSleepsWithActiveXiaomiRemote()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"dual-remote-etw-filter-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var xiaomi = new RemoteDevice
+            {
+                Id = "xiaomi_rc003",
+                BluetoothAddress = 0xC05D39F86E0C,
+                Name = "MI RC",
+                ModelType = RemoteModelType.XiaomiRC003,
+                Mappings = RemoteDevice.CreateDefaultMappings(RemoteModelType.XiaomiRC003)
+            };
+            var g9n9n = new RemoteDevice
+            {
+                Id = "g9n9n",
+                BluetoothAddress = 0x4754514C6FCC,
+                Name = "Chromecast Remote",
+                ModelType = RemoteModelType.GoogleG9N9N,
+                Mappings = RemoteDevice.CreateDefaultMappings(RemoteModelType.GoogleG9N9N)
+            };
+            config.Current.Devices.Add(xiaomi);
+            config.Current.Devices.Add(g9n9n);
+            config.Current.SelectedDeviceId = xiaomi.Id;
+
+            var bt = new TestBluetoothManager { IsConnected = true, IsReady = true };
+            bt.ReadyAddresses.Add(xiaomi.BluetoothAddress);
+            bt.ReadyAddresses.Add(g9n9n.BluetoothAddress);
+            ushort[] excluded = [0x0038, 0x0039, 0x003A, 0x003B, 0x003C, 0x003D, 0x003E, 0x003F, 0x0040];
+            bt.EtwFilters[g9n9n.BluetoothAddress] = new EtwAttributeFilter(0x001F, 0x002B, excluded);
+
+            using var vm = new MainViewModel(config, bt);
+            vm.RefreshInputSources();
+            var initialSources = vm.EtwSourcesForTest;
+            var initialG9 = Assert.Single(initialSources, s => s.Address == g9n9n.BluetoothAddress);
+            Assert.Equal((ushort)0x001F, initialG9.HidHandleStart);
+            Assert.Equal((ushort)0x002B, initialG9.HidHandleEnd);
+            Assert.NotNull(initialG9.ExcludedAttributes);
+            Assert.Equal(excluded, initialG9.ExcludedAttributes);
+
+            // G9N9N goes to sleep / disconnects while Xiaomi stays ready; live BT filter becomes default
+            bt.ReadyAddresses.Remove(g9n9n.BluetoothAddress);
+            bt.EtwFilters.Remove(g9n9n.BluetoothAddress);
+            vm.RefreshInputSources();
+            var afterSleepSources = vm.EtwSourcesForTest;
+
+            Assert.True(MainViewModel.EtwSourcesMatch(initialSources, afterSleepSources));
+            var preservedG9 = Assert.Single(afterSleepSources, s => s.Address == g9n9n.BluetoothAddress);
+            Assert.Equal((ushort)0x001F, preservedG9.HidHandleStart);
+            Assert.Equal((ushort)0x002B, preservedG9.HidHandleEnd);
+            Assert.NotNull(preservedG9.ExcludedAttributes);
+            Assert.Equal(excluded, preservedG9.ExcludedAttributes);
         }
         finally
         {

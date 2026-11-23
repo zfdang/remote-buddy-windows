@@ -13,6 +13,14 @@ public enum BluetoothSessionState
     Draining
 }
 
+public readonly record struct EtwAttributeFilter(
+    ushort HidHandleStart = 0,
+    ushort HidHandleEnd = 0,
+    ushort[]? ExcludedAttributes = null)
+{
+    public bool HasHidRange => HidHandleStart > 0 && HidHandleEnd >= HidHandleStart;
+}
+
 public interface IBluetoothManager : IDisposable
 {
     bool IsScanning { get; }
@@ -64,4 +72,5 @@ public interface IBluetoothManager : IDisposable
     Task<bool> StartVoiceSessionAsync(ulong address) => address == ConnectedDeviceAddress ? StartVoiceSessionAsync() : Task.FromResult(false);
     Task<bool> StopVoiceSessionAsync(ulong address) => address == ConnectedDeviceAddress ? StopVoiceSessionAsync() : Task.FromResult(false);
     Task ProbeButtonSourceAsync(Guid marker, ulong address) => Task.CompletedTask;
+    EtwAttributeFilter GetEtwAttributeFilter(ulong address) => default;
 }

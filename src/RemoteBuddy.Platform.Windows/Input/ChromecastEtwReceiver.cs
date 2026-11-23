@@ -17,7 +17,13 @@ public enum EtwProtocolKind
     T1Remote = 2
 }
 
-public readonly record struct EtwButtonSource(ulong Address, Guid Marker, EtwProtocolKind Protocol);
+public readonly record struct EtwButtonSource(
+    ulong Address,
+    Guid Marker,
+    EtwProtocolKind Protocol,
+    ushort HidHandleStart = 0,
+    ushort HidHandleEnd = 0,
+    ushort[]? ExcludedAttributes = null);
 
 /// <summary>
 /// Captures Chromecast with Google TV Voice Remote (G9N9N) button reports in real time
@@ -38,20 +44,65 @@ public sealed class ChromecastEtwReceiver : IDisposable
     private const byte AclReceived = 3;
     private const byte AclSent = 4;
     private const ushort G9N9NInputAttribute = 0x0029;
+    private const ushort G9N9NShortReportAttribute = 0x0046;
     private const ushort XiaomiKeyboardAttribute = 0x0064;
+    private const int MaxDiagnosticEntriesPerConnection = 32;
+    private const int MaxDiagnosticHexBytes = 16;
     public static readonly ushort[] G9N9NVerifiedAttributes = [G9N9NInputAttribute];
     public static readonly ushort[] XiaomiVerifiedAttributes = [0x002B, 0x0056, 0x0058, 0x0059, 0x005B, 0x005E];
     private static readonly HashSet<ushort> _g9n9nAttributesSet = [G9N9NInputAttribute];
     private static readonly HashSet<ushort> _xiaomiAttributesSet = [0x002B, 0x0056, 0x0058, 0x0059, 0x005B, 0x005E];
 
+    internal enum G9N9NReportFormat
+    {
+        Unknown = 0,
+        Indexed8Byte,
+        Indexed1Byte,
+        Indexed2Byte,
+        ConsumerUsage2Byte,
+        ConsumerUsage3Byte,
+        ReportId3Byte,
+        Release2Byte
+    }
+
+    private enum G9N9NAttributeDecision
+    {
+        Allowed = 0,
+        Excluded,
+        IgnoredAfterLock,
+        OutsideHidRange,
+        UnlistedAttribute
+    }
+
     private sealed class SourceState(EtwButtonSource source, byte[] request)
     {
         public EtwButtonSource Source { get; } = source;
         public byte[] Request { get; } = request;
+        public ushort HidHandleStart => Source.HidHandleStart;
+        public ushort HidHandleEnd => Source.HidHandleEnd;
+        public bool HasHidRange => Source.HidHandleStart > 0 && Source.HidHandleEnd >= Source.HidHandleStart;
+        public HashSet<ushort> ExcludedAttributes { get; } = source.ExcludedAttributes is { Length: > 0 } excluded
+            ? new HashSet<ushort>(excluded)
+            : [];
         public ushort? PendingHandle { get; set; }
         public ushort? BoundHandle { get; set; }
+        public ushort? LockedG9N9NHandle { get; set; }
         public RemoteButton Held { get; set; }
         public bool SawRedaction { get; set; }
+        public HashSet<(ushort Attribute, G9N9NReportFormat Format)> LoggedFormats { get; } = [];
+        public HashSet<string> LoggedDiagnostics { get; } = [];
+        public bool DiagnosticCapLogged { get; set; }
+
+        public void ResetConnectionState()
+        {
+            BoundHandle = null;
+            LockedG9N9NHandle = null;
+            Held = RemoteButton.None;
+            SawRedaction = false;
+            LoggedFormats.Clear();
+            LoggedDiagnostics.Clear();
+            DiagnosticCapLogged = false;
+        }
     }
 
     private readonly object _lock = new();
@@ -348,6 +399,11 @@ public sealed class ChromecastEtwReceiver : IDisposable
         bool edge1Down = false;
         RemoteButton edge2 = RemoteButton.None;
         bool edge2Down = false;
+        string? gattQueryLog = null;
+        string? bindLog = null;
+        string? formatLog = null;
+        string? redactionLog = null;
+        string? diagnosticLog = null;
 
         if (kind == HciEvent)
         {
@@ -360,8 +416,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
                     {
                         if (source.PendingHandle == handle) source.PendingHandle = null;
                         if (source.BoundHandle != handle) continue;
-                        source.BoundHandle = null;
-                        source.Held = RemoteButton.None;
+                        source.ResetConnectionState();
                         disconnectedAddrs ??= [];
                         disconnectedAddrs.Add(source.Source.Address);
                     }
@@ -375,7 +430,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
         }
 
         if (kind is not (AclSent or AclReceived) ||
-            !TryGetAttPacket(packet, out ushort connection, out var att, out bool incomplete)) return;
+            !TryGetAttPacket(packet, out ushort connection, out var att, out bool incomplete, out int expectedPayloadLength)) return;
         if (kind == AclSent)
         {
             if (incomplete) return;
@@ -385,9 +440,13 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 {
                     if (!att.SequenceEqual(source.Request)) continue;
                     source.PendingHandle = connection;
-                    AppLogger.Info($"BthPort observed GATT query for 0x{source.Source.Address:X12}", "ChromecastEtwReceiver");
-                    return;
+                    gattQueryLog = $"BthPort observed GATT query for 0x{source.Source.Address:X12}";
+                    break;
                 }
+            }
+            if (gattQueryLog != null)
+            {
+                AppLogger.Info(gattQueryLog, "ChromecastEtwReceiver");
             }
             return;
         }
@@ -409,16 +468,77 @@ public sealed class ChromecastEtwReceiver : IDisposable
                     break;
                 }
                 if (!pending && source.BoundHandle != connection) continue;
-                bool parsed = TryParseButtonReport(att, incomplete, source.Source.Protocol,
-                    out var button, out bool isDown, out bool truncated);
+
+                bool parsed = false;
+                bool truncated = false;
+                RemoteButton button = RemoteButton.None;
+                bool isDown = false;
+                G9N9NReportFormat format = G9N9NReportFormat.Unknown;
+                ushort attribute = 0;
+
+                if (source.Source.Protocol == EtwProtocolKind.GoogleG9N9N)
+                {
+                    if (att.Length >= 3 && att[0] is 0x1B or 0x1D)
+                    {
+                        byte opcode = att[0];
+                        attribute = BinaryPrimitives.ReadUInt16LittleEndian(att[1..]);
+                        var report = att[3..];
+                        var decision = EvaluateG9N9NAttribute(source, attribute);
+                        if (decision == G9N9NAttributeDecision.Allowed)
+                        {
+                            if (incomplete)
+                            {
+                                truncated = report.IsEmpty;
+                            }
+                            else
+                            {
+                                parsed = TryParseG9N9NPayload(report, out button, out isDown, out format);
+                                if (!parsed && source.BoundHandle == connection)
+                                {
+                                    diagnosticLog ??= TryRecordG9N9NDiagnosticLocked(
+                                        source, "UnknownPayload", attribute, opcode, report);
+                                }
+                            }
+                        }
+                        else if (source.BoundHandle == connection && !incomplete &&
+                                 decision is G9N9NAttributeDecision.OutsideHidRange or G9N9NAttributeDecision.UnlistedAttribute)
+                        {
+                            string reason = decision == G9N9NAttributeDecision.OutsideHidRange
+                                ? "OutsideHidRange"
+                                : "UnlistedAttribute";
+                            diagnosticLog ??= TryRecordG9N9NDiagnosticLocked(
+                                source, reason, attribute, opcode, report);
+                        }
+                    }
+                }
+                else
+                {
+                    parsed = TryParseButtonReport(att, incomplete, source.Source.Protocol,
+                        out button, out isDown, out truncated);
+                }
+
                 if (pending && parsed && isDown) BindLocked(sources, source);
                 if (source.BoundHandle != connection) continue;
                 if (parsed)
                 {
-                    if (!isDown && source.Source.Protocol == EtwProtocolKind.Xiaomi &&
+                    if (source.Source.Protocol == EtwProtocolKind.GoogleG9N9N)
+                    {
+                        if (isDown && attribute == G9N9NInputAttribute && !source.LockedG9N9NHandle.HasValue)
+                        {
+                            source.LockedG9N9NHandle = G9N9NInputAttribute;
+                        }
+                        if (source.LoggedFormats.Add((attribute, format)))
+                        {
+                            formatLog =
+                                $"G9N9N ETW report format observed: addr=0x{source.Source.Address:X12}, attr=0x{attribute:X4}, format={format}, len={att.Length - 3}, sample={FormatHex(att[3..])}, button={button}, down={isDown}";
+                        }
+                    }
+                    else if (!isDown && source.Source.Protocol == EtwProtocolKind.Xiaomi &&
                         att.Length == 11 && BinaryPrimitives.ReadUInt16LittleEndian(att[1..]) == XiaomiKeyboardAttribute &&
                         source.Held is not (RemoteButton.Back or RemoteButton.VolumeUp or RemoteButton.VolumeDown))
+                    {
                         break;
+                    }
                     RecordButtonEdgesLocked(source, button, isDown);
                 }
                 else if (truncated)
@@ -426,7 +546,9 @@ public sealed class ChromecastEtwReceiver : IDisposable
                     if (!source.SawRedaction)
                     {
                         source.SawRedaction = true;
-                        AppLogger.Warn("Windows omitted a verified button code", "ChromecastEtwReceiver");
+                        redactionLog = source.Source.Protocol == EtwProtocolKind.GoogleG9N9N
+                            ? $"Windows omitted a verified button code (addr=0x{source.Source.Address:X12}, attr=0x{attribute:X4}, expectedLen={expectedPayloadLength})"
+                            : "Windows omitted a verified button code";
                     }
                     RecordButtonEdgesLocked(source, RemoteButton.None, false);
                     truncatedAddr = source.Source.Address;
@@ -436,18 +558,26 @@ public sealed class ChromecastEtwReceiver : IDisposable
 
             void BindLocked(SourceState[] allSources, SourceState source)
             {
+                bool rebindingSameHandle = source.BoundHandle == connection;
                 foreach (var other in allSources)
                 {
                     if (other == source || other.BoundHandle != connection) continue;
-                    other.BoundHandle = null;
-                    other.Held = RemoteButton.None;
+                    other.ResetConnectionState();
                     disconnectedAddrs ??= [];
                     disconnectedAddrs.Add(other.Source.Address);
+                }
+                if (!rebindingSameHandle)
+                {
+                    source.ResetConnectionState();
                 }
                 source.BoundHandle = connection;
                 source.PendingHandle = null;
                 newlyBoundAddr = source.Source.Address;
-                AppLogger.Info($"ETW bound 0x{source.Source.Address:X12} to ACL 0x{connection:X4}", "ChromecastEtwReceiver");
+                string hidRange = source.HasHidRange
+                    ? $"0x{source.HidHandleStart:X4}..0x{source.HidHandleEnd:X4}"
+                    : "none";
+                bindLog =
+                    $"ETW bound 0x{source.Source.Address:X12} to ACL 0x{connection:X4} (protocol={source.Source.Protocol}, hidRange={hidRange}, excluded={source.ExcludedAttributes.Count})";
             }
 
             void RecordButtonEdgesLocked(SourceState source, RemoteButton btn, bool isDown)
@@ -478,6 +608,22 @@ public sealed class ChromecastEtwReceiver : IDisposable
             }
         }
 
+        if (bindLog != null)
+        {
+            AppLogger.Info(bindLog, "ChromecastEtwReceiver");
+        }
+        if (formatLog != null)
+        {
+            AppLogger.Info(formatLog, "ChromecastEtwReceiver");
+        }
+        if (diagnosticLog != null)
+        {
+            AppLogger.Info(diagnosticLog, "ChromecastEtwReceiver");
+        }
+        if (redactionLog != null)
+        {
+            AppLogger.Warn(redactionLog, "ChromecastEtwReceiver");
+        }
         if (disconnectedAddrs != null)
         {
             foreach (var addr in disconnectedAddrs) DeviceDisconnected?.Invoke(addr);
@@ -502,11 +648,64 @@ public sealed class ChromecastEtwReceiver : IDisposable
         }
     }
 
-    private static bool TryGetAttPacket(ReadOnlySpan<byte> packet, out ushort connection, out ReadOnlySpan<byte> att, out bool incomplete)
+    private static G9N9NAttributeDecision EvaluateG9N9NAttribute(SourceState source, ushort attribute)
+    {
+        if (source.ExcludedAttributes.Contains(attribute))
+        {
+            return G9N9NAttributeDecision.Excluded;
+        }
+        if (source.LockedG9N9NHandle is { } locked)
+        {
+            return attribute == locked
+                ? G9N9NAttributeDecision.Allowed
+                : G9N9NAttributeDecision.IgnoredAfterLock;
+        }
+        if (source.HasHidRange)
+        {
+            return attribute >= source.HidHandleStart && attribute <= source.HidHandleEnd
+                ? G9N9NAttributeDecision.Allowed
+                : G9N9NAttributeDecision.OutsideHidRange;
+        }
+        return attribute is G9N9NInputAttribute or G9N9NShortReportAttribute
+            ? G9N9NAttributeDecision.Allowed
+            : G9N9NAttributeDecision.UnlistedAttribute;
+    }
+
+    private static string? TryRecordG9N9NDiagnosticLocked(
+        SourceState source,
+        string reason,
+        ushort attribute,
+        byte opcode,
+        ReadOnlySpan<byte> report)
+    {
+        if (source.DiagnosticCapLogged) return null;
+
+        // Never log raw bytes for oversized notifications (e.g. 160-byte ADPCM audio frames).
+        string hex = report.Length > MaxDiagnosticHexBytes ? "<omitted>" : FormatHex(report);
+        string key = $"{reason}:{attribute:X4}:{report.Length}:{hex}";
+        if (!source.LoggedDiagnostics.Add(key)) return null;
+
+        if (source.LoggedDiagnostics.Count > MaxDiagnosticEntriesPerConnection)
+        {
+            source.DiagnosticCapLogged = true;
+            return $"G9N9N ETW unrecognized notification log cap ({MaxDiagnosticEntriesPerConnection}) reached for addr=0x{source.Source.Address:X12}; suppressing further entries for this connection.";
+        }
+
+        string hidRange = source.HasHidRange
+            ? $"0x{source.HidHandleStart:X4}..0x{source.HidHandleEnd:X4}"
+            : "none";
+        return $"G9N9N ETW unrecognized notification [{reason}]: addr=0x{source.Source.Address:X12}, attr=0x{attribute:X4}, opcode=0x{opcode:X2}, len={report.Length}, hex={hex} (hidRange={hidRange})";
+    }
+
+    private static string FormatHex(ReadOnlySpan<byte> data) =>
+        data.IsEmpty ? "-" : Convert.ToHexString(data);
+
+    private static bool TryGetAttPacket(ReadOnlySpan<byte> packet, out ushort connection, out ReadOnlySpan<byte> att, out bool incomplete, out int expectedPayloadLength)
     {
         connection = 0;
         att = default;
         incomplete = false;
+        expectedPayloadLength = 0;
         if (packet.Length < 8) return false;
 
         ushort header = BinaryPrimitives.ReadUInt16LittleEndian(packet);
@@ -521,8 +720,9 @@ public sealed class ChromecastEtwReceiver : IDisposable
         int availableAtt = packet.Length - 8;
         incomplete = availableAtt < l2capLength;
         att = incomplete ? packet[8..] : packet.Slice(8, l2capLength);
-        // The observed redaction keeps the ATT header of the eight-byte G9N9N report.
-        return incomplete ? l2capLength == 11 && att.Length == 3 : !att.IsEmpty;
+        expectedPayloadLength = l2capLength >= 3 ? l2capLength - 3 : 0;
+        // Observed redactions strip HID notification payloads of 1, 2, 3, or 8 bytes down to the 3-byte ATT header.
+        return incomplete ? l2capLength is 4 or 5 or 6 or 11 && att.Length == 3 : !att.IsEmpty;
     }
 
     public static bool TryParseAclPacket(ReadOnlySpan<byte> packet, out RemoteButton button, out bool isDown, EtwProtocolKind protocolKind = EtwProtocolKind.GoogleG9N9N) =>
@@ -532,7 +732,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
     {
         button = RemoteButton.None;
         isDown = truncated = false;
-        return TryGetAttPacket(packet, out _, out var att, out bool incomplete) &&
+        return TryGetAttPacket(packet, out _, out var att, out bool incomplete, out _) &&
             TryParseButtonReport(att, incomplete, protocolKind, out button, out isDown, out truncated, verifiedAttributes);
     }
 
@@ -552,46 +752,11 @@ public sealed class ChromecastEtwReceiver : IDisposable
 
             if (incomplete)
             {
-                truncated = attribute == G9N9NInputAttribute && report.IsEmpty;
+                truncated = report.IsEmpty;
                 return false;
             }
 
-            if (attribute == G9N9NInputAttribute && report is [_, 0, 0, 0, 0, 0, 0, 0])
-            {
-                byte code = report[0];
-                if (code == 0) return true;
-                if (code > G9N9NProtocol.IndexedConsumerUsages.Length) return false;
-                isDown = G9N9NProtocol.ConsumerButtons.TryGetValue(G9N9NProtocol.IndexedConsumerUsages[code - 1], out button);
-                return isDown;
-            }
-
-            // Exclude non-button reports: ATVV AudioSync / GetCapabilities (0x0A) and mouse movement (Report ID 3)
-            if (report.Length >= 7 && report[0] == 0x0A) return false;
-            if (report.Length >= 3 && report[0] == 0x03) return false;
-
-            if (attribute == G9N9NInputAttribute && report.Length == 2)
-            {
-                ushort usage = BinaryPrimitives.ReadUInt16LittleEndian(report);
-                if (usage == 0) return true;
-                isDown = G9N9NProtocol.ConsumerButtons.TryGetValue(usage, out button);
-                return isDown;
-            }
-
-            if (attribute == G9N9NInputAttribute && report.Length == 3 && report[0] is 0x01 or 0x02 &&
-                G9N9NProtocol.TryParseReport(report, out var g9Buttons))
-            {
-                if (g9Buttons.Count > 0)
-                {
-                    button = g9Buttons[0];
-                    isDown = true;
-                    return true;
-                }
-                button = RemoteButton.None;
-                isDown = false;
-                return true;
-            }
-
-            return false;
+            return TryParseG9N9NPayload(report, out button, out isDown, out _);
         }
         else if (protocol == EtwProtocolKind.Xiaomi)
         {
@@ -671,6 +836,108 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 return true;
             }
             return false;
+        }
+
+        return false;
+    }
+
+    internal static bool TryParseG9N9NPayload(
+        ReadOnlySpan<byte> report,
+        out RemoteButton button,
+        out bool isDown,
+        out G9N9NReportFormat format)
+    {
+        button = RemoteButton.None;
+        isDown = false;
+        format = G9N9NReportFormat.Unknown;
+
+        if (report.IsEmpty) return false;
+
+        // Match 8-byte indexed reports first so Up (0x03) and Home (0x0A) are not filtered out as mouse/ATVV headers.
+        if (report is [_, 0, 0, 0, 0, 0, 0, 0])
+        {
+            byte code = report[0];
+            if (code == 0)
+            {
+                format = G9N9NReportFormat.Indexed8Byte;
+                return true;
+            }
+            if (code > G9N9NProtocol.IndexedConsumerUsages.Length) return false;
+            isDown = G9N9NProtocol.ConsumerButtons.TryGetValue(G9N9NProtocol.IndexedConsumerUsages[code - 1], out button);
+            if (isDown) format = G9N9NReportFormat.Indexed8Byte;
+            return isDown;
+        }
+
+        // Exclude non-button reports: ATVV AudioSync / GetCapabilities (0x0A) and mouse movement (Report ID 3)
+        if (report.Length >= 7 && report[0] == 0x0A) return false;
+        if (report.Length >= 3 && report[0] == 0x03) return false;
+
+        if (report.Length == 1)
+        {
+            byte code = report[0];
+            if (code == 0)
+            {
+                format = G9N9NReportFormat.Indexed1Byte;
+                return true;
+            }
+            if (code > G9N9NProtocol.IndexedConsumerUsages.Length) return false;
+            isDown = G9N9NProtocol.ConsumerButtons.TryGetValue(G9N9NProtocol.IndexedConsumerUsages[code - 1], out button);
+            if (isDown) format = G9N9NReportFormat.Indexed1Byte;
+            return isDown;
+        }
+
+        if (report.Length == 2)
+        {
+            if (report[0] == 0 && report[1] == 0)
+            {
+                format = G9N9NReportFormat.Release2Byte;
+                return true;
+            }
+
+            // First byte >= 1 avoids misinterpreting ATVV AUDIO_STOP [0x00, 0x02] as Play/Pause index 2.
+            if (report[0] >= 1 &&
+                report[0] <= G9N9NProtocol.IndexedConsumerUsages.Length &&
+                report[1] <= G9N9NProtocol.IndexedConsumerUsages.Length)
+            {
+                isDown = G9N9NProtocol.ConsumerButtons.TryGetValue(
+                    G9N9NProtocol.IndexedConsumerUsages[report[0] - 1],
+                    out button);
+                if (isDown) format = G9N9NReportFormat.Indexed2Byte;
+                return isDown;
+            }
+
+            ushort usage = BinaryPrimitives.ReadUInt16LittleEndian(report);
+            isDown = G9N9NProtocol.ConsumerButtons.TryGetValue(usage, out button);
+            if (isDown) format = G9N9NReportFormat.ConsumerUsage2Byte;
+            return isDown;
+        }
+
+        if (report.Length == 3)
+        {
+            if (report[0] is 0x01 or 0x02 && G9N9NProtocol.TryParseReport(report, out var g9Buttons))
+            {
+                format = G9N9NReportFormat.ReportId3Byte;
+                if (g9Buttons.Count > 0)
+                {
+                    button = g9Buttons[0];
+                    isDown = true;
+                }
+                return true;
+            }
+
+            if (report is [0, 0, 0])
+            {
+                format = G9N9NReportFormat.ConsumerUsage3Byte;
+                return true;
+            }
+
+            if (report[2] == 0)
+            {
+                ushort usage = BinaryPrimitives.ReadUInt16LittleEndian(report);
+                isDown = G9N9NProtocol.ConsumerButtons.TryGetValue(usage, out button);
+                if (isDown) format = G9N9NReportFormat.ConsumerUsage3Byte;
+                return isDown;
+            }
         }
 
         return false;

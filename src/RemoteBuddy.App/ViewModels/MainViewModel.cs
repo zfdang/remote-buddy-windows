@@ -305,18 +305,44 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (_hidReaders.Remove(address, out var reader)) reader.Dispose();
         }
 
-        var wanted = devices.Select(device => (device.BluetoothAddress, Protocol: device.IsG9N9N ||
-            G9N9NProtocol.IsCandidate(device.Name) ? EtwProtocolKind.GoogleG9N9N :
-            device.IsT1 ? EtwProtocolKind.T1Remote : EtwProtocolKind.Xiaomi)).ToArray();
-        bool rebuild = !_etwSources.Select(source => (source.Address, source.Protocol)).SequenceEqual(wanted) ||
-            !_chromecastButtonReceiver.IsRunning;
+        var existingByAddress = _etwSources
+            .GroupBy(source => source.Address)
+            .ToDictionary(group => group.Key, group => group.First());
+        var wanted = devices.Select(device =>
+        {
+            var protocol = device.IsG9N9N || G9N9NProtocol.IsCandidate(device.Name)
+                ? EtwProtocolKind.GoogleG9N9N
+                : device.IsT1 ? EtwProtocolKind.T1Remote : EtwProtocolKind.Xiaomi;
+            EtwAttributeFilter filter = default;
+            if (protocol == EtwProtocolKind.GoogleG9N9N)
+            {
+                if (_bluetoothManager.IsDeviceReady(device.BluetoothAddress))
+                {
+                    filter = _bluetoothManager.GetEtwAttributeFilter(device.BluetoothAddress);
+                }
+                else if (existingByAddress.TryGetValue(device.BluetoothAddress, out var prior) &&
+                         prior.Protocol == protocol)
+                {
+                    // Preserve the cached G9N9N filter while asleep so sibling remotes do not restart ETW.
+                    filter = new EtwAttributeFilter(prior.HidHandleStart, prior.HidHandleEnd, prior.ExcludedAttributes);
+                }
+            }
+            return new EtwButtonSource(
+                device.BluetoothAddress,
+                Guid.NewGuid(),
+                protocol,
+                filter.HidHandleStart,
+                filter.HidHandleEnd,
+                filter.ExcludedAttributes);
+        }).ToArray();
+        bool rebuild = !EtwSourcesMatch(_etwSources, wanted) || !_chromecastButtonReceiver.IsRunning;
         if (rebuild && ready.Length > 0)
         {
             int generation = Interlocked.Increment(ref _buttonSourceGeneration);
             CancelEtwTasks();
             _chromecastButtonReceiver.Stop();
             ResetGestures();
-            _etwSources = wanted.Select(source => new EtwButtonSource(source.BluetoothAddress, Guid.NewGuid(), source.Protocol)).ToArray();
+            _etwSources = wanted;
             lock (_etwProbeLock)
             {
                 _unboundEtwAddresses.Clear();
@@ -391,6 +417,30 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _probeRetryCts?.Dispose();
             _probeRetryCts = null;
         }
+    }
+
+    internal EtwButtonSource[] EtwSourcesForTest => _etwSources;
+
+    internal static bool EtwSourcesMatch(EtwButtonSource[] existing, EtwButtonSource[] wanted)
+    {
+        if (existing.Length != wanted.Length) return false;
+        for (int i = 0; i < existing.Length; i++)
+        {
+            ref readonly var a = ref existing[i];
+            ref readonly var b = ref wanted[i];
+            if (a.Address != b.Address ||
+                a.Protocol != b.Protocol ||
+                a.HidHandleStart != b.HidHandleStart ||
+                a.HidHandleEnd != b.HidHandleEnd)
+            {
+                return false;
+            }
+            if (!(a.ExcludedAttributes ?? []).SequenceEqual(b.ExcludedAttributes ?? []))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     private async Task StartAndProbeEtwAsync(EtwButtonSource[] sources, int generation, CancellationToken ct)

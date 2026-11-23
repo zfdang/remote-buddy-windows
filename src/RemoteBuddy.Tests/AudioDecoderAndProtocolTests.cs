@@ -79,11 +79,17 @@ public class AudioDecoderAndProtocolTests
     public void G9N9NDetails_RepresentObservedGattAndAtvvReadings()
     {
         var pnp = RemoteDeviceInformation.DecodePnpId([0x02, 0xD1, 0x18, 0x50, 0x94, 0x00, 0x01]);
+        ushort? hidVersion = RemoteDeviceInformation.DecodePnpProductVersion([0x02, 0xD1, 0x18, 0x50, 0x94, 0x1B, 0x01]);
         var caps = ATVVProtocol.ParseCapabilities([0x0B, 0x01, 0x00, 0x02, 0x03, 0, 160]);
         var information = new RemoteDeviceInformation(1, caps, PnpId: pnp,
-            FirmwareRevision: RemoteDeviceInformation.DecodeDeviceString([0x20, 0x31, 0x2E, 0x30, 0x00]));
+            FirmwareRevision: RemoteDeviceInformation.DecodeDeviceString([0x20, 0x31, 0x2E, 0x30, 0x00]),
+            ProductVersion: hidVersion);
 
         Assert.Equal("18D1 / 9450", information.VendorProductId);
+        Assert.Equal("0x011B", information.HidVersionText);
+        Assert.Equal((ushort)0x0110, RemoteDeviceInformation.DecodePnpProductVersion([0x02, 0xD1, 0x18, 0x50, 0x94, 0x10, 0x01]));
+        Assert.Null(RemoteDeviceInformation.DecodePnpProductVersion([0x02, 0xD1, 0x18]));
+        Assert.Null(RemoteDeviceInformation.DecodePnpProductVersion([0x02, 0x00, 0x00, 0x50, 0x94, 0x10, 0x01]));
         Assert.Equal("1.0", information.FirmwareRevision);
         Assert.Equal("ATVV 1.0", information.VoiceProtocol);
         Assert.Equal("16 kHz · IMA ADPCM", information.AudioFormat);
