@@ -100,10 +100,19 @@ public sealed class G9N9NSmartToggleSession
     }
 
     public bool TryBeginReopenOnPhysicalStop(bool isRemoteStop, bool localCloseRequested, long nowMs, out ulong generation)
+        => TryBeginReopenOnPhysicalStop(isRemoteStop, localCloseRequested, nowMs, out generation, out _);
+
+    public bool TryBeginReopenOnPhysicalStop(
+        bool isRemoteStop,
+        bool localCloseRequested,
+        long nowMs,
+        out ulong generation,
+        out Phase phaseBeforeDecision)
     {
         lock (_lock)
         {
             generation = _generation;
+            phaseBeforeDecision = _currentPhase;
             if (_currentPhase != Phase.PhysicalPressed || !isRemoteStop || localCloseRequested)
                 return false;
 

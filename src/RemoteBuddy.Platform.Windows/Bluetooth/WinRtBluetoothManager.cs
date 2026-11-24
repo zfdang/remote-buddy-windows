@@ -75,7 +75,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
     private int _pendingAudioGapGen = -1;
     private readonly Task _audioWorkerTask;
 
-    private byte _currentSessionId = 0;
+    private byte? _currentSessionId;
     private byte? _lastEndedSessionId;
     private long _lastEndedSessionTimeMs;
     private int _frameSize = 120;
@@ -1098,7 +1098,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
             _cancelOpenPending = false;
             _audioStopReceived = false;
             _lastEndedSessionId = null;
-            _currentSessionId = 0;
+            _currentSessionId = null;
             currentConnGen = _connectionGeneration;
             currentSessGen = ++_sessionGeneration;
             currentAudioGen = Interlocked.Increment(ref _audioGeneration);
@@ -1162,7 +1162,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                     }
                     _sessionGeneration++;
                     _activeOpeningOperationId++;
-                    sessionIdToClose = _currentSessionId;
+                    sessionIdToClose = _currentSessionId ?? 0;
                     _lastEndedSessionId = sessionIdToClose;
                     _lastEndedSessionTimeMs = Environment.TickCount64;
                     _audioPlayer.Stop();
@@ -1251,10 +1251,10 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 _audioPlayer.Stop();
                 _sessionState = BluetoothSessionState.Idle;
                 if (!_voiceSessionStartedEmitted) _voiceArbiter?.Release(this);
-                sessionIdToClose = _currentSessionId;
-                if (sessionIdToClose != 0)
+                byte? openingSessionId = _currentSessionId;
+                if (openingSessionId.HasValue)
                 {
-                    _ = SendClosePacketAsync(sessionIdToClose);
+                    _ = SendClosePacketAsync(openingSessionId.Value);
                 }
                 openTcs?.TrySetResult(false);
                 return true;
@@ -1272,7 +1272,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
             }
 
             _sessionState = BluetoothSessionState.Draining;
-            sessionIdToClose = _currentSessionId;
+            sessionIdToClose = _currentSessionId ?? 0;
             _lastEndedSessionId = sessionIdToClose;
             _lastEndedSessionTimeMs = Environment.TickCount64;
             currentConnGen = _connectionGeneration;
@@ -1349,8 +1349,15 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
         return true;
     }
 
+    internal Func<byte, Task>? SendClosePacketHandlerForTest { get; set; }
+
     private async Task SendClosePacketAsync(byte sessionId)
     {
+        if (SendClosePacketHandlerForTest != null)
+        {
+            await SendClosePacketHandlerForTest(sessionId).ConfigureAwait(false);
+            return;
+        }
         GattCharacteristic? tx;
         ushort version;
         CancellationToken connToken;
@@ -1394,7 +1401,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                     if (connectionGeneration != _connectionGeneration || sessionGeneration != _sessionGeneration ||
                         _sessionState != BluetoothSessionState.Streaming || _txCharacteristic == null) return;
                     tx = _txCharacteristic;
-                    sessId = _currentSessionId;
+                    sessId = _currentSessionId ?? 0;
                     connToken = _connectionCts?.Token ?? CancellationToken.None;
                 }
                 byte[] extend = ATVVProtocol.BuildMicrophoneExtend(sessId);
@@ -1832,7 +1839,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
     internal Task FlushAudioPipelineForTestAsync(int frameSize = 120, float gain = 1.0f) =>
         FlushAudioPipelineAsync(Volatile.Read(ref _audioGeneration), frameSize, gain);
 
-    internal void SetSessionStateForTest(BluetoothSessionState state, byte sessionId = 0, G9N9NSmartToggleSession.Phase? smartTogglePhase = null)
+    internal void SetSessionStateForTest(BluetoothSessionState state, byte? sessionId = null, G9N9NSmartToggleSession.Phase? smartTogglePhase = null)
     {
         lock (_stateLock)
         {
@@ -1926,7 +1933,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 {
                     AppLogger.Info($"ATVV packet AudioStart (0x04): Interaction=0x{interaction:X2}, Codec=0x{codec:X2}, SessionId={sessionId}", "BluetoothManager");
                     BluetoothSessionState lockedState;
-                    byte lockedSessionId;
+                    byte? lockedSessionId;
                     lock (_stateLock)
                     {
                         if (capturedConnGen != _connectionGeneration) return;
@@ -1964,7 +1971,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                         {
                             _smartToggle.EnterClosing();
                             CancelSmartToggleTimers();
-                            if (sessionId != lockedSessionId)
+                            if (!lockedSessionId.HasValue || sessionId != lockedSessionId.Value)
                             {
                                 _ = SendClosePacketAsync(sessionId);
                             }
@@ -2247,8 +2254,9 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
 
             case ATVVProtocol.OpcodeAudioStop: // 0x00
                 byte stopReason = data.Length > 1 ? data[1] : (byte)0xFF;
+                string stopReasonText = data.Length > 1 ? $"0x{data[1]:X2}" : "missing";
                 BluetoothSessionState stopObservedState;
-                byte stopObservedSessionId;
+                byte? stopObservedSessionId;
                 lock (_stateLock)
                 {
                     if (capturedConnGen != _connectionGeneration) return;
@@ -2262,19 +2270,19 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                             _smartToggle.Reset();
                             CancelSmartToggleTimers();
                         }
-                        AppLogger.Info($"ATVV AudioStop received: Reason={(data.Length > 1 ? $"0x{data[1]:X2}" : "missing")}, State={stopObservedState}, SessionId={stopObservedSessionId}", "BluetoothManager");
+                        AppLogger.Info($"ATVV AudioStop received: Reason={stopReasonText}, State={stopObservedState}, SessionId={(stopObservedSessionId.HasValue ? stopObservedSessionId.Value.ToString() : "none")}", "BluetoothManager");
                         return;
                     }
                     _audioStopReceived = true;
                 }
-                AppLogger.Info($"ATVV AudioStop received: Reason={(data.Length > 1 ? $"0x{data[1]:X2}" : "missing")}, State={stopObservedState}, SessionId={stopObservedSessionId}", "BluetoothManager");
+                AppLogger.Info($"ATVV AudioStop received: Reason={stopReasonText}, State={stopObservedState}, SessionId={(stopObservedSessionId.HasValue ? stopObservedSessionId.Value.ToString() : "none")}", "BluetoothManager");
                 _audioStopTcs?.TrySetResult(true);
 
                 if (stopObservedState is BluetoothSessionState.Streaming or BluetoothSessionState.Opening &&
                     IsSmartToggleEligible() && _smartToggle.IsActive)
                 {
                     bool isRemotePhysicalStop = stopReason != 0x00;
-                    if (_smartToggle.TryBeginReopenOnPhysicalStop(isRemoteStop: isRemotePhysicalStop, localCloseRequested: false, Environment.TickCount64, out ulong gen))
+                    if (_smartToggle.TryBeginReopenOnPhysicalStop(isRemoteStop: isRemotePhysicalStop, localCloseRequested: false, Environment.TickCount64, out ulong gen, out var phaseBeforeStop))
                     {
                         AppLogger.Info("G9N9N physical voice key released before 0.7s threshold. Initiating hands-free smart-toggle reopen!", "BluetoothManager");
                         ScheduleSmartToggleReopenTimeout(gen);
@@ -2283,7 +2291,14 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                     }
                     else
                     {
-                        AppLogger.Info("G9N9N physical voice key released after 0.7s hold. Stopping hold-to-talk session", "BluetoothManager");
+                        if (phaseBeforeStop == G9N9NSmartToggleSession.Phase.PhysicalPressed && isRemotePhysicalStop)
+                        {
+                            AppLogger.Info($"G9N9N smart-toggle stop without reopen (Phase={phaseBeforeStop}, Reason={stopReasonText}): physical voice key released after >= {G9N9NSmartToggleSession.HoldThresholdSeconds:0.0}s hold; stopping hold-to-talk session", "BluetoothManager");
+                        }
+                        else
+                        {
+                            AppLogger.Info($"G9N9N smart-toggle session ended on AudioStop (Phase={phaseBeforeStop}, Reason={stopReasonText}); resetting smart-toggle state", "BluetoothManager");
+                        }
                         _smartToggle.Reset();
                         CancelSmartToggleTimers();
                     }
@@ -2365,7 +2380,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
 
             _txCharacteristic = null;
             _capabilities = null;
-            _currentSessionId = 0;
+            _currentSessionId = null;
             IsReady = false;
             _lastEndedSessionId = null;
             _audioStopReceived = false;

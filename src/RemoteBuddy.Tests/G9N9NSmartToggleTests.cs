@@ -1,8 +1,10 @@
 // Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
+using System.Collections.Concurrent;
 using RemoteBuddy.Core.Models;
 using RemoteBuddy.Core.Bluetooth;
+using RemoteBuddy.Core.Diagnostics;
 using RemoteBuddy.Core.Protocols;
 using RemoteBuddy.Platform.Windows.Bluetooth;
 using Xunit;
@@ -231,5 +233,89 @@ public class G9N9NSmartToggleTests
         // asynchronously and can reset a later session on the same test instance.
         manager.HandleControlPacketForTest([ATVVProtocol.OpcodeAudioStop, reason]);
         Assert.Equal(expected, manager.SmartTogglePhaseForTest);
+    }
+
+    [Fact]
+    public async Task WinRtBluetoothManager_CancelOpening_DistinguishesMissingSessionIdFromSessionIdZero()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        // 1. Missing SessionId (null) during Opening must NOT send MIC_CLOSE immediately;
+        // a late AudioStart(SessionId=0) after cancellation must still receive MIC_CLOSE(0).
+        using (var managerMissing = new WinRtBluetoothManager())
+        {
+            var sentCloseIds = new ConcurrentQueue<byte>();
+            var lateCloseTcs = new TaskCompletionSource<byte>(TaskCreationOptions.RunContinuationsAsynchronously);
+            managerMissing.SendClosePacketHandlerForTest = id =>
+            {
+                sentCloseIds.Enqueue(id);
+                lateCloseTcs.TrySetResult(id);
+                return Task.CompletedTask;
+            };
+            managerMissing.SetSessionStateForTest(BluetoothSessionState.Opening, sessionId: null);
+
+            bool stopped = await managerMissing.StopVoiceSessionAsync();
+            Assert.True(stopped);
+            Assert.Equal(BluetoothSessionState.Idle, managerMissing.SessionStateForTest);
+            Assert.Empty(sentCloseIds);
+
+            managerMissing.HandleControlPacketForTest([ATVVProtocol.OpcodeAudioStart, 0x03, 0x02, 0x00]);
+            Assert.Equal((byte)0, await lateCloseTcs.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        }
+
+        // 2. Received SessionId == 0 during Opening IS a valid session ID and MUST send MIC_CLOSE(0).
+        using (var managerZero = new WinRtBluetoothManager())
+        {
+            var closeTcs = new TaskCompletionSource<byte>(TaskCreationOptions.RunContinuationsAsynchronously);
+            managerZero.SendClosePacketHandlerForTest = id =>
+            {
+                closeTcs.TrySetResult(id);
+                return Task.CompletedTask;
+            };
+            managerZero.SetSessionStateForTest(BluetoothSessionState.Opening, sessionId: 0);
+
+            bool stopped = await managerZero.StopVoiceSessionAsync();
+            Assert.True(stopped);
+            Assert.Equal(BluetoothSessionState.Idle, managerZero.SessionStateForTest);
+            Assert.Equal((byte)0, await closeTcs.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        }
+    }
+}
+
+[Collection("AppLogger")]
+public class G9N9NAudioStopLoggingTests
+{
+    [Fact]
+    public void WinRtBluetoothManager_AudioStopInHandsFreeActive_LogsPhaseAndReasonInsteadOfLongHold()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        string tempLogDir = Path.Combine(Path.GetTempPath(), $"vib-audiostop-log-{Guid.NewGuid():N}");
+        try
+        {
+            AppLogger.ResetForTesting();
+            AppLogger.Initialize(tempLogDir);
+
+            using var manager = new WinRtBluetoothManager();
+            manager.ConnectedDeviceNameOverride = "Chromecast Remote";
+            manager.VoiceButtonMode = G9N9NVoiceButtonMode.SmartToggle;
+            manager.SetSessionStateForTest(
+                BluetoothSessionState.Streaming,
+                sessionId: 0,
+                smartTogglePhase: G9N9NSmartToggleSession.Phase.HandsFreeActive);
+
+            manager.HandleControlPacketForTest([ATVVProtocol.OpcodeAudioStop, 0x04]);
+
+            string logText = File.ReadAllText(AppLogger.CurrentLogFilePath);
+            Assert.Contains("Phase=HandsFreeActive", logText);
+            Assert.Contains("Reason=0x04", logText);
+            Assert.DoesNotContain("after 0.7s hold", logText);
+            Assert.DoesNotContain("after >= 0.7s hold", logText);
+        }
+        finally
+        {
+            AppLogger.ResetForTesting();
+            if (Directory.Exists(tempLogDir)) Directory.Delete(tempLogDir, recursive: true);
+        }
     }
 }
