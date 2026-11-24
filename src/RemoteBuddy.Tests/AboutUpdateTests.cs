@@ -28,7 +28,7 @@ public class AboutUpdateTests
             """);
         Assert.Equal(Published, WindowsRelease.Parse(json.RootElement));
         Assert.Equal(Published.Version, WindowsRelease.ParseVersion("v26.11.24.117"));
-        Assert.True(Published.Version > WindowsRelease.ParseVersion("v26.11.23.232"));
+        Assert.Equal(Published.Version, WindowsRelease.ParseVersion("v26.11.24.1117"));
         Assert.Null(WindowsRelease.ParseVersion("v1.0.0"));
 
         using var wrongPackage = JsonDocument.Parse("""
@@ -98,6 +98,21 @@ public class AboutUpdateTests
         await vm.SetUpdatePageActiveAsync(true);
         Assert.Equal(2, checks);
         Assert.Equal(Published, vm.AvailableRelease);
+    }
+
+    [Theory]
+    [InlineData("v1.0.0")]
+    [InlineData("v26.11.24.116")]
+    [InlineData("v26.11.24.118")]
+    public async Task AnyDifferentVersionShowsTheOfficialRelease(string installedVersion)
+    {
+        var vm = new AboutViewModel(null, _ => Task.FromResult(Published)) { AppVersion = installedVersion };
+
+        await vm.CheckForUpdatesCommand.ExecuteAsync(null);
+
+        Assert.Equal(Published, vm.AvailableRelease);
+        Assert.Contains(Published.Tag, vm.AvailableVersionText);
+        Assert.Empty(vm.UpdateStatus);
     }
 
     [Fact]

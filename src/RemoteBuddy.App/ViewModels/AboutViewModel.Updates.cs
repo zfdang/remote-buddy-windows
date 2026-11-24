@@ -49,7 +49,7 @@ public partial class AboutViewModel
     }
 
     public bool HasAvailableRelease => AvailableRelease != null;
-    public string AvailableVersionText => AvailableRelease is { } release ? $"发现新版本 {release.Tag}" : string.Empty;
+    public string AvailableVersionText => AvailableRelease is { } release ? $"官网最新版本 {release.Tag}" : string.Empty;
     public string AvailablePackageText => AvailableRelease?.PackageDescription ?? string.Empty;
 
     internal Task SetUpdatePageActiveAsync(bool active)
@@ -91,13 +91,7 @@ public partial class AboutViewModel
             if (!ReferenceEquals(_updateCheck, request)) return;
 
             var installed = WindowsRelease.ParseVersion(AppVersion);
-            if (installed == null)
-            {
-                UpdateStatus = manual ? "当前构建没有可比较的正式版本号。" : string.Empty;
-                return;
-            }
-
-            if (latest.Version > installed)
+            if (latest.Version != installed)
             {
                 AvailableRelease = latest;
                 UpdateStatus = string.Empty;
