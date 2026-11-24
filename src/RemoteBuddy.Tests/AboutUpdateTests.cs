@@ -70,6 +70,7 @@ public class AboutUpdateTests
             Assert.Equal(2, checks.Count);
             Assert.Equal(Published, vm.AvailableRelease);
             Assert.Contains(Published.Tag, vm.AvailableVersionText);
+            Assert.False(vm.HasUpdateBadge);
         }
         finally
         {
@@ -98,6 +99,59 @@ public class AboutUpdateTests
         await vm.SetUpdatePageActiveAsync(true);
         Assert.Equal(2, checks);
         Assert.Equal(Published, vm.AvailableRelease);
+    }
+
+    [Theory]
+    [InlineData(true, 3)]
+    [InlineData(false, 0)]
+    public async Task StartupAndEachAboutVisitCheckOnlyWhenRemindersAreEnabled(bool enabled, int expectedChecks)
+    {
+        int checks = 0;
+        var vm = new AboutViewModel(null, _ =>
+        {
+            checks++;
+            return Task.FromResult(Published);
+        }) { AppVersion = "v26.11.24.116", ReceiveUpdateNotifications = enabled };
+
+        await vm.CheckForUpdateReminderAsync();
+        Assert.Equal(enabled, vm.HasUpdateBadge);
+
+        await vm.SetUpdatePageActiveAsync(true);
+        await vm.SetUpdatePageActiveAsync(false);
+        await vm.SetUpdatePageActiveAsync(true);
+        Assert.Equal(expectedChecks, checks);
+    }
+
+    [Fact]
+    public async Task SidebarBadgeRemainsVisibleAfterLeavingAboutUntilTheOfficialVersionMatches()
+    {
+        var vm = new AboutViewModel(null, _ => Task.FromResult(Published)) { AppVersion = "v26.11.24.116" };
+
+        await vm.SetUpdatePageActiveAsync(true);
+        Assert.True(vm.HasUpdateBadge);
+        await vm.SetUpdatePageActiveAsync(false);
+        Assert.True(vm.HasUpdateBadge);
+        Assert.False(vm.HasAvailableRelease);
+
+        vm.AppVersion = "v26.11.24.117";
+        await vm.SetUpdatePageActiveAsync(true);
+        Assert.False(vm.HasUpdateBadge);
+        Assert.False(vm.HasAvailableRelease);
+    }
+
+    [Fact]
+    public async Task DisablingRemindersImmediatelyClearsAnExistingSidebarBadge()
+    {
+        var vm = new AboutViewModel(null, _ => Task.FromResult(Published)) { AppVersion = "v26.11.24.116" };
+
+        await vm.SetUpdatePageActiveAsync(true);
+        Assert.True(vm.HasUpdateBadge);
+
+        vm.ReceiveUpdateNotifications = false;
+        Assert.False(vm.HasUpdateBadge);
+        await vm.CheckForUpdatesCommand.ExecuteAsync(null);
+        Assert.True(vm.HasAvailableRelease);
+        Assert.False(vm.HasUpdateBadge);
     }
 
     [Theory]

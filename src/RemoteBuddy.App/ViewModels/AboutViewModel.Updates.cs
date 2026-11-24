@@ -23,8 +23,9 @@ public partial class AboutViewModel
             if (!SetProperty(ref _receiveUpdateNotifications, value)) return;
 
             _config?.Update(cfg => cfg.ReceiveUpdateNotifications = value);
+            if (!value) HasUpdateBadge = false;
             ResetUpdateCheck();
-            if (value && _updatePageActive) _ = QueryReleaseAsync(manual: false);
+            if (_updatePageActive) _ = CheckForUpdateReminderAsync();
         }
     }
 
@@ -34,6 +35,12 @@ public partial class AboutViewModel
 
     [ObservableProperty]
     private string _updateStatus = string.Empty;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(UpdateBadgeDescription))]
+    private bool _hasUpdateBadge;
+
+    public string UpdateBadgeDescription => HasUpdateBadge ? "有可下载的新版本" : string.Empty;
 
     private WindowsRelease? _availableRelease;
     internal WindowsRelease? AvailableRelease
@@ -57,10 +64,13 @@ public partial class AboutViewModel
         if (_updatePageActive == active) return Task.CompletedTask;
         _updatePageActive = active;
         ResetUpdateCheck();
-        return active && ReceiveUpdateNotifications ? QueryReleaseAsync(manual: false) : Task.CompletedTask;
+        return active ? CheckForUpdateReminderAsync() : Task.CompletedTask;
     }
 
-    private void ResetUpdateCheck()
+    internal Task CheckForUpdateReminderAsync() =>
+        ReceiveUpdateNotifications ? QueryReleaseAsync(manual: false) : Task.CompletedTask;
+
+    internal void ResetUpdateCheck()
     {
         var pending = _updateCheck;
         _updateCheck = null;
@@ -91,7 +101,9 @@ public partial class AboutViewModel
             if (!ReferenceEquals(_updateCheck, request)) return;
 
             var installed = WindowsRelease.ParseVersion(AppVersion);
-            if (latest.Version != installed)
+            bool hasDifferentVersion = latest.Version != installed;
+            HasUpdateBadge = ReceiveUpdateNotifications && hasDifferentVersion;
+            if (hasDifferentVersion)
             {
                 AvailableRelease = latest;
                 UpdateStatus = string.Empty;

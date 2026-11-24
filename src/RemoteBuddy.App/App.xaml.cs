@@ -170,6 +170,7 @@ public partial class App : Application
         }
 
         ShutdownMode = ShutdownMode.OnMainWindowClose;
+        _ = _mainViewModel.AboutVm.CheckForUpdateReminderAsync();
         AppLogger.Info("Application startup sequence completed successfully", "App");
     }
 

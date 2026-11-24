@@ -1218,7 +1218,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ResetGestures();
         GeneralVm.PreferencesChanged -= OnGeneralPreferencesChanged;
         SettingsVm.PreferencesChanged -= OnSettingsPreferencesChanged;
-        _ = AboutVm.SetUpdatePageActiveAsync(false);
+        AboutVm.ResetUpdateCheck();
         AboutVm.PreferencesChanged -= OnAboutPreferencesChanged;
         GeneralVm.Dispose();
         MappingVm.PropertyChanged -= OnMappingSettingsChanged;
