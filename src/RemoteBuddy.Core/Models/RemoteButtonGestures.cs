@@ -63,8 +63,8 @@ public sealed class RemoteButtonGestures
             _presses.Add(button, press);
             if (!press.HasDoubleClick && !press.HasLongPress)
             {
-                Fire(button, press.SingleClick);
                 press.FiredOnPress = true;
+                Fire(button, press.SingleClick);
             }
         }
 
@@ -107,20 +107,36 @@ public sealed class RemoteButtonGestures
 
     private void Repeat(Press press, int elapsed)
     {
+        if (!press.IsDown || !_presses.TryGetValue(press.Button, out var current) || !ReferenceEquals(current, press))
+            return;
+
         press.FiredOnPress = true;
         Fire(press.Button, press.SingleClick);
         int next = elapsed + RepeatIntervalMilliseconds;
-        if (next <= MaximumRepeatMilliseconds)
+        if (next <= MaximumRepeatMilliseconds &&
+            press.IsDown &&
+            _presses.TryGetValue(press.Button, out current) &&
+            ReferenceEquals(current, press))
+        {
             Schedule(press, RepeatIntervalMilliseconds, () => Repeat(press, next));
+        }
     }
 
     private void Schedule(Press press, int delay, Action callback)
     {
-        press.CancelTimer = _schedule(delay, () =>
+        bool cancelled = false;
+        Action? innerCancel = null;
+        innerCancel = _schedule(delay, () =>
         {
+            if (cancelled) return;
             press.CancelTimer = null;
             callback();
         });
+        press.CancelTimer = () =>
+        {
+            cancelled = true;
+            innerCancel?.Invoke();
+        };
     }
 
     private void Fire(RemoteButton button, ButtonAssignment assignment)

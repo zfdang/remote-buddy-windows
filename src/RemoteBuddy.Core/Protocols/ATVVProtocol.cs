@@ -158,6 +158,8 @@ public static class ATVVProtocol
 
 public sealed class ATVVFrameAccumulator
 {
+    public const int MaxBufferBytes = 64 * 1024;
+
     public delegate void SpanAction(ReadOnlySpan<byte> frame);
 
     private byte[] _buffer = new byte[1024];
@@ -211,7 +213,12 @@ public sealed class ATVVFrameAccumulator
 
     public void Append(ReadOnlySpan<byte> data, int frameSize, SpanAction onFrame)
     {
-        if (frameSize <= 0) return;
+        if (frameSize <= 0 || data.IsEmpty) return;
+        if (data.Length > MaxBufferBytes)
+        {
+            Reset();
+            return;
+        }
         EnsureCapacity(data.Length);
         data.CopyTo(_buffer.AsSpan(_offset + _count));
         _count += data.Length;
@@ -271,7 +278,14 @@ public sealed class ATVVFrameAccumulator
             return;
         }
 
-        int newSize = Math.Max(_buffer.Length * 2, _count + additionalBytes);
+        if (_count + additionalBytes > MaxBufferBytes)
+        {
+            // Bound memory growth if partial frames accumulate without matching frameSize.
+            Reset();
+            return;
+        }
+
+        int newSize = Math.Min(MaxBufferBytes, Math.Max(_buffer.Length * 2, _count + additionalBytes));
         var next = new byte[newSize];
         if (_count > 0)
         {

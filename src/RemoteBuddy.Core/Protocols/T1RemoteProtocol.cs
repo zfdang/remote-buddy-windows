@@ -27,14 +27,14 @@ public static class T1RemoteProtocol
         "t1-remote",
         "t1 remote",
         "t1_remote",
-        "t1"
+        "t1remote"
     };
 
     public static bool IsCandidate(string? name)
     {
         if (string.IsNullOrWhiteSpace(name)) return false;
         string clean = name.Trim().ToLowerInvariant().Replace("_", " ").Replace("-", " ");
-        if (clean == "t1" || clean.Contains("t1 remote"))
+        if (clean == "t1" || clean.Contains("t1 remote") || clean.Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains("t1"))
         {
             return true;
         }
@@ -72,15 +72,23 @@ public static class T1RemoteProtocol
         byte reportId = data[0];
         ReadOnlySpan<byte> payload = data;
 
-        // Strip leading report ID if present
-        if (reportId is KeyboardReportId or ConsumerReportId or SystemControlReportId or MouseReportId or VendorReportId)
+        // Strip leading report ID only when length matches a report-ID-prefixed frame,
+        // so 8-byte no-ID keyboard reports with modifier bits (0x01..0x04) are not truncated.
+        bool hasReportId =
+            (reportId == KeyboardReportId && data.Length == 9) ||
+            (reportId == ConsumerReportId && data.Length is 3 or 5) ||
+            (reportId == SystemControlReportId && data.Length == 2) ||
+            (reportId == MouseReportId && data.Length is >= 2 and not 8) ||
+            (reportId == VendorReportId && data.Length is >= 2 and not 8);
+
+        if (hasReportId)
         {
             payload = data[1..];
         }
         else
         {
             // If data starts without report ID, infer by length
-            if (data.Length >= 8) reportId = KeyboardReportId;
+            if (data.Length == 8) reportId = KeyboardReportId;
             else if (data.Length == 2) reportId = ConsumerReportId;
             else if (data.Length == 1) reportId = SystemControlReportId;
             else return new DecodeResult(DecodeStatus.Invalid, new(), false, new());

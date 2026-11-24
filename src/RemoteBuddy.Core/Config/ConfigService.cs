@@ -35,23 +35,6 @@ public class ConfigService
             string dir = Path.Combine(appData, "RemoteBuddy");
             Directory.CreateDirectory(dir);
             _configFilePath = Path.Combine(dir, "config.json");
-
-            // Migrate legacy config if present
-            if (!File.Exists(_configFilePath))
-            {
-                string legacyConfig = Path.Combine(appData, "VoiceInputBuddy", "config.json");
-                if (File.Exists(legacyConfig))
-                {
-                    try
-                    {
-                        File.Copy(legacyConfig, _configFilePath, overwrite: false);
-                    }
-                    catch
-                    {
-                        // Ignore migration copy failures and continue with defaults
-                    }
-                }
-            }
         }
 
         _backupFilePath = _configFilePath + ".bak";
@@ -283,15 +266,15 @@ public class ConfigService
         }
     }
 
-    public void Save()
+    public bool Save()
     {
         lock (_lock)
         {
-            SaveLocked();
+            return SaveLocked();
         }
     }
 
-    private void SaveLocked()
+    private bool SaveLocked()
     {
         var snapshot = CreateSnapshot(Current);
         string tempFile = _configFilePath + $".{Guid.NewGuid():N}.tmp";
@@ -334,10 +317,12 @@ public class ConfigService
             }
 
             AppLogger.Info($"Configuration safely saved to {_configFilePath}", "ConfigService");
+            return true;
         }
         catch (Exception ex)
         {
             AppLogger.Error($"Failed to save configuration to {_configFilePath}", ex, "ConfigService");
+            return false;
         }
         finally
         {

@@ -75,7 +75,8 @@ public sealed class G9N9NSmartToggleSession
                 return false;
 
             long releaseTime = _physicalReleasedAtMs ?? nowMs;
-            if (releaseTime - _startedAtMs < HoldThresholdMs)
+            long elapsed = releaseTime - _startedAtMs;
+            if (elapsed >= 0 && elapsed < HoldThresholdMs)
             {
                 _physicalReleasedAtMs = releaseTime;
                 return true;
@@ -93,7 +94,28 @@ public sealed class G9N9NSmartToggleSession
                 return false;
 
             long releaseTime = _physicalReleasedAtMs ?? nowMs;
-            return (releaseTime - _startedAtMs) < HoldThresholdMs;
+            long elapsed = releaseTime - _startedAtMs;
+            return elapsed >= 0 && elapsed < HoldThresholdMs;
+        }
+    }
+
+    public bool TryBeginReopenOnPhysicalStop(bool isRemoteStop, bool localCloseRequested, long nowMs, out ulong generation)
+    {
+        lock (_lock)
+        {
+            generation = _generation;
+            if (_currentPhase != Phase.PhysicalPressed || !isRemoteStop || localCloseRequested)
+                return false;
+
+            long releaseTime = _physicalReleasedAtMs ?? nowMs;
+            long elapsed = releaseTime - _startedAtMs;
+            if (elapsed < 0 || elapsed >= HoldThresholdMs)
+                return false;
+
+            _generation++;
+            _currentPhase = Phase.AwaitingReopen;
+            generation = _generation;
+            return true;
         }
     }
 
@@ -101,6 +123,7 @@ public sealed class G9N9NSmartToggleSession
     {
         lock (_lock)
         {
+            if (_currentPhase != Phase.PhysicalPressed) return 0;
             _generation++;
             _currentPhase = Phase.AwaitingReopen;
             return _generation;
@@ -139,7 +162,7 @@ public sealed class G9N9NSmartToggleSession
             {
                 Phase.Closing => true,
                 Phase.HandsFreeActive =>
-                    interaction == 0x03 || (incomingSessionId.HasValue && incomingSessionId != activeSessionId),
+                    interaction == 0x03 || (activeSessionId.HasValue && incomingSessionId.HasValue && incomingSessionId.Value != activeSessionId.Value),
                 Phase.AwaitingReopen => interaction == 0x03,
                 Phase.PhysicalPressed => _physicalReleasedAtMs.HasValue && interaction == 0x03,
                 _ => false
