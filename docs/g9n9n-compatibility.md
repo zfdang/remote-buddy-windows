@@ -13,11 +13,11 @@
 | **小米语音遥控器 (`RC003`)** | VID `2717` / PID `32B8`（名称常含 `MI RC`） | BLE GATT ATVV（`AB5E0001`） | Raw Input + BthPort ETW 补取返回与音量加减（含 `0x0064` 八字节报告） | **已在 Windows 11 真机验证**（方向、确认、主页、菜单、返回、音量加减、电源与语音） |
 | **小米遥控器 (`RC001` 等同系)** | VID `2717` | BLE GATT ATVV（`AB5E0001`） | Raw Input + Xiaomi HID/ETW 解析 | 协议共享实现，**Windows 真机验收待补** |
 | **G9N9N — 8 字节索引批次 (`0x0110`)** | `18D1:9450`（ATT 句柄 `0x0029`） | BLE GATT ATVV（`0x08 -> MIC_OPEN -> 0x04`） | BthPort ETW 解析 8 字节索引 `[code, 0..0]`（命中 `0x0029` 后自动锁定） | **已在 Windows 11 真机验证** |
-| **G9N9N — 规范 Report 1 两字节/三字节批次 (`0x0110 / FW 26.2`)** | `18D1:9450`，`HID 0x0110` / 固件 `26.2` | 同上 ATVV 语音链路 | BthPort ETW 解析 2 字节索引 `[code, slot2]` 与含 ID 3 字节 `[0x01, code, slot2]` | 协议实现并通过单元测试，**对应批次 Windows 真机验收待补** |
-| **G9N9N — 1 字节短包批次 (`A0 / FW 26.7`, `0x0110 / FW 26.0`)** | `18D1:9450`，如句柄 `0x0046` | 同上 ATVV 语音链路 | BthPort ETW 直接解析 1 字节索引 `[code]` 与 `[0x00]` 松开（以及双键 2 字节 `[c1, c2]`） | 协议实现并通过单元测试，**对应批次 Windows 真机验收待补** |
+| **G9N9N — 规范 Report 1 两字节/三字节批次 (`0x0110 / FW 26.2`)** | `18D1:9450`，`HID 0x0110` / 固件 `26.2` | 同上 ATVV 语音链路 | BthPort ETW 解析 2 字节索引 `[code, slot2]` 与含 ID 3 字节 `[0x01, code, slot2]`（均解码首键 `code`） | 协议实现并通过单元测试，**对应批次 Windows 真机验收待补** |
+| **G9N9N — 1 字节短包批次 (`A0 / FW 26.7`, `0x0110 / FW 26.0`)** | `18D1:9450`，如句柄 `0x0046` | 同上 ATVV 语音链路 | BthPort ETW 直接解析 1 字节索引 `[code]` 与 `[0x00]` 松开（以及 2 字节 `[c1, c2]`，解码首键 `c1`） | 协议实现并通过单元测试，**对应批次 Windows 真机验收待补** |
 | **G9N9N — `HID 0x011B` Report 2 批次** | `18D1:9450`，`HID 0x011B` | 同上 ATVV 语音链路 | BthPort ETW 解析 2 字节/3 字节小端 Consumer Usage（及含 ID `0x02` 3 字节） | 协议实现并通过单元测试，**对应批次 Windows 真机验收待补** |
 | **Google `GY3LE`** | 同系候选名称识别 | BLE GATT ATVV | 按 G9N9N 同系列规则解析 | **Windows 真机验收待补** |
-| **T1-Remote** | VID `2B54` / PID `1600` | BLE GATT ATVV（16 kHz / 8 kHz 等） | Raw Input / 直接 HID / ETW | **Windows 真机验收待补** |
+| **T1-Remote** | VID `620A` / PID `0407` | BLE GATT ATVV（16 kHz / 8 kHz 等） | Raw Input / 直接 HID / ETW | **Windows 真机验收待补** |
 
 ---
 
@@ -45,7 +45,7 @@
 | --- | --- | --- | --- | --- |
 | **8 字节索引 (`Indexed8Byte`)** | 8 字节 | `[idx, 0, 0, 0, 0, 0, 0, 0]`，`idx = 1..17` | `00 00 00 00 00 00 00 00` | Windows 实测 `0x0029` 样机 |
 | **1 字节索引 (`Indexed1Byte`)** | 1 字节 | `[idx]`，`idx = 1..17` | `00` | `A0 / 26.7`（实测抓包）、`0x0110 / 26.0` |
-| **2 字节索引 (`Indexed2Byte`)** | 2 字节 | `[idx1, idx2]`，`idx1 = 1..17, idx2 = 0..17` | `00 00` (`Release2Byte`) | `0x0110 / 26.2`、`26.7` 双键组合 |
+| **2 字节索引 (`Indexed2Byte`)** | 2 字节 | `[idx1, idx2]`，`idx1 = 1..17, idx2 = 0..17`（遥控器不支持双键组合映射，仅解码首键 `idx1`） | `00 00` (`Release2Byte`) | `0x0110 / 26.2`、`26.7` 两字节载荷 |
 | **2 字节 / 3 字节 Consumer Usage (`ConsumerUsage2Byte` / `ConsumerUsage3Byte`)** | 2 或 3 字节 | 小端 16-bit Consumer Usage `[lo, hi]` 或 `[lo, hi, 00]` | `00 00` 或 `00 00 00` | `HID 0x011B`（短 2 字节或合规 3 字节） |
 | **含 Report ID 3 字节 (`ReportId3Byte`)** | 3 字节 | 首字节 `0x01`（双索引）或 `0x02`（2 字节 Usage） | `01 00 00` / `02 00 00` | 显式带 Report ID 头的特征值 |
 

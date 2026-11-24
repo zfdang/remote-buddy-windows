@@ -169,9 +169,24 @@ public class MainViewModelTests
         {
             var config = new ConfigService(path);
             var bt = new TestBluetoothManager();
+            const ulong addr = 0x4754514C6FCC;
+            var dev = new RemoteDevice
+            {
+                Id = "g9",
+                Name = "Chromecast Remote",
+                BluetoothAddress = addr,
+                ModelType = RemoteModelType.GoogleG9N9N
+            };
+            config.Current.Devices.Add(dev);
+            bt.IsConnected = true;
+            bt.IsReady = true;
+            bt.ConnectedDeviceAddress = addr;
+            bt.ReadyAddresses.Add(addr);
             using var vm = new MainViewModel(config, bt);
 
             vm.HandleDeviceRemoval(new IntPtr(0x1234));
+            Assert.Equal("General", vm.ActivePageName);
+            Assert.Single(vm.MappingVm.Devices);
         }
         finally
         {
@@ -761,11 +776,14 @@ public class MainViewModelTests
         int capturedPid = -1;
         RemoteBuddy.Platform.Windows.Input.EtwButtonSource[]? capturedSources = null;
 
+        string pipeA = "RemoteBuddy_ChromecastEtw_" + Guid.NewGuid().ToString("N");
+        string pipeB = "RemoteBuddy_ChromecastEtw_" + Guid.NewGuid().ToString("N");
+
         bool handled4Arg = RemoteBuddy.App.App.TryRunChromecastWorker(
-            ["--chromecast-worker", "pipeA", "12345", encoded],
+            ["--chromecast-worker", pipeA, "12345", encoded],
             (pipe, pid, s) => { capturedPipe = pipe; capturedPid = pid; capturedSources = s; });
         Assert.True(handled4Arg);
-        Assert.Equal("pipeA", capturedPipe);
+        Assert.Equal(pipeA, capturedPipe);
         Assert.Equal(12345, capturedPid);
         Assert.NotNull(capturedSources);
         Assert.Single(capturedSources);
@@ -774,12 +792,19 @@ public class MainViewModelTests
         Assert.Equal(new ushort[] { 0x0052, 0x0055 }, capturedSources[0].ExcludedAttributes);
 
         bool handled3Arg = RemoteBuddy.App.App.TryRunChromecastWorker(
-            ["--chromecast-worker", "pipeB", encoded],
+            ["--chromecast-worker", pipeB, encoded],
             (pipe, pid, s) => { capturedPipe = pipe; capturedPid = pid; capturedSources = s; });
         Assert.True(handled3Arg);
-        Assert.Equal("pipeB", capturedPipe);
+        Assert.Equal(pipeB, capturedPipe);
         Assert.Equal(0, capturedPid);
         Assert.Single(capturedSources!);
+
+        // Invalid pipe names must be rejected without invoking workerRunner
+        bool invokedInvalid = false;
+        Assert.True(RemoteBuddy.App.App.TryRunChromecastWorker(
+            ["--chromecast-worker", "invalid-pipe", encoded],
+            (_, _, _) => invokedInvalid = true));
+        Assert.False(invokedInvalid);
     }
 
     [Fact]
@@ -1237,5 +1262,54 @@ public class MainViewModelTests
         {
             if (File.Exists(path)) File.Delete(path);
         }
+    }
+
+    [Fact]
+    public void GeneralAndSettingsViewModels_DoNotWriteConfigOnConstruction_AndStayInSync()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vm-sync-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new TestBluetoothManager();
+            using var vm = new MainViewModel(config, bt);
+
+            Assert.False(File.Exists(path));
+            bool initialTray = vm.GeneralVm.MinimizeToTrayOnClose;
+            Assert.Equal(initialTray, vm.SettingsVm.MinimizeToTrayOnClose);
+
+            vm.GeneralVm.MinimizeToTrayOnClose = !initialTray;
+            Assert.Equal(!initialTray, vm.SettingsVm.MinimizeToTrayOnClose);
+            Assert.Equal(!initialTray, config.Current.MinimizeToTrayOnClose);
+
+            vm.SettingsVm.MinimizeToTrayOnClose = initialTray;
+            Assert.Equal(initialTray, vm.GeneralVm.MinimizeToTrayOnClose);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData(@"USB\VID_8087&PID_0032\5&1A2B3C4D&0&14", true)]
+    [InlineData(@"PCI\VEN_8086&DEV_51F0&SUBSYS_00908086&REV_01\3&11583659&0&A3", true)]
+    [InlineData(@"USB\VID_0A12&PID_0001\'; Restart-Computer #", false)]
+    [InlineData(@"USB\VID_0A12&PID_0001\$(calc)", false)]
+    [InlineData(@"USB\VID_0A12\", false)]
+    [InlineData("", false)]
+    public void BluetoothAdapterHelper_IsValidPnpInstanceId_FiltersMetacharacters(string instanceId, bool expected)
+    {
+        Assert.Equal(expected, RemoteBuddy.Platform.Windows.Bluetooth.BluetoothAdapterHelper.IsValidPnpInstanceId(instanceId));
+    }
+
+    [Theory]
+    [InlineData("\"C:\\Program Files\\Remote Buddy\\RemoteBuddy.App.exe\" --minimized", @"C:\Program Files\Remote Buddy\RemoteBuddy.App.exe")]
+    [InlineData("C:\\Tools\\RemoteBuddy.App.exe --minimized", @"C:\Tools\RemoteBuddy.App.exe")]
+    [InlineData("C:\\Program Files\\Remote Buddy\\RemoteBuddy.App.exe --minimized", @"C:\Program Files\Remote Buddy\RemoteBuddy.App.exe")]
+    [InlineData("   ", null)]
+    public void StartupService_ExtractExecutablePath_ParsesQuotedAndUnquotedPaths(string regValue, string? expectedPath)
+    {
+        Assert.Equal(expectedPath, RemoteBuddy.Platform.Windows.Services.StartupService.ExtractExecutablePath(regValue));
     }
 }

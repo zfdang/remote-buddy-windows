@@ -102,5 +102,29 @@ public class G9N9NProtocolTests
             byte[] fReport = [0x01, 0x00, 0x00, fKey, 0x00, 0x00, 0x00, 0x00, 0x00];
             Assert.False(XiaomiProtocol.TryParseReport(fReport, out _));
         }
+
+        // 8-byte boot keyboard with Ctrl+Shift (0x03) modifier + Up (0x52) must not be misrejected as mouse Report ID 3
+        byte[] ctrlShiftUp8 = [0x03, 0x00, 0x52, 0x00, 0x00, 0x00, 0x00, 0x00];
+        Assert.True(XiaomiProtocol.TryParseReport(ctrlShiftUp8, out var ctrlShiftUpButtons));
+        Assert.Equal([RemoteButton.Up], ctrlShiftUpButtons);
+    }
+
+    [Fact]
+    public void TryParseReport_TwoByteNoIdPowerAndNameBoundaryRegression()
+    {
+        // 2-byte no-Report-ID Power [0x01, 0x00] must decode to Power, not be stripped as Report ID 1
+        byte[] twoBytePower = [0x01, 0x00];
+        Assert.True(G9N9NProtocol.TryParseReport(twoBytePower, out var powerButtons));
+        Assert.Equal([RemoteButton.Power], powerButtons);
+
+        // Even >=6 byte packet starting with 0x02 must not strip 0x02 as Report ID 2
+        byte[] evenSix = [0x02, 0x00, 0x00, 0x00, 0x00, 0x00];
+        Assert.False(G9N9NProtocol.TryParseReport(evenSix, out _));
+
+        // Word-boundary Xiaomi matching: "HDMI Audio" and "Origami" must not match "mi "
+        Assert.False(XiaomiProtocol.IsCandidate("HDMI Audio"));
+        Assert.False(XiaomiProtocol.IsCandidate("Origami BT"));
+        Assert.True(XiaomiProtocol.IsCandidate("MI Remote"));
+        Assert.True(XiaomiProtocol.IsCandidate("MI"));
     }
 }

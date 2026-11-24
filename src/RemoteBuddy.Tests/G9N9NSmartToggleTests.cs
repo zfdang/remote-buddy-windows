@@ -131,6 +131,31 @@ public class G9N9NSmartToggleTests
         });
 
         Assert.Empty(exceptions);
+        Assert.True(Enum.IsDefined(session.CurrentPhase));
+        Assert.True(session.Generation > 0);
+        session.Reset();
+        Assert.Equal(G9N9NSmartToggleSession.Phase.Idle, session.CurrentPhase);
+    }
+
+    [Fact]
+    public void G9N9NSmartToggleSession_PhaseGuardsAndNullSessionId_AreSafe()
+    {
+        var session = new G9N9NSmartToggleSession();
+
+        // EnterAwaitingReopen must reject non-PhysicalPressed phases
+        Assert.Equal(0UL, session.EnterAwaitingReopen());
+        Assert.Equal(G9N9NSmartToggleSession.Phase.Idle, session.CurrentPhase);
+
+        // Atomic TryBeginReopenOnPhysicalStop transitions in one step
+        session.BeginPhysicalPress(1000);
+        Assert.True(session.TryBeginReopenOnPhysicalStop(isRemoteStop: true, localCloseRequested: false, 1200, out ulong gen));
+        Assert.True(gen >= 2);
+        Assert.Equal(G9N9NSmartToggleSession.Phase.AwaitingReopen, session.CurrentPhase);
+
+        // Null activeSessionId with non-0x03 interaction must not falsely stop HandsFreeActive
+        Assert.NotNull(session.EnterHandsFreeActive());
+        Assert.False(session.ShouldStopOnRemoteAudioStart(interaction: 0x01, activeSessionId: null, incomingSessionId: 5));
+        Assert.True(session.ShouldStopOnRemoteAudioStart(interaction: 0x01, activeSessionId: 1, incomingSessionId: 5));
     }
 
     [Fact]

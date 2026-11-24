@@ -50,6 +50,8 @@ if (-not $NoBuild) {
     Write-Host "`n=== Building Solution ($Configuration) ===" -ForegroundColor Cyan
     & dotnet build RemoteBuddy.sln -c $Configuration
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+} else {
+    Write-Host "`n[WARN] -NoBuild specified: running tests against existing $Configuration build output." -ForegroundColor Yellow
 }
 
 # 3. Run unit tests

@@ -28,6 +28,7 @@ public class ConvertersAndViewModelTests
         public Guid? ConnectedDeviceContainerId { get; set; } = null;
         public RemoteDeviceInformation? ConnectedDeviceInformation { get; private set; }
         public G9N9NVoiceButtonMode VoiceButtonMode { get; set; } = G9N9NVoiceButtonMode.SmartToggle;
+        public bool ConnectResult { get; set; } = true;
 
         public event Action<RemoteDevice>? DeviceDiscovered;
         public event Action<ulong, bool, string>? ConnectionStatusChanged;
@@ -56,6 +57,7 @@ public class ConvertersAndViewModelTests
         public void StopScan() => StopScanning();
         public Task<bool> ConnectAsync(ulong bluetoothAddress)
         {
+            if (!ConnectResult) return Task.FromResult(false);
             IsConnected = true;
             ConnectedDeviceAddress = bluetoothAddress;
             return Task.FromResult(true);
@@ -175,24 +177,32 @@ public class ConvertersAndViewModelTests
     public void DevicesViewModel_RemoveDevice_RemovesFromConfigAndList()
     {
         string path = Path.Combine(Path.GetTempPath(), $"vib-dev-{Guid.NewGuid():N}.json");
-        var config = new ConfigService(path);
-        var dev1 = new RemoteDevice { Id = "dev1", BluetoothAddress = 1, Name = "Remote 1" };
-        var dev2 = new RemoteDevice { Id = "dev2", BluetoothAddress = 2, Name = "Remote 2" };
-        config.Current.Devices.AddRange([dev1, dev2]);
-        config.Current.SelectedDeviceId = dev1.Id;
+        try
+        {
+            var config = new ConfigService(path);
+            var dev1 = new RemoteDevice { Id = "dev1", BluetoothAddress = 1, Name = "Remote 1" };
+            var dev2 = new RemoteDevice { Id = "dev2", BluetoothAddress = 2, Name = "Remote 2" };
+            config.Current.Devices.AddRange([dev1, dev2]);
+            config.Current.SelectedDeviceId = dev1.Id;
 
-        var dummyBt = new DummyBluetoothManager();
-        DevicesViewModel.ConfirmDeviceRemovalHandler = _ => true;
-        var vm = new DevicesViewModel(config, dummyBt);
+            var dummyBt = new DummyBluetoothManager();
+            DevicesViewModel.ConfirmDeviceRemovalHandler = _ => true;
+            using var vm = new DevicesViewModel(config, dummyBt);
 
-        Assert.Equal(2, vm.DiscoveredDevices.Count);
+            Assert.Equal(2, vm.DiscoveredDevices.Count);
 
-        vm.RemoveDevice(dev1);
+            vm.RemoveDevice(dev1);
 
-        Assert.Single(vm.DiscoveredDevices);
-        Assert.Equal("dev2", vm.DiscoveredDevices[0].Id);
-        Assert.Single(config.Current.Devices);
-        Assert.Null(config.Current.SelectedDeviceId);
+            Assert.Single(vm.DiscoveredDevices);
+            Assert.Equal("dev2", vm.DiscoveredDevices[0].Id);
+            Assert.Single(config.Current.Devices);
+            Assert.Null(config.Current.SelectedDeviceId);
+        }
+        finally
+        {
+            DevicesViewModel.ConfirmDeviceRemovalHandler = null;
+            if (File.Exists(path)) File.Delete(path);
+        }
     }
 
     [Fact]
@@ -673,5 +683,29 @@ public class ConvertersAndViewModelTests
         Assert.True(recorder.OnKeyDown(Key.Escape, Key.None, ModifierKeys.None, out captured, out cancelled));
         Assert.Null(captured);
         Assert.True(cancelled);
+    }
+
+    [Fact]
+    public async Task DevicesViewModel_ConnectFailure_SurfacesReadableFeedback()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-devfail-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new DummyBluetoothManager { ConnectResult = false };
+            using var vm = new DevicesViewModel(config, bt);
+            var dev = new RemoteDevice { Id = "d1", Name = "Chromecast", BluetoothAddress = 0x112233445566 };
+
+            await vm.ConnectDeviceAsync(dev);
+
+            Assert.True(vm.HasConnectionFeedback);
+            Assert.Contains("Chromecast", vm.ConnectionFeedbackMessage);
+            vm.DismissConnectionFeedback();
+            Assert.False(vm.HasConnectionFeedback);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
     }
 }

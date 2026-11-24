@@ -93,9 +93,25 @@ public class HidDeviceReaderTests
     [Fact]
     public void VirtualAudioAuditor_ResetDeviceCache_ClearsCachedEndpointId()
     {
-        VirtualAudioAuditor.ResetDeviceCache();
-        // Should not throw on null device
-        VirtualAudioAuditor.EnsureEndpointUnmutedAndMaxVolume(null);
+        try
+        {
+            VirtualAudioAuditor.StatusOverride = DriverReadinessStatus.Disabled;
+            Assert.Equal(DriverReadinessStatus.Disabled, VirtualAudioAuditor.AuditCableInputDevice());
+
+            VirtualAudioAuditor.StatusOverride = null;
+            VirtualAudioAuditor.ResetDeviceCache();
+            var freshStatus = VirtualAudioAuditor.AuditCableInputDevice(forceRefresh: false);
+            Assert.True(Enum.IsDefined(freshStatus));
+            Assert.Equal(freshStatus, VirtualAudioAuditor.GetCachedStatus());
+
+            // Should not throw on null device
+            VirtualAudioAuditor.EnsureEndpointUnmutedAndMaxVolume(null);
+        }
+        finally
+        {
+            VirtualAudioAuditor.StatusOverride = null;
+            VirtualAudioAuditor.ResetDeviceCache();
+        }
     }
 
     [Fact]
