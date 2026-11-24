@@ -38,7 +38,7 @@ ATVV 是 Google Android TV 生态的低功耗蓝牙语音标准，小米与 Chro
 | `0x0A` | **AUDIO_SYNC** | 遥控器 -> 主机 | `bytes[0]=0x0A, bytes[1..3]=Reserved, bytes[4..5]=Predictor(大端 Int16), bytes[6]=StepIndex` | **关键同步报文**：由于 BLE 丢包或重连，遥控器在流中定期发送 ADPCM 状态，**主机解码器必须立即用此值重置 Predictor 与 StepIndex**，否则解码将产生严重白噪声或啸叫。 |
 | `0x0D` | **MIC_CLOSE** | 主机 -> 遥控器 | `[0x0D, SessionID]` (v1.0+) | 主机请求关闭麦克风。**必须带上 `AUDIO_START` 返回的动态 SessionID**。 |
 | `0x00` | **AUDIO_STOP** | 遥控器 -> 主机 | `[0x00]` | **遥控器停止确认**：遥控器确认停止音频发送。主机接收到此报文后排空残留帧。 |
-| `0x0E` | **MIC_EXTEND** | 主机 -> 遥控器 | `[0x0E, SessionID]` | **长按保活命令**：按住说话超过 10 秒时，主机必须每隔数秒下发一次保活，否则部分固件会自动超时挂断音频流。 |
+| `0x0E` | **MIC_EXTEND** | 主机 -> 遥控器 | `[0x0E, SessionID]` | **长按保活命令**：ATVV v1.0+ 语音会话建立后，主机每隔 8 秒下发一次保活，防止固件超时自动挂断音频流。 |
 
 ---
 
@@ -58,7 +58,7 @@ stateDiagram-v2
         [*] --> ReceivingAudio: Audio 特征持续收到 ADPCM 包
         ReceivingAudio --> SyncDecoder: 收到 0x0A (AUDIO_SYNC) -> 校准解码器
         SyncDecoder --> ReceivingAudio
-        ReceivingAudio --> KeepAlive: 每 10 秒下发 0x0E (MIC_EXTEND, SessionID)
+        ReceivingAudio --> KeepAlive: 每 8 秒下发 0x0E (MIC_EXTEND, SessionID)
         KeepAlive --> ReceivingAudio
     }
     

@@ -15,6 +15,9 @@ public class T1RemoteProtocolTests
     [InlineData("t1_remote", true)]
     [InlineData("t1", true)]
     [InlineData("T1", true)]
+    [InlineData("Air Mouse T1", true)]
+    [InlineData("BT100", false)]
+    [InlineData("Headset1", false)]
     [InlineData("Xiaomi Remote", false)]
     [InlineData("Chromecast Remote", false)]
     [InlineData("", false)]
@@ -22,6 +25,20 @@ public class T1RemoteProtocolTests
     public void IsCandidate_MatchesExpectedNames(string? name, bool expected)
     {
         Assert.Equal(expected, T1RemoteProtocol.IsCandidate(name));
+    }
+
+    [Theory]
+    [InlineData(0x01)] // Left Ctrl
+    [InlineData(0x02)] // Left Shift
+    [InlineData(0x03)] // Ctrl + Shift
+    [InlineData(0x04)] // Left Alt
+    public void Report1_EightByteWithoutReportId_DoesNotStripModifierByte(byte modifier)
+    {
+        byte[] report8WithMenu = [modifier, 0, 0x65, 0, 0, 0, 0, 0];
+        Assert.True(T1RemoteProtocol.TryParseReport(report8WithMenu, out var buttons, out bool voiceHold));
+        Assert.Single(buttons);
+        Assert.Equal(RemoteButton.Menu, buttons[0]);
+        Assert.False(voiceHold);
     }
 
     [Fact]

@@ -115,4 +115,61 @@ public sealed class RemoteButtonGesturesTests
         fixture.Advance(1000);
         Assert.Equal(["Up", "Up"], fixture.Fired);
     }
+
+    [Fact]
+    public void CancelledStaleCallbackDoesNotFireOrRescheduleRepeat()
+    {
+        var queued = new List<(Action Invoke, Action Cancel)>();
+        var fired = new List<string?>();
+        var gestures = new RemoteButtonGestures(
+            (_, cb) =>
+            {
+                Action cancel = () => { };
+                queued.Add((cb, cancel));
+                return () => { }; // Simulate host timer whose cancel doesn't pull an already-queued callback
+            },
+            a => fired.Add(a.Shortcut));
+
+        var mapping = new ButtonMapping
+        {
+            Button = RemoteButton.Down,
+            ClickAction = ButtonActionType.KeyboardShortcut,
+            ClickShortcut = "Down",
+            LongPressAction = ButtonActionType.ContinuousRepeat
+        };
+
+        gestures.HandleDown(mapping);
+        Assert.Single(fired);
+        Assert.Single(queued);
+
+        gestures.HandleUp(RemoteButton.Down);
+        // Fire stale callback that was already queued before HandleUp cancelled it
+        queued[0].Invoke();
+        Assert.Single(fired);
+        Assert.Single(queued); // Must not reschedule repeat after release
+    }
+
+    [Fact]
+    public void ReentrantReleaseDuringSingleClickFireDoesNotFireTwice()
+    {
+        RemoteButtonGestures? gestures = null;
+        int fireCount = 0;
+        var mapping = new ButtonMapping
+        {
+            Button = RemoteButton.Ok,
+            ClickAction = ButtonActionType.KeyboardShortcut,
+            ClickShortcut = "Return"
+        };
+
+        gestures = new RemoteButtonGestures(
+            (_, _) => () => { },
+            _ =>
+            {
+                fireCount++;
+                gestures!.HandleUp(RemoteButton.Ok);
+            });
+
+        gestures.HandleDown(mapping);
+        Assert.Equal(1, fireCount);
+    }
 }

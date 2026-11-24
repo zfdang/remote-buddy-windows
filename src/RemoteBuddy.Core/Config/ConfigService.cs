@@ -35,27 +35,54 @@ public class ConfigService
             string dir = Path.Combine(appData, "RemoteBuddy");
             Directory.CreateDirectory(dir);
             _configFilePath = Path.Combine(dir, "config.json");
-
-            // Migrate legacy config if present
-            if (!File.Exists(_configFilePath))
-            {
-                string legacyConfig = Path.Combine(appData, "VoiceInputBuddy", "config.json");
-                if (File.Exists(legacyConfig))
-                {
-                    try
-                    {
-                        File.Copy(legacyConfig, _configFilePath, overwrite: false);
-                    }
-                    catch
-                    {
-                        // Ignore migration copy failures and continue with defaults
-                    }
-                }
-            }
         }
 
         _backupFilePath = _configFilePath + ".bak";
         Current = Load();
+    }
+
+    public static bool ReadDiagnosticLoggingEnabled(string? customPath = null)
+    {
+        string configPath;
+        if (!string.IsNullOrEmpty(customPath))
+        {
+            configPath = customPath;
+        }
+        else
+        {
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            configPath = Path.Combine(appData, "RemoteBuddy", "config.json");
+        }
+
+        foreach (string candidate in new[] { configPath, configPath + ".bak" })
+        {
+            try
+            {
+                if (!File.Exists(candidate)) continue;
+                string json = File.ReadAllText(candidate);
+                if (string.IsNullOrWhiteSpace(json)) continue;
+
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.ValueKind != JsonValueKind.Object) continue;
+
+                foreach (var prop in doc.RootElement.EnumerateObject())
+                {
+                    if (string.Equals(prop.Name, nameof(AppConfig.DiagnosticLoggingEnabled), StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (prop.Value.ValueKind == JsonValueKind.True) return true;
+                        if (prop.Value.ValueKind == JsonValueKind.False) return false;
+                    }
+                }
+
+                return true;
+            }
+            catch
+            {
+                // Ignore read/parse errors and try backup or default to enabled without triggering AppLogger.
+            }
+        }
+
+        return true;
     }
 
     public AppConfig Load()
@@ -283,15 +310,15 @@ public class ConfigService
         }
     }
 
-    public void Save()
+    public bool Save()
     {
         lock (_lock)
         {
-            SaveLocked();
+            return SaveLocked();
         }
     }
 
-    private void SaveLocked()
+    private bool SaveLocked()
     {
         var snapshot = CreateSnapshot(Current);
         string tempFile = _configFilePath + $".{Guid.NewGuid():N}.tmp";
@@ -334,10 +361,12 @@ public class ConfigService
             }
 
             AppLogger.Info($"Configuration safely saved to {_configFilePath}", "ConfigService");
+            return true;
         }
         catch (Exception ex)
         {
             AppLogger.Error($"Failed to save configuration to {_configFilePath}", ex, "ConfigService");
+            return false;
         }
         finally
         {
@@ -357,6 +386,7 @@ public class ConfigService
             Language = source.Language,
             LaunchAtStartup = source.LaunchAtStartup,
             MinimizeToTrayOnClose = source.MinimizeToTrayOnClose,
+            DiagnosticLoggingEnabled = source.DiagnosticLoggingEnabled,
             HasCompletedOnboarding = source.HasCompletedOnboarding,
             SelectedDeviceId = source.SelectedDeviceId,
             InputTool = new InputToolConfig

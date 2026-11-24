@@ -70,10 +70,6 @@ public static class G9N9NProtocol
         {
             slice = slice[1..];
         }
-        else if (slice.Length == 2 && slice[0] == 1)
-        {
-            slice = slice[1..];
-        }
 
         if (slice.IsEmpty) return false;
 
@@ -106,7 +102,7 @@ public static class G9N9NProtocol
         if (data.IsEmpty) return false;
 
         ReadOnlySpan<byte> slice = data;
-        if (slice.Length >= 3 && slice[0] == 2)
+        if (slice.Length >= 3 && slice[0] == 2 && (slice.Length % 2 != 0 || (slice.Length == 4 && slice[3] == 0)))
         {
             slice = slice[1..];
         }
@@ -156,14 +152,14 @@ public static class G9N9NProtocol
             return false;
         }
 
-        // With Report ID 1 (Report 1 is 1 byte ID + 1 or 2 bytes data)
-        if (data.Length is 2 or 3 && data[0] == 1)
+        // With Report ID 1 (Report 1 is 1 byte ID + 2 bytes indexed slots)
+        if (data.Length == 3 && data[0] == 1)
         {
             return TryParseReport1(data, out buttons);
         }
 
-        // With Report ID 2 (Report 2 is 1 byte ID + 2 or 4 bytes data)
-        if (data.Length >= 3 && data[0] == 2)
+        // With Report ID 2 (odd length = 1 byte ID + 16-bit usages, or padded 4-byte [0x02, lo, hi, 0x00])
+        if (data.Length >= 3 && data[0] == 2 && (data.Length % 2 != 0 || (data.Length == 4 && data[3] == 0)))
         {
             return TryParseReport2(data, out buttons);
         }
@@ -283,7 +279,8 @@ public static class XiaomiProtocol
     {
         if (string.IsNullOrWhiteSpace(name)) return false;
         string clean = name.Trim().ToLowerInvariant();
-        if (clean.Contains("xiaomi") || clean.Contains("rc001") || clean.Contains("rc003") || clean.Contains("mi "))
+        if (clean.Contains("xiaomi") || clean.Contains("rc001") || clean.Contains("rc003") ||
+            clean == "mi" || clean.StartsWith("mi ", StringComparison.Ordinal) || clean.Contains(" mi "))
         {
             return true;
         }
@@ -313,8 +310,9 @@ public static class XiaomiProtocol
         buttons = new();
         if (data.IsEmpty) return false;
 
-        // Discard mouse reports (Report ID 3) and ATVV packets (e.g. AudioSync 0x0A)
-        if (data.Length >= 3 && data[0] is 0x03 or 0x0A) return false;
+        // Discard mouse reports (Report ID 3) and ATVV packets (e.g. AudioSync 0x0A),
+        // but allow 8-byte no-Report-ID boot keyboard reports where data[0] is modifier bits (e.g. 0x03 = Ctrl+Shift).
+        if (data.Length >= 3 && data.Length != 8 && data[0] is 0x03 or 0x0A) return false;
 
         ReadOnlySpan<byte> slice = data;
         bool hasKeyboardReportId = false;

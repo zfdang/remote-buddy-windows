@@ -359,17 +359,32 @@ public sealed class HidDeviceReader : IDisposable
 
     public void Stop()
     {
-        _cts?.Cancel();
-        _handle?.Dispose();
-        _handle = null;
-        _cts?.Dispose();
-        _cts = null;
-        ActivePath = null;
-        ActiveDeviceInfo = null;
-
+        var toRelease = new List<RemoteButton>();
+        CancellationTokenSource? cts;
+        SafeFileHandle? handle;
         lock (_lock)
         {
-            _pressedButtons.Clear();
+            cts = _cts;
+            _cts = null;
+            handle = _handle;
+            _handle = null;
+            ActivePath = null;
+            ActiveDeviceInfo = null;
+            if (_pressedButtons.Count > 0)
+            {
+                toRelease.AddRange(_pressedButtons);
+                _pressedButtons.Clear();
+            }
+        }
+
+        try { cts?.Cancel(); } catch { }
+        try { handle?.Dispose(); } catch { }
+        try { cts?.Dispose(); } catch { }
+
+        foreach (var btn in toRelease)
+        {
+            AppLogger.Info($"HidDeviceReader event: {btn} Up (stopped)", "HidDeviceReader");
+            ButtonEvent?.Invoke(btn, false);
         }
     }
 

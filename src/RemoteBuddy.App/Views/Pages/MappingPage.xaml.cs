@@ -16,6 +16,7 @@ namespace RemoteBuddy.App.Views.Pages;
 public partial class MappingPage : UserControl
 {
     private MappingViewModel? _mappingViewModel;
+    private readonly VoiceShortcutRecorder _shortcutRecorder = new();
 
     public MappingPage()
     {
@@ -136,11 +137,30 @@ public partial class MappingPage : UserControl
         string message = $"将「{device.Name}」的所有按键恢复为默认映射？\n\n此遥控器的单击、长按和双击自定义映射都会被覆盖，且无法撤销。";
         var owner = Window.GetWindow(this);
         const string title = "恢复所有按键的默认映射";
-        var result = owner == null
-            ? MessageBox.Show(message, title, MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No)
-            : MessageBox.Show(owner, message, title, MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+        var mainVm = (owner?.DataContext ?? Application.Current?.MainWindow?.DataContext) as MainViewModel;
+        if (mainVm != null) mainVm.IsModalConfirmationOpen = true;
+        MessageBoxResult result;
+        try
+        {
+            result = owner == null
+                ? MessageBox.Show(message, title, MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No)
+                : MessageBox.Show(owner, message, title, MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+        }
+        finally
+        {
+            if (mainVm != null) mainVm.IsModalConfirmationOpen = false;
+        }
         if (result == MessageBoxResult.Yes && ReferenceEquals(vm.SelectedDevice, device))
             vm.ResetToDefaults();
+    }
+
+    private void OnRecordShortcutChecked(object sender, RoutedEventArgs e)
+    {
+        _shortcutRecorder.Reset();
+        if (sender is ToggleButton recorder)
+        {
+            recorder.Focus();
+        }
     }
 
     private void RecordShortcut(object sender, KeyEventArgs e)
@@ -148,52 +168,35 @@ public partial class MappingPage : UserControl
         if (sender is not ToggleButton { IsChecked: true, DataContext: MappingGestureViewModel gesture } recorder) return;
         e.Handled = true;
 
-        var key = e.Key == Key.System ? e.SystemKey : e.Key;
-        if (key == Key.Escape && Keyboard.Modifiers == ModifierKeys.None)
+        if (_shortcutRecorder.OnKeyDown(e.Key, e.SystemKey, Keyboard.Modifiers, out var captured, out bool cancelled))
         {
-            recorder.IsChecked = false;
-            return;
+            if (cancelled)
+            {
+                recorder.IsChecked = false;
+            }
+            else if (!string.IsNullOrEmpty(captured))
+            {
+                gesture.Shortcut = captured;
+                recorder.IsChecked = false;
+            }
         }
-
-        if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftAlt or Key.RightAlt or Key.LeftShift or Key.RightShift or Key.LWin or Key.RWin)
-            return;
-
-        var modifiers = Keyboard.Modifiers;
-        var parts = new List<string>();
-        if (modifiers.HasFlag(ModifierKeys.Control)) parts.Add("Ctrl");
-        if (modifiers.HasFlag(ModifierKeys.Alt)) parts.Add("Alt");
-        if (modifiers.HasFlag(ModifierKeys.Shift)) parts.Add("Shift");
-        if (modifiers.HasFlag(ModifierKeys.Windows)) parts.Add("Win");
-        parts.Add(FormatRecordedKey(key));
-
-        var shortcut = string.Join("+", parts);
-        if (!NativeInputSender.TryParseShortcut(shortcut, out _, out _)) return;
-        gesture.Shortcut = shortcut;
-        recorder.IsChecked = false;
     }
 
-    private static string FormatRecordedKey(Key key)
+    private void RecordShortcutKeyUp(object sender, KeyEventArgs e)
     {
-        if (key is >= Key.D0 and <= Key.D9) return ((int)(key - Key.D0)).ToString();
-        return key switch
+        if (sender is not ToggleButton { IsChecked: true, DataContext: MappingGestureViewModel gesture } recorder) return;
+        e.Handled = true;
+
+        if (_shortcutRecorder.OnKeyUp(e.Key, e.SystemKey, out var captured) && !string.IsNullOrEmpty(captured))
         {
-            Key.OemComma => ",",
-            Key.OemPeriod => ".",
-            Key.OemQuestion => "/",
-            Key.OemOpenBrackets => "[",
-            Key.OemCloseBrackets => "]",
-            Key.OemSemicolon => ";",
-            Key.OemQuotes => "'",
-            Key.OemMinus => "-",
-            Key.OemPlus => "=",
-            Key.OemPipe => "\\",
-            Key.OemTilde => "`",
-            _ => key.ToString()
-        };
+            gesture.Shortcut = captured;
+            recorder.IsChecked = false;
+        }
     }
 
     private void StopRecordingShortcut(object sender, KeyboardFocusChangedEventArgs e)
     {
+        _shortcutRecorder.Reset();
         if (sender is ToggleButton recorder) recorder.IsChecked = false;
     }
 

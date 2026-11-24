@@ -13,14 +13,20 @@ namespace RemoteBuddy.App;
 
 public partial class App : Application
 {
+    private const string ShowWindowEventName = @"Local\RemoteBuddy.Windows.ShowWindow";
+
     private ConfigService? _configService;
     private MultiRemoteBluetoothManager? _bluetoothManager;
     private MainViewModel? _mainViewModel;
     private Mutex? _instanceMutex;
+    private EventWaitHandle? _showWindowEvent;
+    private RegisteredWaitHandle? _showWindowWait;
 
     private void OnStartup(object sender, StartupEventArgs e)
     {
-        AppLogger.Initialize();
+        bool noLogArg = e.Args.Any(a => string.Equals(a, "--no-log", StringComparison.OrdinalIgnoreCase));
+        bool loggingEnabled = !noLogArg && ConfigService.ReadDiagnosticLoggingEnabled();
+        AppLogger.Initialize(isEnabled: loggingEnabled);
         AppLogger.Info($"=== Application Starting (PID: {Environment.ProcessId}) ===", "App");
         AppLogger.Info($"OS: {Environment.OSVersion}, .NET Runtime: {Environment.Version}, Args: [{string.Join(", ", e.Args)}]", "App");
 
@@ -36,7 +42,15 @@ public partial class App : Application
             if (!mutex.WaitOne(0))
             {
                 mutex.Dispose();
-                AppLogger.Info("Remote Buddy is already running in this Windows session.", "App");
+                try
+                {
+                    if (EventWaitHandle.TryOpenExisting(ShowWindowEventName, out var showEvent))
+                    {
+                        using (showEvent) showEvent.Set();
+                    }
+                }
+                catch { }
+                AppLogger.Info("Remote Buddy is already running in this Windows session; signaled window restore.", "App");
                 Shutdown(0);
                 return;
             }
@@ -58,12 +72,14 @@ public partial class App : Application
             {
                 AppLogger.Error($"AppDomain UnhandledException object: {args.ExceptionObject}", component: "App");
             }
+            ReleaseKeysOnCrash();
             AppLogger.Flush();
         };
 
         DispatcherUnhandledException += (s, args) =>
         {
             AppLogger.Error("DispatcherUnhandledException encountered", args.Exception, "App");
+            ReleaseKeysOnCrash();
             AppLogger.Flush();
         };
 
@@ -87,6 +103,41 @@ public partial class App : Application
 
         // Ensure HWND is initialized so RawInputReceiver is active for onboarding
         new System.Windows.Interop.WindowInteropHelper(mainWindow).EnsureHandle();
+
+        try
+        {
+            _showWindowEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowWindowEventName);
+            _showWindowWait = ThreadPool.RegisterWaitForSingleObject(
+                _showWindowEvent,
+                (_, timedOut) =>
+                {
+                    if (timedOut) return;
+                    try
+                    {
+                        Dispatcher.BeginInvoke(() =>
+                        {
+                            if (Windows.OfType<OnboardingWindow>().FirstOrDefault(w => w.IsVisible) is { } wizard)
+                            {
+                                if (wizard.WindowState == WindowState.Minimized) wizard.WindowState = WindowState.Normal;
+                                wizard.Activate();
+                                return;
+                            }
+                            if (MainWindow is MainWindow mw && _configService?.Current.HasCompletedOnboarding == true)
+                            {
+                                mw.RestoreWindow();
+                            }
+                        });
+                    }
+                    catch { }
+                },
+                null,
+                Timeout.Infinite,
+                executeOnlyOnce: false);
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Warn($"Failed to register single-instance activation wait handle: {ex.Message}", "App");
+        }
 
         _mainViewModel.RequestOpenWizard += ShowWizardWindow;
 
@@ -154,15 +205,36 @@ public partial class App : Application
         }
     }
 
+    private void ReleaseKeysOnCrash()
+    {
+        try { NativeInputSender.ReleaseAllHeldSyntheticKeys(); } catch { }
+        try { _mainViewModel?.ReleaseVoiceKeysOnCrash(); } catch { }
+    }
+
     protected override void OnExit(ExitEventArgs e)
     {
         AppLogger.Info($"=== Application Exiting (ExitCode: {e.ApplicationExitCode}) ===", "App");
+        _showWindowWait?.Unregister(null);
+        _showWindowWait = null;
+        _showWindowEvent?.Dispose();
+        _showWindowEvent = null;
         _mainViewModel?.Dispose();
         _bluetoothManager?.Dispose();
+        RemoteBuddy.Platform.Windows.Audio.VirtualAudioAuditor.Shutdown();
         AppLogger.Flush();
-        _instanceMutex?.ReleaseMutex();
+        try { _instanceMutex?.ReleaseMutex(); } catch { }
         _instanceMutex?.Dispose();
         base.OnExit(e);
+    }
+
+    internal static bool IsValidWorkerPipeName(string? pipeName)
+    {
+        const string prefix = "RemoteBuddy_ChromecastEtw_";
+        if (string.IsNullOrWhiteSpace(pipeName) || !pipeName.StartsWith(prefix, StringComparison.Ordinal))
+            return false;
+
+        string suffix = pipeName[prefix.Length..];
+        return suffix.Length == 32 && Guid.TryParseExact(suffix, "N", out _);
     }
 
     internal static bool TryRunChromecastWorker(string[] args, Action<string, int, EtwButtonSource[]>? workerRunner = null)
@@ -170,6 +242,11 @@ public partial class App : Application
         if (args.Length < 3 || args[0] != "--chromecast-worker") return false;
 
         string pipeName = args[1];
+        if (!IsValidWorkerPipeName(pipeName))
+        {
+            AppLogger.Warn("Rejected ETW worker startup with invalid pipe name.", "App");
+            return true;
+        }
         int parentPid = 0;
         string encodedSources;
         if (args.Length >= 4 && int.TryParse(args[2], out int parsedPid))

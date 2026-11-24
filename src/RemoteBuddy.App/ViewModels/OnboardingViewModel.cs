@@ -127,12 +127,20 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     private DriverReadinessStatus _driverStatus = DriverReadinessStatus.NotInstalled;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DriverStatusMessage))]
+    private CableOutputReadiness _cableOutputStatus = CableOutputReadiness.Unknown;
+
+    [ObservableProperty]
     private string _cableInstallMessage = string.Empty;
 
     public bool CanInstallCable => DriverStatus == DriverReadinessStatus.NotInstalled;
 
     public string DriverStatusMessage => DriverStatus switch
     {
+        DriverReadinessStatus.Ready when CableOutputStatus == CableOutputReadiness.Disabled =>
+            "⚠️ 检测到 CABLE Input 已就绪，但录音端 CABLE Output 已被禁用，请在 Windows 声音设置中启用后再继续。",
+        DriverReadinessStatus.Ready when CableOutputStatus == CableOutputReadiness.Missing =>
+            "⚠️ 检测到 CABLE Input 已就绪，但未检测到录音端 CABLE Output，请检查系统录音设备或重新安装 VB-CABLE。",
         DriverReadinessStatus.Ready => "✅ VB-CABLE 虚拟麦克风已就绪，音频服务工作正常。",
         DriverReadinessStatus.NotInstalled => "未检测到 VB-CABLE。可在这里下载并安装。",
         DriverReadinessStatus.Disabled => "⚠️ 检测到 CABLE Input 音频设备已被禁用，请在 Windows 声音设置中启用后再继续。",
@@ -497,6 +505,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     }
 
     private bool _isDisposed = false;
+    private int _connectAttemptId;
 
     public void Dispose()
     {
@@ -537,6 +546,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     public void RefreshDriverStatus()
     {
         DriverStatus = VirtualAudioAuditor.AuditCableInputDevice(forceRefresh: true);
+        CableOutputStatus = VirtualAudioAuditor.GetCableOutputStatus();
         OnPropertyChanged(nameof(DriverStatusMessage));
     }
 
@@ -566,29 +576,42 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     public async Task ConnectDeviceAsync(RemoteDevice? device)
     {
         if (device == null) return;
+        int attemptId = Interlocked.Increment(ref _connectAttemptId);
         ValidationError = string.Empty;
         IsDeviceConnected = false;
         DeviceConnectionStatus = $"正在连接 {device.Name} 并协商语音服务，请稍候……";
         AppLogger.Info($"Wizard connect requested: '{device.Name}' (0x{device.BluetoothAddress:X12})", "OnboardingViewModel");
         SelectedDevice = device;
-        _bt.SetDeviceVoiceSettings(device);
-        bool ok = await _bt.ConnectAsync(device.BluetoothAddress);
-        if (ok)
+        try
         {
-            device.IsConnected = true;
-            IsDeviceConnected = true;
-            device.ContainerId = _bt.GetDeviceContainerId(device.BluetoothAddress);
-            if (device.Mappings == null || device.Mappings.Count == 0)
+            _bt.SetDeviceVoiceSettings(device);
+            bool ok = await _bt.ConnectAsync(device.BluetoothAddress);
+            if (attemptId != Volatile.Read(ref _connectAttemptId) || _isDisposed) return;
+
+            if (ok)
             {
-                device.Mappings = RemoteDevice.CreateDefaultMappings(device.ModelType);
+                device.IsConnected = true;
+                IsDeviceConnected = true;
+                device.ContainerId = _bt.GetDeviceContainerId(device.BluetoothAddress);
+                if (device.Mappings == null || device.Mappings.Count == 0)
+                {
+                    device.Mappings = RemoteDevice.CreateDefaultMappings(device.ModelType);
+                }
+                DeviceConnectionStatus = $"语音服务已就绪：{device.Name}";
             }
-            DeviceConnectionStatus = $"语音服务已就绪：{device.Name}";
+            else
+            {
+                DeviceConnectionStatus = $"与 {device.Name} 连接失败。";
+                ValidationError = $"无法与 {device.Name} 建立语音服务。请确保遥控器处于配对状态、电量充足且未被其他设备独占连接。";
+                AppLogger.Warn($"Wizard connection failed: {ValidationError}", "OnboardingViewModel");
+            }
         }
-        else
+        catch (Exception ex)
         {
-            DeviceConnectionStatus = $"与 {device.Name} 连接失败。";
-            ValidationError = $"无法与 {device.Name} 建立语音服务。请确保遥控器处于配对状态、电量充足且未被其他设备独占连接。";
-            AppLogger.Warn($"Wizard connection failed: {ValidationError}", "OnboardingViewModel");
+            if (attemptId != Volatile.Read(ref _connectAttemptId) || _isDisposed) return;
+            AppLogger.Error($"Wizard connection exception for '{device.Name}' (0x{device.BluetoothAddress:X12})", ex, "OnboardingViewModel");
+            DeviceConnectionStatus = $"与 {device.Name} 连接异常。";
+            ValidationError = $"连接 {device.Name} 时出现异常：{ex.Message}";
         }
     }
 
@@ -680,10 +703,12 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             return false;
         }
         ValidationError = string.Empty;
-        _config.Current.InputTool.Tool = SelectedTool;
-        _config.Current.InputTool.TriggerMode = TriggerMode;
-        _config.Current.InputTool.Shortcut = ShortcutText;
-        _config.Save();
+        _config.Update(cfg =>
+        {
+            cfg.InputTool.Tool = SelectedTool;
+            cfg.InputTool.TriggerMode = TriggerMode;
+            cfg.InputTool.Shortcut = ShortcutText;
+        });
         return true;
     }
 
@@ -808,7 +833,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
                 return;
             }
             if (!SaveToolConfig()) return;
-            _config.Current.HasCompletedOnboarding = true;
+            _config.Update(cfg => cfg.HasCompletedOnboarding = true, save: SelectedDevice == null);
         }
         else if (Mode == WizardMode.DeviceOnly)
         {
@@ -841,7 +866,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             SelectedDevice = _config.UpsertDevice(SelectedDevice, select: true, save: true);
             AppLogger.Info($"Wizard completed: device '{SelectedDevice.Name}' (0x{SelectedDevice.BluetoothAddress:X12}) added to configuration", "OnboardingViewModel");
         }
-        else
+        else if (Mode != WizardMode.Full)
         {
             _config.Save();
         }

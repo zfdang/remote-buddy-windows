@@ -9,9 +9,11 @@ namespace RemoteBuddy.Platform.Windows.Input;
 /// <summary>Submits whole keyboard states through the signed USB/IP controller.</summary>
 public sealed class DoubaoUsbKeyboard : IDisposable
 {
+    private readonly object _sync = new();
     private HMContext? _context;
     private HMController? _keyboard;
     private bool _keysHeld;
+    private bool _disposed;
 
     public bool SendDown(string shortcut)
     {
@@ -21,36 +23,43 @@ public sealed class DoubaoUsbKeyboard : IDisposable
             return false;
         }
 
-        try
+        lock (_sync)
         {
-            EnsureKeyboard();
-            _keysHeld = true;
-            HMKey[] keys = key == 0 ? [] : [(HMKey)key];
-            _keyboard!.SubmitKeyboard((HMKeyModifiers)modifiers, keys);
-            return true;
-        }
-        catch (Exception error)
-        {
-            AppLogger.Error("USB/IP keyboard press failed", error, nameof(DoubaoUsbKeyboard));
-            Dispose();
-            return false;
+            if (_disposed) return false;
+            try
+            {
+                EnsureKeyboard();
+                _keysHeld = true;
+                HMKey[] keys = key == 0 ? [] : [(HMKey)key];
+                _keyboard!.SubmitKeyboard((HMKeyModifiers)modifiers, keys);
+                return true;
+            }
+            catch (Exception error)
+            {
+                AppLogger.Error("USB/IP keyboard press failed", error, nameof(DoubaoUsbKeyboard));
+                ResetControllerLocked();
+                return false;
+            }
         }
     }
 
     public bool Release()
     {
-        if (!_keysHeld || _keyboard is null) return true;
-        try
+        lock (_sync)
         {
-            _keyboard.SubmitKeyboard(HMKeyModifiers.None, []);
-            _keysHeld = false;
-            return true;
-        }
-        catch (Exception error)
-        {
-            AppLogger.Error("USB/IP keyboard release failed", error, nameof(DoubaoUsbKeyboard));
-            Dispose();
-            return false;
+            if (!_keysHeld || _keyboard is null) return true;
+            try
+            {
+                _keyboard.SubmitKeyboard(HMKeyModifiers.None, []);
+                _keysHeld = false;
+                return true;
+            }
+            catch (Exception error)
+            {
+                AppLogger.Error("USB/IP keyboard release failed", error, nameof(DoubaoUsbKeyboard));
+                ResetControllerLocked();
+                return false;
+            }
         }
     }
 
@@ -94,8 +103,8 @@ public sealed class DoubaoUsbKeyboard : IDisposable
         }
         finally
         {
-            File.Delete(profilePath);
-            Directory.Delete(directory);
+            try { if (File.Exists(profilePath)) File.Delete(profilePath); } catch { }
+            try { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); } catch { }
         }
     }
 
@@ -140,6 +149,15 @@ public sealed class DoubaoUsbKeyboard : IDisposable
     }
 
     public void Dispose()
+    {
+        lock (_sync)
+        {
+            _disposed = true;
+            ResetControllerLocked();
+        }
+    }
+
+    private void ResetControllerLocked()
     {
         var keyboard = _keyboard;
         var context = _context;

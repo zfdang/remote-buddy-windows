@@ -23,27 +23,8 @@ public static class StartupService
                 ?? Path.Combine(AppContext.BaseDirectory, "RemoteBuddy.exe");
             if (string.IsNullOrEmpty(currentExe)) return true;
 
-            string registeredExe = val.Trim();
-            if (registeredExe.StartsWith('"'))
-            {
-                int endQuote = registeredExe.IndexOf('"', 1);
-                if (endQuote > 1) registeredExe = registeredExe[1..endQuote];
-            }
-            else
-            {
-                if (registeredExe.EndsWith(" --minimized", StringComparison.OrdinalIgnoreCase))
-                {
-                    registeredExe = registeredExe[..^12].Trim();
-                }
-                else
-                {
-                    int space = registeredExe.IndexOf(' ');
-                    if (space > 0 && File.Exists(registeredExe[..space]))
-                    {
-                        registeredExe = registeredExe[..space];
-                    }
-                }
-            }
+            string? registeredExe = ExtractExecutablePath(val);
+            if (string.IsNullOrEmpty(registeredExe)) return false;
 
             try
             {
@@ -51,7 +32,7 @@ public static class StartupService
             }
             catch
             {
-                return val.Contains(currentExe, StringComparison.OrdinalIgnoreCase);
+                return string.Equals(registeredExe, currentExe, StringComparison.OrdinalIgnoreCase);
             }
         }
         catch (Exception ex)
@@ -59,6 +40,36 @@ public static class StartupService
             AppLogger.Warn($"Failed to query Run registry key: {ex.Message}", "StartupService");
             return false;
         }
+    }
+
+    internal static string? ExtractExecutablePath(string? registryValue)
+    {
+        if (string.IsNullOrWhiteSpace(registryValue)) return null;
+        string trimmed = registryValue.Trim();
+        if (trimmed.StartsWith('"'))
+        {
+            int endQuote = trimmed.IndexOf('"', 1);
+            return endQuote > 1 ? trimmed[1..endQuote].Trim() : null;
+        }
+
+        const string minimizedFlag = " --minimized";
+        if (trimmed.EndsWith(minimizedFlag, StringComparison.OrdinalIgnoreCase))
+        {
+            trimmed = trimmed[..^minimizedFlag.Length].TrimEnd();
+        }
+
+        int exeIndex = trimmed.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
+        if (exeIndex >= 0)
+        {
+            int afterExe = exeIndex + 4;
+            if (afterExe == trimmed.Length || char.IsWhiteSpace(trimmed[afterExe]))
+            {
+                return trimmed[..afterExe].Trim();
+            }
+        }
+
+        int space = trimmed.IndexOf(' ');
+        return space > 0 ? trimmed[..space] : trimmed;
     }
 
     public static bool SetLaunchAtStartup(bool enable)

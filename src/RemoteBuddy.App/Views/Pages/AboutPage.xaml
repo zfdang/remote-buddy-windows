@@ -20,10 +20,10 @@
                 </DockPanel>
             </Border>
 
-            <!-- Card 1: Version and System Info -->
+            <!-- Card 1: Version and Platform Info -->
             <Border Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="8" Padding="20" Margin="0,0,0,18">
                 <StackPanel>
-                    <TextBlock Text="版本与运行环境" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,14"/>
+                    <TextBlock Text="版本信息" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,14"/>
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="140"/>
@@ -32,21 +32,13 @@
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="客户端版本" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,3"/>
                         <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding AppVersion}" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,3"/>
 
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="目标平台架构" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,3"/>
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="平台架构" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,3"/>
                         <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Architecture}" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,3"/>
-
-                        <TextBlock Grid.Row="2" Grid.Column="0" Text=".NET 运行时" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,3"/>
-                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Runtime}" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,3"/>
-
-                        <TextBlock Grid.Row="3" Grid.Column="0" Text="操作系统版本" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,3"/>
-                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding OsVersion}" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,3"/>
                     </Grid>
                 </StackPanel>
             </Border>
@@ -56,8 +48,9 @@
                 <DockPanel LastChildFill="False">
                     <StackPanel DockPanel.Dock="Left" MaxWidth="500">
                         <TextBlock Text="诊断日志与故障排查" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
-                        <TextBlock Text="在本地记录蓝牙通信、ATVV 语音协商、按键映射分发等技术排查日志。严禁且不记录任何语音音频或转写文本。"
-                                   FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,4,0,8"/>
+                        <TextBlock Text="仅在需要排查问题时开启；关闭后将不再生成或写入本地日志文件。严禁且不记录任何语音音频或转写文本。"
+                                   FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,4,0,10"/>
+                        <CheckBox Content="启用排错日志" IsChecked="{Binding DiagnosticLoggingEnabled, Mode=TwoWay}" Foreground="#FFF" Margin="0,0,0,8"/>
                         <TextBlock Text="{Binding LogDirectoryPath, StringFormat='存储路径: {0}'}" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap"/>
                     </StackPanel>
                     <Button Content="📁 打开日志文件夹" DockPanel.Dock="Right" VerticalAlignment="Center" Padding="14,8"

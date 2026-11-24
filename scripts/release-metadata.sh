@@ -8,16 +8,19 @@ if [[ "$(git rev-parse --is-shallow-repository 2>/dev/null || echo false)" == "t
 fi
 
 count="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
+if [[ "$count" -ge 1000 ]]; then
+    echo "Warning: Commit count ($count) >= 1000; 3-digit tag suffix wraps modulo 1000." >&2
+fi
 commit_time="$(git show -s --format=%ct HEAD 2>/dev/null || date +%s)"
 date_part="$(python3 - "$commit_time" <<'PY'
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, timezone
 import sys
+tz_utc8 = timezone(timedelta(hours=8))
 try:
     ts = int(sys.argv[1])
-    print(datetime.fromtimestamp(ts, ZoneInfo('Asia/Singapore')).strftime('%y-%m-%d'))
+    print(datetime.fromtimestamp(ts, tz_utc8).strftime('%y-%m-%d'))
 except Exception:
-    print(datetime.now().strftime('%y-%m-%d'))
+    print(datetime.now(tz_utc8).strftime('%y-%m-%d'))
 PY
 )"
 

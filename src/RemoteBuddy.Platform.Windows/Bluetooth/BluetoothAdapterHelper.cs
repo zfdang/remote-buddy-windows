@@ -44,12 +44,12 @@ public static class BluetoothAdapterHelper
         }
     }
 
-    public static void RestartAppAsAdministrator()
+    public static bool RestartAppAsAdministrator()
     {
         try
         {
             string exePath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? "";
-            if (string.IsNullOrEmpty(exePath)) return;
+            if (string.IsNullOrEmpty(exePath)) return false;
 
             var psi = new ProcessStartInfo
             {
@@ -58,13 +58,27 @@ public static class BluetoothAdapterHelper
                 Verb = "runas"
             };
 
-            Process.Start(psi);
-            Environment.Exit(0);
+            return Process.Start(psi) != null;
         }
         catch (Exception ex)
         {
             AppLogger.Warn($"Failed to restart app as administrator: {ex.Message}", "BluetoothAdapterHelper");
+            return false;
         }
+    }
+
+    public static bool IsValidPnpInstanceId(string? instanceId)
+    {
+        if (string.IsNullOrWhiteSpace(instanceId) || instanceId.Length > 256 || instanceId.EndsWith('\\'))
+            return false;
+
+        foreach (char ch in instanceId)
+        {
+            bool valid = ch is (>= 'A' and <= 'Z') or (>= 'a' and <= 'z') or (>= '0' and <= '9')
+                or '\\' or '_' or '&' or '-' or '{' or '}' or '.' or ':' or '#';
+            if (!valid) return false;
+        }
+        return true;
     }
 
     public static List<string> GetBluetoothAdapterInstanceIds()
@@ -83,10 +97,10 @@ public static class BluetoothAdapterHelper
                     int count = Convert.ToInt32(key.GetValue("Count", 0));
                     for (int i = 0; i < count; i++)
                     {
-                        string? id = key.GetValue(i.ToString())?.ToString();
-                        if (!string.IsNullOrWhiteSpace(id))
+                        string? id = key.GetValue(i.ToString())?.ToString()?.Trim();
+                        if (IsValidPnpInstanceId(id))
                         {
-                            result.Add(id);
+                            result.Add(id!);
                         }
                     }
                 }
@@ -108,20 +122,33 @@ public static class BluetoothAdapterHelper
                     Arguments = "-NoProfile -Command \"(Get-PnpDevice -Class Bluetooth | Where-Object { $_.InstanceId -match '^(USB|PCI)' }).InstanceId\"",
                     UseShellExecute = false,
                     CreateNoWindow = true,
-                    RedirectStandardOutput = true
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
                 };
                 using var proc = Process.Start(psi);
                 if (proc != null)
                 {
-                    string output = proc.StandardOutput.ReadToEnd();
-                    proc.WaitForExit(3000);
-                    foreach (var line in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
+                    using var cts = new CancellationTokenSource(5000);
+                    var stdoutTask = proc.StandardOutput.ReadToEndAsync(cts.Token);
+                    var stderrTask = proc.StandardError.ReadToEndAsync(cts.Token);
+                    try
                     {
-                        string trimmed = line.Trim();
-                        if (!string.IsNullOrEmpty(trimmed))
+                        proc.WaitForExitAsync(cts.Token).GetAwaiter().GetResult();
+                        string output = stdoutTask.GetAwaiter().GetResult();
+                        _ = stderrTask.GetAwaiter().GetResult();
+                        foreach (var line in output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries))
                         {
-                            result.Add(trimmed);
+                            string trimmed = line.Trim();
+                            if (IsValidPnpInstanceId(trimmed))
+                            {
+                                result.Add(trimmed);
+                            }
                         }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        AppLogger.Warn("Timed out querying Bluetooth adapters via PowerShell", "BluetoothAdapterHelper");
+                        try { proc.Kill(entireProcessTree: true); } catch { }
                     }
                 }
             }
@@ -186,6 +213,12 @@ public static class BluetoothAdapterHelper
 
     private static async Task<bool> TryRestartAdapterPnpAsync(string id, bool isAdmin)
     {
+        if (!IsValidPnpInstanceId(id))
+        {
+            AppLogger.Warn($"Rejected invalid PnP instance ID: '{id}'", "BluetoothAdapterHelper");
+            return false;
+        }
+
         // 1. Try pnputil /restart-device
         int code = await RunCommandAsync("pnputil.exe", $"/restart-device \"{id}\"", isAdmin);
         if (code == 0) return true;
@@ -226,12 +259,24 @@ public static class BluetoothAdapterHelper
             };
 
             using var proc = Process.Start(psi);
-            if (proc != null)
+            if (proc == null) return -1;
+
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            Task? stdoutTask = isAdmin ? proc.StandardOutput.ReadToEndAsync(timeoutCts.Token) : null;
+            Task? stderrTask = isAdmin ? proc.StandardError.ReadToEndAsync(timeoutCts.Token) : null;
+            try
             {
-                await proc.WaitForExitAsync();
+                await proc.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
+                if (stdoutTask != null) await stdoutTask.ConfigureAwait(false);
+                if (stderrTask != null) await stderrTask.ConfigureAwait(false);
                 return proc.ExitCode;
             }
-            return -1;
+            catch (OperationCanceledException)
+            {
+                AppLogger.Warn($"RunCommandAsync timed out for '{fileName} {args}'", "BluetoothAdapterHelper");
+                try { proc.Kill(entireProcessTree: true); } catch { }
+                return -1;
+            }
         }
         catch (Exception ex)
         {

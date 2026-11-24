@@ -19,9 +19,18 @@ public enum DriverReadinessStatus
     InitializationFailed
 }
 
+public enum CableOutputReadiness
+{
+    Unknown,
+    Active,
+    Disabled,
+    Missing
+}
+
 public static class VirtualAudioAuditor
 {
     private static DriverReadinessStatus _cachedStatus = DriverReadinessStatus.NotInstalled;
+    private static CableOutputReadiness _cableOutputStatus = CableOutputReadiness.Unknown;
     private static DateTime _lastAuditTime = DateTime.MinValue;
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(5);
     private static readonly object _auditLock = new();
@@ -30,6 +39,28 @@ public static class VirtualAudioAuditor
     private static EndpointNotificationClient? _notificationClient;
 
     public static DriverReadinessStatus? StatusOverride { get; set; }
+    public static CableOutputReadiness? CableOutputOverride { get; set; }
+    public static bool IsCableOutputActive => GetCableOutputStatus() == CableOutputReadiness.Active;
+    public static bool IsCableOutputDisabled => GetCableOutputStatus() == CableOutputReadiness.Disabled;
+    public static bool IsCableOutputMissing => GetCableOutputStatus() == CableOutputReadiness.Missing;
+
+    public static CableOutputReadiness GetCableOutputStatus()
+    {
+        lock (_auditLock)
+        {
+            if (CableOutputOverride.HasValue)
+            {
+                return CableOutputOverride.Value;
+            }
+            if (StatusOverride.HasValue)
+            {
+                return StatusOverride.Value == DriverReadinessStatus.Ready
+                    ? CableOutputReadiness.Active
+                    : CableOutputReadiness.Unknown;
+            }
+            return _cableOutputStatus;
+        }
+    }
 
     private sealed class EndpointNotificationClient : IMMNotificationClient
     {
@@ -37,7 +68,19 @@ public static class VirtualAudioAuditor
         public void OnDeviceAdded(string pwstrDeviceId) => ResetDeviceCache();
         public void OnDeviceRemoved(string deviceId) => ResetDeviceCache();
         public void OnDefaultDeviceChanged(DataFlow flow, Role role, string defaultDeviceId) { }
-        public void OnPropertyValueChanged(string pwstrDeviceId, PropertyKey key) { }
+        public void OnPropertyValueChanged(string pwstrDeviceId, PropertyKey key)
+        {
+            string? cachedId;
+            lock (_auditLock)
+            {
+                cachedId = _cachedCableInputId;
+            }
+            if (!string.IsNullOrEmpty(cachedId) &&
+                string.Equals(pwstrDeviceId, cachedId, StringComparison.OrdinalIgnoreCase))
+            {
+                ResetDeviceCache();
+            }
+        }
     }
 
     private static void EnsureEndpointNotificationRegistered()
@@ -63,11 +106,36 @@ public static class VirtualAudioAuditor
         }
     }
 
+    public static void Shutdown()
+    {
+        lock (_auditLock)
+        {
+            if (_notificationEnumerator != null)
+            {
+                try
+                {
+                    if (_notificationClient != null)
+                    {
+                        _notificationEnumerator.UnregisterEndpointNotificationCallback(_notificationClient);
+                    }
+                }
+                catch { }
+                try { _notificationEnumerator.Dispose(); } catch { }
+                _notificationEnumerator = null;
+                _notificationClient = null;
+            }
+            _cachedCableInputId = null;
+            _cableOutputStatus = CableOutputReadiness.Unknown;
+            _lastAuditTime = DateTime.MinValue;
+        }
+    }
+
     public static void ResetDeviceCache()
     {
         lock (_auditLock)
         {
             _cachedCableInputId = null;
+            _cableOutputStatus = CableOutputReadiness.Unknown;
             _lastAuditTime = DateTime.MinValue;
         }
     }
@@ -142,10 +210,11 @@ public static class VirtualAudioAuditor
         try
         {
             using var enumerator = new MMDeviceEnumerator();
-            var cableInput = GetCableInputDeviceInternal(enumerator);
+            using var cableInput = GetCableInputDeviceInternal(enumerator);
 
             if (cableInput == null)
             {
+                _cableOutputStatus = CableOutputReadiness.Unknown;
                 bool hasDisabled = false;
                 bool hasPendingReboot = false;
                 string statesSummary = string.Empty;
@@ -160,6 +229,10 @@ public static class VirtualAudioAuditor
                         else if (dev.State is DeviceState.NotPresent or DeviceState.Unplugged) hasPendingReboot = true;
                     }
                     catch { }
+                    finally
+                    {
+                        dev.Dispose();
+                    }
                 }
 
                 var status = hasDisabled
@@ -171,19 +244,48 @@ public static class VirtualAudioAuditor
 
             EnsureEndpointUnmutedAndMaxVolume(cableInput);
 
+            bool foundActiveOutput = false;
+            bool foundDisabledOutput = false;
             try
             {
-                var captureDevices = enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active);
-                var cableOutput = captureDevices.FirstOrDefault(d =>
-                    d.FriendlyName.Contains("CABLE Output", StringComparison.OrdinalIgnoreCase));
-                if (cableOutput != null)
+                var captureDevices = enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.All);
+                foreach (var dev in captureDevices)
                 {
-                    EnsureEndpointUnmutedAndMaxVolume(cableOutput);
+                    try
+                    {
+                        if (!dev.FriendlyName.Contains("CABLE Output", StringComparison.OrdinalIgnoreCase)) continue;
+                        if (dev.State == DeviceState.Active)
+                        {
+                            foundActiveOutput = true;
+                            EnsureEndpointUnmutedAndMaxVolume(dev);
+                        }
+                        else if (dev.State == DeviceState.Disabled)
+                        {
+                            foundDisabledOutput = true;
+                        }
+                    }
+                    catch { }
+                    finally
+                    {
+                        dev.Dispose();
+                    }
                 }
             }
             catch (Exception ex)
             {
-                AppLogger.Debug($"Failed to check CABLE Output volume: {ex.Message}", "VirtualAudioAuditor");
+                AppLogger.Debug($"Failed to check CABLE Output status/volume: {ex.Message}", "VirtualAudioAuditor");
+            }
+
+            _cableOutputStatus = foundActiveOutput
+                ? CableOutputReadiness.Active
+                : (foundDisabledOutput ? CableOutputReadiness.Disabled : CableOutputReadiness.Missing);
+            if (!foundActiveOutput)
+            {
+                AppLogger.Warn(
+                    foundDisabledOutput
+                        ? "VB-CABLE CABLE Output (virtual microphone) is Disabled; speech input tools may receive no audio."
+                        : "VB-CABLE CABLE Output (virtual microphone) was not found as an active capture endpoint.",
+                    "VirtualAudioAuditor");
             }
 
             try { mixFormat = cableInput.AudioClient.MixFormat; } catch { }
@@ -196,7 +298,7 @@ public static class VirtualAudioAuditor
             using var testOut = new WasapiOut(cableInput, AudioClientShareMode.Shared, useEventSync: true, latency: 20);
             IWaveProvider dummyProvider = new BufferedWaveProvider(new WaveFormat(16000, 16, 1));
             testOut.Init(dummyProvider);
-            AppLogger.Info($"VB-CABLE audit result: Ready (WASAPI test open succeeded, MixFormat: {DescribeMixFormat(mixFormat)})", "VirtualAudioAuditor");
+            AppLogger.Info($"VB-CABLE audit result: Ready (WASAPI test open succeeded, CableOutputActive={foundActiveOutput}, MixFormat: {DescribeMixFormat(mixFormat)})", "VirtualAudioAuditor");
             return DriverReadinessStatus.Ready;
         }
         catch (Exception ex)
@@ -231,6 +333,7 @@ public static class VirtualAudioAuditor
                 {
                     return dev;
                 }
+                dev?.Dispose();
             }
             catch
             {
@@ -239,11 +342,20 @@ public static class VirtualAudioAuditor
         }
 
         var renderDevices = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
-        var cableInput = renderDevices.FirstOrDefault(d =>
-            d.FriendlyName.Contains("CABLE Input", StringComparison.OrdinalIgnoreCase));
-        if (cableInput != null)
+        MMDevice? cableInput = null;
+        foreach (var dev in renderDevices)
         {
-            _cachedCableInputId = cableInput.ID;
+            try
+            {
+                if (cableInput == null && dev.FriendlyName.Contains("CABLE Input", StringComparison.OrdinalIgnoreCase))
+                {
+                    cableInput = dev;
+                    _cachedCableInputId = dev.ID;
+                    continue;
+                }
+            }
+            catch { }
+            dev.Dispose();
         }
         return cableInput;
     }
@@ -321,9 +433,13 @@ public sealed class WasapiAudioPlayer : IDisposable
     private readonly WaveFormat _format = new(16000, 16, 1);
     private byte[] _sampleByteBuffer = new byte[4096];
     private readonly object _lock = new();
-    private volatile bool _isStopping;
+    private volatile bool _stopRequested;
     private volatile bool _disposed;
     private int _recoveryAttempts;
+
+    internal Func<MMDevice?> ResolveDeviceForTest { get; set; } = VirtualAudioAuditor.GetCableInputDevice;
+
+    public event Action<string>? PlaybackRecoveryFailed;
 
     public bool IsActive
     {
@@ -349,14 +465,19 @@ public sealed class WasapiAudioPlayer : IDisposable
         {
             if (resetRecoveryCount)
             {
+                _stopRequested = false;
                 _recoveryAttempts = 0;
             }
+            else if (_stopRequested)
+            {
+                return false;
+            }
 
-            device ??= VirtualAudioAuditor.GetCableInputDevice();
+            device ??= ResolveDeviceForTest();
             if (device == null)
             {
                 AppLogger.Warn("WasapiAudioPlayer.Start failed: CABLE Input device not found", "WasapiAudioPlayer");
-                StopInternal(resetRecoveryCount: false);
+                CleanupStreamLocked();
                 return false;
             }
 
@@ -368,7 +489,7 @@ public sealed class WasapiAudioPlayer : IDisposable
                 return true;
             }
 
-            StopInternal(resetRecoveryCount: false);
+            CleanupStreamLocked();
 
             WaveFormat? mixFormat = null;
             try { mixFormat = device.AudioClient.MixFormat; } catch { }
@@ -387,7 +508,6 @@ public sealed class WasapiAudioPlayer : IDisposable
                 wasapiOut.Init(preRollProvider);
                 wasapiOut.Play();
 
-                _isStopping = false;
                 _wasapiOut = wasapiOut;
                 _waveProvider = waveProvider;
                 _preRollProvider = preRollProvider;
@@ -397,7 +517,7 @@ public sealed class WasapiAudioPlayer : IDisposable
             catch (Exception ex)
             {
                 AppLogger.Error($"WasapiAudioPlayer failed to initialize WASAPI stream (HResult=0x{ex.HResult:X8}, MixFormat={VirtualAudioAuditor.DescribeMixFormat(mixFormat)})", ex, "WasapiAudioPlayer");
-                StopInternal(resetRecoveryCount: false);
+                CleanupStreamLocked();
                 return false;
             }
         }
@@ -405,7 +525,7 @@ public sealed class WasapiAudioPlayer : IDisposable
 
     private void OnPlaybackStopped(object? sender, StoppedEventArgs e)
     {
-        if (_isStopping || _disposed) return;
+        if (_stopRequested || _disposed) return;
 
         bool shouldRecover;
         lock (_lock)
@@ -433,15 +553,24 @@ public sealed class WasapiAudioPlayer : IDisposable
 
         VirtualAudioAuditor.ResetDeviceCache();
 
-        if (!shouldRecover) return;
+        if (!shouldRecover)
+        {
+            PlaybackRecoveryFailed?.Invoke("虚拟音频输出流连续中断且恢复次数已耗尽");
+            return;
+        }
 
         // Recover off the playback callback thread to avoid Dispose() self-join deadlocks
-        _ = Task.Run(() =>
+        _ = Task.Run(RunRecoveryAttempt);
+    }
+
+    internal void RunRecoveryAttempt()
+    {
+        if (_disposed || _stopRequested) return;
+        AppLogger.Info("Attempting automatic WASAPI stream recovery...", "WasapiAudioPlayer");
+        if (!StartInternal(device: null, resetRecoveryCount: false) && !_disposed && !_stopRequested)
         {
-            if (_disposed || _isStopping) return;
-            AppLogger.Info("Attempting automatic WASAPI stream recovery...", "WasapiAudioPlayer");
-            StartInternal(device: null, resetRecoveryCount: false);
-        });
+            PlaybackRecoveryFailed?.Invoke("虚拟音频输出流自动恢复失败，请检查 VB-CABLE 设备状态");
+        }
     }
 
     public void WriteSamples(ReadOnlySpan<short> samples)
@@ -555,27 +684,33 @@ public sealed class WasapiAudioPlayer : IDisposable
 
     private void StopInternal(bool resetRecoveryCount)
     {
+        _stopRequested = true;
         lock (_lock)
         {
-            _isStopping = true;
+            _stopRequested = true;
             if (resetRecoveryCount)
             {
                 _recoveryAttempts = 0;
             }
-            if (_wasapiOut != null)
-            {
-                _wasapiOut.PlaybackStopped -= OnPlaybackStopped;
-                try
-                {
-                    _wasapiOut.Stop();
-                }
-                catch { }
-                _wasapiOut.Dispose();
-                _wasapiOut = null;
-            }
-            _waveProvider = null;
-            _preRollProvider = null;
+            CleanupStreamLocked();
         }
+    }
+
+    private void CleanupStreamLocked()
+    {
+        if (_wasapiOut != null)
+        {
+            _wasapiOut.PlaybackStopped -= OnPlaybackStopped;
+            try
+            {
+                _wasapiOut.Stop();
+            }
+            catch { }
+            _wasapiOut.Dispose();
+            _wasapiOut = null;
+        }
+        _waveProvider = null;
+        _preRollProvider = null;
     }
 
     public void Dispose()

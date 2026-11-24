@@ -168,4 +168,41 @@ public class NativeInputSenderTests
         Assert.Equal(new ushort[] { 0xA2 }, modifiers);
         Assert.Equal(expectedVk, mainKey);
     }
+
+    [Fact]
+    public void BuildUnclosedReleaseInputs_HandlesPartialUnicodeText()
+    {
+        var sequence = new INPUT[]
+        {
+            new()
+            {
+                type = NativeInputSender.INPUT_KEYBOARD,
+                u = new InputUnion
+                {
+                    ki = new KEYBDINPUT { wScan = '你', dwFlags = NativeInputSender.KEYEVENTF_UNICODE, dwExtraInfo = NativeInputSender.SyntheticEventMarker }
+                }
+            },
+            new()
+            {
+                type = NativeInputSender.INPUT_KEYBOARD,
+                u = new InputUnion
+                {
+                    ki = new KEYBDINPUT { wScan = '你', dwFlags = NativeInputSender.KEYEVENTF_UNICODE | NativeInputSender.KEYEVENTF_KEYUP, dwExtraInfo = NativeInputSender.SyntheticEventMarker }
+                }
+            },
+            new()
+            {
+                type = NativeInputSender.INPUT_KEYBOARD,
+                u = new InputUnion
+                {
+                    ki = new KEYBDINPUT { wScan = '好', dwFlags = NativeInputSender.KEYEVENTF_UNICODE, dwExtraInfo = NativeInputSender.SyntheticEventMarker }
+                }
+            }
+        };
+
+        var releases = NativeInputSender.BuildUnclosedReleaseInputs(sequence, 3);
+        var release = Assert.Single(releases);
+        Assert.Equal((ushort)'好', release.u.ki.wScan);
+        Assert.Equal(NativeInputSender.KEYEVENTF_UNICODE | NativeInputSender.KEYEVENTF_KEYUP, release.u.ki.dwFlags);
+    }
 }

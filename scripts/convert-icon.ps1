@@ -1,10 +1,27 @@
-$srcDir = 'd:\works\remote-buddy\assets'
-$destDir = 'd:\works\voice-input-buddy-windows\src\RemoteBuddy.App\Resources'
+[CmdletBinding()]
+param(
+    [string]$SourceDir = (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) "remote-buddy\assets")
+)
 
-Copy-Item "$srcDir\AppIcon.png" "$destDir\app.png" -Force
-Copy-Item "$srcDir\ChromecastG9N9NPhoto.png" "$destDir\ChromecastG9N9NPhoto.png" -Force
-Copy-Item "$srcDir\T1RemoteIllustration.png" "$destDir\T1RemoteIllustration.png" -Force
-Copy-Item "$srcDir\BuddyRemoteIllustration.png" "$destDir\BuddyRemoteIllustration.png" -Force
+$ErrorActionPreference = "Stop"
+$RepoRoot = Split-Path -Parent $PSScriptRoot
+$destDir = Join-Path $RepoRoot "src\RemoteBuddy.App\Resources"
+
+if (-not (Test-Path $SourceDir)) {
+    throw "Source asset directory not found: $SourceDir"
+}
+
+foreach ($asset in @("AppIcon.png", "ChromecastG9N9NPhoto.png", "T1RemoteIllustration.png", "BuddyRemoteIllustration.png")) {
+    $srcPath = Join-Path $SourceDir $asset
+    if (-not (Test-Path $srcPath)) {
+        throw "Required source asset not found: $srcPath"
+    }
+}
+
+Copy-Item (Join-Path $SourceDir "AppIcon.png") (Join-Path $destDir "app.png") -Force
+Copy-Item (Join-Path $SourceDir "ChromecastG9N9NPhoto.png") (Join-Path $destDir "ChromecastG9N9NPhoto.png") -Force
+Copy-Item (Join-Path $SourceDir "T1RemoteIllustration.png") (Join-Path $destDir "T1RemoteIllustration.png") -Force
+Copy-Item (Join-Path $SourceDir "BuddyRemoteIllustration.png") (Join-Path $destDir "BuddyRemoteIllustration.png") -Force
 
 Add-Type -AssemblyName System.Drawing
 

@@ -855,4 +855,92 @@ public class AudioDecoderAndProtocolTests
         Assert.False(RemoteBuddy.Platform.Windows.Input.RawInputReceiver.EvaluateDeviceMatch(
             null, (IntPtr)1, shortPath, mac, requireExactIdentity: true));
     }
+
+    [Fact]
+    public void ATVVFrameAccumulator_PacketLoss_DiscardsPartialAndResumesOnNextSync()
+    {
+        var acc = new ATVVFrameAccumulator();
+        int emittedFrames = 0;
+
+        acc.Append(new byte[40], 120, _ => emittedFrames++);
+        Assert.Equal(0, emittedFrames);
+        Assert.Equal(40, acc.PendingCount);
+        Assert.False(acc.IsAwaitingResync);
+
+        acc.NotifyPacketLoss();
+        Assert.True(acc.IsAwaitingResync);
+        Assert.Equal(0, acc.PendingCount);
+
+        // Post-drop fragments must not splice into frames or flush partial audio
+        acc.Append(new byte[80], 120, _ => emittedFrames++);
+        acc.Append(new byte[120], 120, _ => emittedFrames++);
+        acc.Flush(120, _ => emittedFrames++);
+        Assert.Equal(0, emittedFrames);
+        Assert.Equal(0, acc.PendingCount);
+        Assert.True(acc.IsAwaitingResync);
+
+        // AudioSync restores boundary & ADPCM state immediately on the next frame
+        acc.Synchronize(-1200, 17, frameNumber: 5);
+        Assert.False(acc.IsAwaitingResync);
+
+        acc.Append(new byte[120], 120, _ => emittedFrames++);
+        Assert.Equal(1, emittedFrames);
+        Assert.True(acc.TryConsumeSyncForNextFrame(out short p, out byte s));
+        Assert.Equal(-1200, p);
+        Assert.Equal(17, s);
+
+        // Stale sync referencing an already-decoded frame (5 < 6) is discarded
+        acc.Synchronize(-300, 9, frameNumber: 5);
+        Assert.False(acc.TryConsumeSyncForNextFrame(out _, out _));
+    }
+
+    [Fact]
+    public async Task WinRtBluetoothManager_AudioQueueDrop_DropsMisalignedDataAndResyncsOnAudioSync()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var manager = new RemoteBuddy.Platform.Windows.Bluetooth.WinRtBluetoothManager();
+        int levelEvents = 0;
+        var firstFrameTcs = new TaskCompletionSource<float>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resumedFrameTcs = new TaskCompletionSource<float>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        manager.AudioLevelChanged += (_, level) =>
+        {
+            int count = Interlocked.Increment(ref levelEvents);
+            if (count == 1) firstFrameTcs.TrySetResult(level);
+            else if (count == 2) resumedFrameTcs.TrySetResult(level);
+        };
+
+        // 1. Decode 1 complete 120-byte frame + leave 60 trailing bytes in accumulator
+        byte[] initialChunk = new byte[180];
+        Array.Fill(initialChunk, (byte)0x33);
+        Assert.True(manager.EnqueueAudioPacketForTest(initialChunk, frameSize: 120));
+        await firstFrameTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(60, manager.PendingAccumulatorBytesForTest);
+
+        // 2. Simulate queue overflow drop, followed by two 60-byte fragments (would corrupt frame if spliced)
+        manager.SimulateAudioQueueDropForTest();
+        byte[] postDropA = new byte[60];
+        byte[] postDropB = new byte[60];
+        Array.Fill(postDropA, (byte)0x55);
+        Array.Fill(postDropB, (byte)0x77);
+        Assert.True(manager.EnqueueAudioPacketForTest(postDropA, frameSize: 120));
+        Assert.True(manager.EnqueueAudioPacketForTest(postDropB, frameSize: 120));
+
+        await manager.FlushAudioPipelineForTestAsync(frameSize: 120);
+        Assert.Equal(1, Volatile.Read(ref levelEvents));
+        Assert.True(manager.IsAudioAwaitingResyncForTest);
+        Assert.Equal(0, manager.PendingAccumulatorBytesForTest);
+        Assert.Equal((0, 0), manager.DecoderStateForTest);
+
+        // 3. Deliver ATVV AudioSync (frame=4, predictor=1234 [0x04D2], stepIndex=25 [0x19]) and a valid frame
+        manager.HandleControlPacketForTest([0x0A, 0x00, 0x00, 0x04, 0x04, 0xD2, 0x19]);
+        byte[] cleanFrame = new byte[120];
+        Array.Fill(cleanFrame, (byte)0x21);
+        Assert.True(manager.EnqueueAudioPacketForTest(cleanFrame, frameSize: 120));
+
+        await resumedFrameTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(2, Volatile.Read(ref levelEvents));
+        Assert.False(manager.IsAudioAwaitingResyncForTest);
+    }
 }

@@ -21,6 +21,17 @@ public static class VbCableInstaller
     private static readonly SemaphoreSlim InstallGate = new(1);
     private static readonly HttpClient Client = new(new HttpClientHandler { AllowAutoRedirect = false });
 
+    internal static bool IsTrustedDownloadUri(Uri? uri)
+    {
+        if (uri == null || !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        string host = uri.Host;
+        return string.Equals(host, "remote.zfdang.com", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(host, "vb-audio.com", StringComparison.OrdinalIgnoreCase)
+            || host.EndsWith(".vb-audio.com", StringComparison.OrdinalIgnoreCase);
+    }
+
     public static async Task<string> InstallAsync(IProgress<string> progress)
     {
         if (!await InstallGate.WaitAsync(0))
@@ -29,7 +40,8 @@ public static class VbCableInstaller
         DirectoryInfo? work = null;
         try
         {
-            if (VirtualAudioAuditor.AuditCableInputDevice(forceRefresh: true) != DriverReadinessStatus.NotInstalled)
+            var beforeStatus = VirtualAudioAuditor.AuditCableInputDevice(forceRefresh: true);
+            if (beforeStatus != DriverReadinessStatus.NotInstalled)
                 return "检测到已有 VB-CABLE，请查看驱动状态。";
 
             work = Directory.CreateTempSubdirectory("remote-buddy-vbcable-");
@@ -40,8 +52,9 @@ public static class VbCableInstaller
 
             string installer = RuntimeInformation.OSArchitecture switch
             {
-                Architecture.X64 or Architecture.Arm64 => Path.Combine(work.FullName, "VBCABLE_Setup_x64.exe"),
+                Architecture.X64 => Path.Combine(work.FullName, "VBCABLE_Setup_x64.exe"),
                 Architecture.X86 => Path.Combine(work.FullName, "VBCABLE_Setup.exe"),
+                Architecture.Arm64 => throw new PlatformNotSupportedException("ARM64 Windows 暂不支持自动安装 x64 VB-CABLE 内核驱动，请前往 VB-Audio 官网确认兼容版本。"),
                 _ => throw new PlatformNotSupportedException("This Windows architecture is unsupported.")
             };
             if (!File.Exists(installer))
@@ -61,10 +74,17 @@ public static class VbCableInstaller
                 return "VB-CABLE 安装程序未成功结束。请查看其提示后重试。";
             }
 
-            var status = VirtualAudioAuditor.AuditCableInputDevice(forceRefresh: true);
-            return status == DriverReadinessStatus.Ready
-                ? "已检测到 VB-CABLE。请按官方安装说明重启 Windows。"
-                : "安装程序已退出。若已完成安装，请重启 Windows，然后重新检测。";
+            var afterStatus = VirtualAudioAuditor.AuditCableInputDevice(forceRefresh: true);
+            if (afterStatus == DriverReadinessStatus.Ready)
+                return "已检测到 VB-CABLE。请按官方安装说明重启 Windows。";
+            if (afterStatus == DriverReadinessStatus.NotInstalled)
+                return "安装程序已退出，未检测到 VB-CABLE 驱动变化（如已取消安装请重试，若刚完成安装请重启 Windows）。";
+            return "安装程序已退出。若已完成安装，请重启 Windows，然后重新检测。";
+        }
+        catch (PlatformNotSupportedException error)
+        {
+            AppLogger.Warn(error.Message, nameof(VbCableInstaller));
+            return error.Message;
         }
         catch (Win32Exception error) when (error.NativeErrorCode == 1223)
         {
@@ -97,15 +117,45 @@ public static class VbCableInstaller
             try
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-                using var response = await client.GetAsync(source, HttpCompletionOption.ResponseHeadersRead, timeout.Token)
-                    .ConfigureAwait(false);
-                response.EnsureSuccessStatusCode();
-                await response.Content.LoadIntoBufferAsync(MaxPackageBytes, timeout.Token).ConfigureAwait(false);
-                byte[] data = await response.Content.ReadAsByteArrayAsync(timeout.Token).ConfigureAwait(false);
-                if (!string.Equals(Convert.ToHexString(SHA256.HashData(data)), expectedSha256, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidDataException("VB-CABLE package SHA-256 did not match.");
+                var currentUri = source;
+                HttpResponseMessage? response = null;
+                try
+                {
+                    for (int hop = 0; hop <= 3; hop++)
+                    {
+                        response = await client.GetAsync(currentUri, HttpCompletionOption.ResponseHeadersRead, timeout.Token)
+                            .ConfigureAwait(false);
+                        int code = (int)response.StatusCode;
+                        if (code is 301 or 302 or 303 or 307 or 308 && response.Headers.Location is { } location)
+                        {
+                            var nextUri = location.IsAbsoluteUri ? location : new Uri(currentUri, location);
+                            response.Dispose();
+                            response = null;
+                            if (!IsTrustedDownloadUri(nextUri))
+                            {
+                                throw new HttpRequestException($"Blocked untrusted redirect host: {nextUri.Host}");
+                            }
+                            currentUri = nextUri;
+                            continue;
+                        }
+                        break;
+                    }
 
-                return data;
+                    if (response == null)
+                        throw new HttpRequestException("Exceeded maximum download redirects.");
+
+                    response.EnsureSuccessStatusCode();
+                    await response.Content.LoadIntoBufferAsync(MaxPackageBytes, timeout.Token).ConfigureAwait(false);
+                    byte[] data = await response.Content.ReadAsByteArrayAsync(timeout.Token).ConfigureAwait(false);
+                    if (!string.Equals(Convert.ToHexString(SHA256.HashData(data)), expectedSha256, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidDataException("VB-CABLE package SHA-256 did not match.");
+
+                    return data;
+                }
+                finally
+                {
+                    response?.Dispose();
+                }
             }
             catch (Exception error) when (error is HttpRequestException or IOException or InvalidDataException or OperationCanceledException)
             {

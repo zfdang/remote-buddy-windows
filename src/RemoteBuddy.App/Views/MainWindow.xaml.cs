@@ -36,6 +36,13 @@ public partial class MainWindow : Window
         public IntPtr hBalloonIcon;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT
+    {
+        public int X;
+        public int Y;
+    }
+
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     private static extern bool Shell_NotifyIcon(uint dwMessage, ref NOTIFYICONDATA lpData);
 
@@ -44,6 +51,31 @@ public partial class MainWindow : Window
 
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
     private static extern uint RegisterWindowMessage(string lpString);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr CreatePopupMenu();
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool AppendMenuW(IntPtr hMenu, uint uFlags, UIntPtr uIDNewItem, string? lpNewItem);
+
+    [DllImport("user32.dll")]
+    private static extern int TrackPopupMenuEx(IntPtr hMenu, uint fuFlags, int x, int y, IntPtr hwnd, IntPtr lptpm);
+
+    [DllImport("user32.dll")]
+    private static extern bool DestroyMenu(IntPtr hMenu);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetCursorPos(out POINT lpPoint);
+
+    [DllImport("user32.dll")]
+    private static extern bool PostMessageW(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+
+    private const uint MF_STRING = 0x00000000;
+    private const uint MF_SEPARATOR = 0x00000800;
+    private const uint TPM_RETURNCMD = 0x0100;
+    private const uint TPM_RIGHTBUTTON = 0x0002;
+    private const uint TPM_NONOTIFY = 0x0080;
+    private const uint WM_NULL = 0x0000;
 
     private const uint NIM_ADD = 0x00000000;
     private const uint NIM_DELETE = 0x00000002;
@@ -224,36 +256,45 @@ public partial class MainWindow : Window
     private void ShowTrayContextMenu()
     {
         var hwnd = new WindowInteropHelper(this).Handle;
-        SetForegroundWindow(hwnd);
+        if (hwnd == IntPtr.Zero || !GetCursorPos(out var pt)) return;
 
-        var menu = new ContextMenu
+        IntPtr menu = CreatePopupMenu();
+        if (menu == IntPtr.Zero) return;
+
+        try
         {
-            Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint
-        };
+            const uint cmdShow = 1;
+            const uint cmdExit = 2;
+            AppendMenuW(menu, MF_STRING, (UIntPtr)cmdShow, "显示主界面");
+            AppendMenuW(menu, MF_SEPARATOR, UIntPtr.Zero, null);
+            AppendMenuW(menu, MF_STRING, (UIntPtr)cmdExit, "退出");
 
-        var openItem = new MenuItem { Header = "显示主界面" };
-        openItem.Click += (_, _) => RestoreWindow();
-        menu.Items.Add(openItem);
+            SetForegroundWindow(hwnd);
+            int cmd = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, pt.X, pt.Y, hwnd, IntPtr.Zero);
+            PostMessageW(hwnd, WM_NULL, IntPtr.Zero, IntPtr.Zero);
 
-        menu.Items.Add(new Separator());
-
-        var exitItem = new MenuItem { Header = "退出" };
-        exitItem.Click += (_, _) =>
+            if (cmd == (int)cmdShow)
+            {
+                RestoreWindow();
+            }
+            else if (cmd == (int)cmdExit)
+            {
+                IsExplicitExit = true;
+                Close();
+                Application.Current?.Shutdown();
+            }
+        }
+        finally
         {
-            IsExplicitExit = true;
-            Close();
-            Application.Current.Shutdown();
-        };
-        menu.Items.Add(exitItem);
-
-        menu.IsOpen = true;
+            DestroyMenu(menu);
+        }
     }
 
     private void OnWindowClosing(object? sender, CancelEventArgs e)
     {
         if (IsExplicitExit || _isSystemShutdown) return;
 
-        if (DataContext is MainViewModel vm && vm.SettingsVm.MinimizeToTrayOnClose)
+        if (DataContext is MainViewModel vm && vm.GeneralVm.MinimizeToTrayOnClose)
         {
             e.Cancel = true;
             Hide();

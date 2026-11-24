@@ -51,6 +51,16 @@ public class VbCableInstallerTests
         Assert.Equal([Mirror, Official], handler.Requests);
     }
 
+    [Theory]
+    [InlineData("https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack46.zip", true)]
+    [InlineData("https://remote.zfdang.com/downloads/drivers/VBCABLE_Driver_Pack46.zip", true)]
+    [InlineData("http://download.vb-audio.com/file.zip", false)]
+    [InlineData("https://evil.example.com/file.zip", false)]
+    public void IsTrustedDownloadUri_EnforcesHttpsAndAllowedHosts(string uri, bool expected)
+    {
+        Assert.Equal(expected, VbCableInstaller.IsTrustedDownloadUri(new Uri(uri)));
+    }
+
     private static HttpResponseMessage CreateResponse(byte[] bytes) =>
         new(HttpStatusCode.OK) { Content = new ByteArrayContent(bytes) };
 

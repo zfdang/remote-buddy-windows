@@ -31,13 +31,13 @@ Remote Buddy for Windows 是面向 Windows 10/11 的纯软件版硬件语音桥�
 | 层次 / 模块 | 选型 | 选用理由与决策说明 |
 | :--- | :--- | :--- |
 | **运行时环境** | **.NET 10 LTS** | 考虑到 .NET 8 LTS 将于 2026 年 11 月 10 日结束官方支持（EOL），新项目直接选用 .NET 10 LTS 作为长期稳定基线。采用**自包含单文件发布（Self-Contained Single-File）**，不依赖目标机器预装运行时。 |
-| **UI 框架** | **WPF (配合 WPF-UI)** | 经评估，**明确选择成熟稳定的 WPF** 并撤回通用的 Native AOT 承诺。因为 WPF 官方仍默认禁用程序集裁剪（Trimming），无法直接可靠编译为 Native AOT 二进制。采用常规自包含单文件发布，既能享受 Windows 11 Fluent Design（Mica 亚克力、深色模式），又规避了 AOT 反射异常风险。 |
+| **UI 框架** | **WPF** | 经评估，**明确选择成熟稳定的原生 WPF** 并撤回通用的 Native AOT 承诺。因为 WPF 官方仍默认禁用程序集裁剪（Trimming），无法直接可靠编译为 Native AOT 二进制。采用常规自包含单文件发布，界面稳定可控，且规避了 AOT 反射异常风险。 |
 | **蓝牙通信 (BLE)** | **WinRT API (`Windows.Devices.Bluetooth`)** | 微软官方公开第一方蓝牙栈，支持 GATT 服务发现、特征值写入与数据通知（Notification），与 Windows 蓝牙系统设置深度集成。 |
 | **音频推流** | **NAudio (基于 WASAPI Render)** | 成熟的低延迟音频写入库，以共享模式（Shared Event-Driven）将解码后的 PCM 音频推入虚拟声卡端点。 |
 | **音频解码** | **纯 C# 实现 IMA ADPCM 解码器** | 纯内存计算，结合 `Span<byte>` 与查表法，实现 `AUDIO_SYNC` 状态同步与动态会话恢复。 |
 | **虚拟麦克风** | **VB-CABLE** | 向导和「权限与驱动」使用同一个安装入口。应用优先从 Remote Buddy 网站下载固定版本，失败时回退到 VB-Audio，校验文件后启动官方安装程序。 |
 | **按键监控与注入** | **Raw Input、直接 HID、BthPort ETW、`SendInput`** | 采集来源可确认的普通键，通过 `SendInput` 执行映射和输入法快捷键，受 UIPI 权限边界约束。 |
-| **打包与安装** | **Inno Setup** | 制作独立的轻量安装包，负责快捷方式生成、开机启动项注册与卸载清理。 |
+| **打包与分发** | **自包含单文件 ZIP** | 通过 GitHub Actions 产出 `x64` 自包含单文件可执行程序并附带许可证文件及 `SHA256SUMS.txt` 打包发布，无需额外安装包。 |
 
 ---
 

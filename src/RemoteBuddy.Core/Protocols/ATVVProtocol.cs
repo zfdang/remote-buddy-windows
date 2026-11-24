@@ -158,6 +158,8 @@ public static class ATVVProtocol
 
 public sealed class ATVVFrameAccumulator
 {
+    public const int MaxBufferBytes = 64 * 1024;
+
     public delegate void SpanAction(ReadOnlySpan<byte> frame);
 
     private byte[] _buffer = new byte[1024];
@@ -167,17 +169,53 @@ public sealed class ATVVFrameAccumulator
     private int _framesBeforeSync = 0;
     private ushort _decodedFrameIndex;
     private bool _sawNonZeroSyncFrame;
+    private bool _awaitingResync;
 
     public int PendingCount => _count;
+    public bool IsAwaitingResync => _awaitingResync;
+
+    public void NotifyPacketLoss()
+    {
+        _offset = 0;
+        _count = 0;
+        _pendingSync = null;
+        _framesBeforeSync = 0;
+        _awaitingResync = true;
+    }
 
     public void Synchronize(short predictor, byte stepIndex)
     {
+        if (_awaitingResync)
+        {
+            _offset = 0;
+            _count = 0;
+            _pendingSync = (predictor, stepIndex);
+            _framesBeforeSync = 0;
+            _awaitingResync = false;
+            return;
+        }
+
         _pendingSync = (predictor, stepIndex);
         _framesBeforeSync = _count == 0 ? 0 : 1;
     }
 
     public void Synchronize(short predictor, byte stepIndex, ushort frameNumber)
     {
+        if (_awaitingResync)
+        {
+            _offset = 0;
+            _count = 0;
+            _pendingSync = (predictor, stepIndex);
+            _framesBeforeSync = 0;
+            _decodedFrameIndex = frameNumber;
+            if (frameNumber != 0)
+            {
+                _sawNonZeroSyncFrame = true;
+            }
+            _awaitingResync = false;
+            return;
+        }
+
         if (frameNumber != 0 || _sawNonZeroSyncFrame)
         {
             _sawNonZeroSyncFrame = true;
@@ -207,11 +245,17 @@ public sealed class ATVVFrameAccumulator
         _framesBeforeSync = 0;
         _decodedFrameIndex = 0;
         _sawNonZeroSyncFrame = false;
+        _awaitingResync = false;
     }
 
     public void Append(ReadOnlySpan<byte> data, int frameSize, SpanAction onFrame)
     {
-        if (frameSize <= 0) return;
+        if (frameSize <= 0 || data.IsEmpty || _awaitingResync) return;
+        if (data.Length > MaxBufferBytes)
+        {
+            Reset();
+            return;
+        }
         EnsureCapacity(data.Length);
         data.CopyTo(_buffer.AsSpan(_offset + _count));
         _count += data.Length;
@@ -233,9 +277,10 @@ public sealed class ATVVFrameAccumulator
 
     public void Flush(int frameSize, SpanAction onPartialFrame)
     {
-        if (_count <= 0)
+        if (_awaitingResync || _count <= 0)
         {
             _offset = 0;
+            _count = 0;
             return;
         }
 
@@ -271,7 +316,14 @@ public sealed class ATVVFrameAccumulator
             return;
         }
 
-        int newSize = Math.Max(_buffer.Length * 2, _count + additionalBytes);
+        if (_count + additionalBytes > MaxBufferBytes)
+        {
+            // Bound memory growth if partial frames accumulate without matching frameSize.
+            Reset();
+            return;
+        }
+
+        int newSize = Math.Min(MaxBufferBytes, Math.Max(_buffer.Length * 2, _count + additionalBytes));
         var next = new byte[newSize];
         if (_count > 0)
         {
