@@ -24,7 +24,9 @@ public partial class App : Application
 
     private void OnStartup(object sender, StartupEventArgs e)
     {
-        AppLogger.Initialize();
+        bool noLogArg = e.Args.Any(a => string.Equals(a, "--no-log", StringComparison.OrdinalIgnoreCase));
+        bool loggingEnabled = !noLogArg && ConfigService.ReadDiagnosticLoggingEnabled();
+        AppLogger.Initialize(isEnabled: loggingEnabled);
         AppLogger.Info($"=== Application Starting (PID: {Environment.ProcessId}) ===", "App");
         AppLogger.Info($"OS: {Environment.OSVersion}, .NET Runtime: {Environment.Version}, Args: [{string.Join(", ", e.Args)}]", "App");
 

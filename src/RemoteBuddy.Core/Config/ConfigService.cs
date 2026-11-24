@@ -41,6 +41,50 @@ public class ConfigService
         Current = Load();
     }
 
+    public static bool ReadDiagnosticLoggingEnabled(string? customPath = null)
+    {
+        string configPath;
+        if (!string.IsNullOrEmpty(customPath))
+        {
+            configPath = customPath;
+        }
+        else
+        {
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            configPath = Path.Combine(appData, "RemoteBuddy", "config.json");
+        }
+
+        foreach (string candidate in new[] { configPath, configPath + ".bak" })
+        {
+            try
+            {
+                if (!File.Exists(candidate)) continue;
+                string json = File.ReadAllText(candidate);
+                if (string.IsNullOrWhiteSpace(json)) continue;
+
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.ValueKind != JsonValueKind.Object) continue;
+
+                foreach (var prop in doc.RootElement.EnumerateObject())
+                {
+                    if (string.Equals(prop.Name, nameof(AppConfig.DiagnosticLoggingEnabled), StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (prop.Value.ValueKind == JsonValueKind.True) return true;
+                        if (prop.Value.ValueKind == JsonValueKind.False) return false;
+                    }
+                }
+
+                return true;
+            }
+            catch
+            {
+                // Ignore read/parse errors and try backup or default to enabled without triggering AppLogger.
+            }
+        }
+
+        return true;
+    }
+
     public AppConfig Load()
     {
         lock (_lock)
@@ -342,6 +386,7 @@ public class ConfigService
             Language = source.Language,
             LaunchAtStartup = source.LaunchAtStartup,
             MinimizeToTrayOnClose = source.MinimizeToTrayOnClose,
+            DiagnosticLoggingEnabled = source.DiagnosticLoggingEnabled,
             HasCompletedOnboarding = source.HasCompletedOnboarding,
             SelectedDeviceId = source.SelectedDeviceId,
             InputTool = new InputToolConfig

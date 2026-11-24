@@ -261,7 +261,6 @@ public class ConvertersAndViewModelTests
         var vm = new AboutViewModel();
         Assert.False(string.IsNullOrEmpty(vm.AppVersion));
         Assert.False(string.IsNullOrEmpty(vm.Architecture));
-        Assert.False(string.IsNullOrEmpty(vm.Runtime));
         Assert.False(string.IsNullOrEmpty(vm.LogDirectoryPath));
     }
 

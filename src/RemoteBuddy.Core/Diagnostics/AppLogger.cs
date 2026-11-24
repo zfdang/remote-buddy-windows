@@ -27,8 +27,14 @@ public static class AppLogger
     private static long _maxFileSizeBytes = 5 * 1024 * 1024; // 5 MB
     private static int _maxArchiveCount = 3;
     private static DateTime _lastRotationFailureTime = DateTime.MinValue;
-    private static bool _isEnabled = true;
+    private static volatile bool _isEnabled = true;
     private static bool _isInitialized = false;
+
+    /// <summary>
+    /// Overrides the default log directory when <see cref="Initialize"/> is called without a custom path.
+    /// Preserved across <see cref="ResetForTesting"/> so unit tests stay isolated from real user logs.
+    /// </summary>
+    public static string? DefaultLogDirectoryOverride { get; set; }
 
 #if DEBUG
     public static LogLevel MinimumLevel { get; set; } = LogLevel.Debug;
@@ -60,10 +66,38 @@ public static class AppLogger
         set => _isEnabled = value;
     }
 
-    public static void Initialize(string? customLogDirectory = null, long? maxSizeBytes = null, int? maxArchives = null)
+    public static void SetEnabled(bool enabled)
+    {
+        bool turnedOn;
+        lock (_lock)
+        {
+            if (_isEnabled == enabled)
+            {
+                return;
+            }
+            _isEnabled = enabled;
+            turnedOn = enabled;
+        }
+
+        if (turnedOn)
+        {
+            Info("Diagnostic logging enabled by user", "AppLogger");
+        }
+    }
+
+    public static void Initialize(
+        string? customLogDirectory = null,
+        long? maxSizeBytes = null,
+        int? maxArchives = null,
+        bool? isEnabled = null)
     {
         lock (_lock)
         {
+            if (isEnabled.HasValue)
+            {
+                _isEnabled = isEnabled.Value;
+            }
+
             if (_isInitialized && customLogDirectory == null && maxSizeBytes == null && maxArchives == null)
             {
                 return;
@@ -83,30 +117,19 @@ public static class AppLogger
             {
                 _logDirectory = customLogDirectory;
             }
+            else if (!string.IsNullOrEmpty(DefaultLogDirectoryOverride))
+            {
+                _logDirectory = DefaultLogDirectoryOverride;
+            }
             else
             {
                 string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
                 _logDirectory = Path.Combine(appData, "RemoteBuddy", "logs");
             }
 
-            try
-            {
-                Directory.CreateDirectory(_logDirectory);
-                _logFilePath = Path.Combine(_logDirectory, "app.log");
-                _isInitialized = true;
-                _lastRotationFailureTime = DateTime.MinValue;
-
-                // Write session start header if file is empty or new
-                if (!File.Exists(_logFilePath) || new FileInfo(_logFilePath).Length == 0)
-                {
-                    string header = $"=== Remote Buddy Diagnostic Log Started at {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC (PID: {Environment.ProcessId}) ===" + Environment.NewLine;
-                    File.AppendAllText(_logFilePath, header, Encoding.UTF8);
-                }
-            }
-            catch (Exception ex)
-            {
-                Trace.WriteLine($"[AppLogger] Failed to initialize log directory '{_logDirectory}': {ex.Message}");
-            }
+            _logFilePath = Path.Combine(_logDirectory, "app.log");
+            _isInitialized = true;
+            _lastRotationFailureTime = DateTime.MinValue;
         }
     }
 
@@ -185,8 +208,10 @@ public static class AppLogger
 
         lock (_lock)
         {
+            if (!_isEnabled) return;
             try
             {
+                EnsureLogFileReadyLocked();
                 if (File.Exists(_logFilePath))
                 {
                     var fileInfo = new FileInfo(_logFilePath);
@@ -206,6 +231,16 @@ public static class AppLogger
         }
 
         Trace.WriteLine(logLine);
+    }
+
+    private static void EnsureLogFileReadyLocked()
+    {
+        Directory.CreateDirectory(_logDirectory);
+        if (!File.Exists(_logFilePath) || new FileInfo(_logFilePath).Length == 0)
+        {
+            string header = $"=== Remote Buddy Diagnostic Log Started at {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC (PID: {Environment.ProcessId}) ===" + Environment.NewLine;
+            File.AppendAllText(_logFilePath, header, Encoding.UTF8);
+        }
     }
 
     private static void RotateLogs()
@@ -259,12 +294,24 @@ public static class AppLogger
         // File.AppendAllText immediately flushes to disk under lock
     }
 
-    public static void OpenLogFolder()
+    public static bool OpenLogFolder()
     {
         EnsureInitialized();
         if (!Directory.Exists(_logDirectory))
         {
-            Directory.CreateDirectory(_logDirectory);
+            if (!_isEnabled)
+            {
+                return false;
+            }
+            try
+            {
+                Directory.CreateDirectory(_logDirectory);
+            }
+            catch (Exception ex)
+            {
+                Error("Failed to create logs folder", ex, "AppLogger");
+                return false;
+            }
         }
 
         try
@@ -283,10 +330,12 @@ public static class AppLogger
             {
                 Process.Start("open", $"\"{_logDirectory}\"");
             }
+            return true;
         }
         catch (Exception ex)
         {
             Error("Failed to launch file explorer for logs folder", ex, "AppLogger");
+            return false;
         }
     }
 }

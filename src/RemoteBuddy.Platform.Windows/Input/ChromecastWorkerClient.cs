@@ -117,10 +117,16 @@ public sealed class ChromecastWorkerClient : IDisposable
                 return false;
             }
 
+            string workerArgs = $"--chromecast-worker {pipeName} {Environment.ProcessId} {Convert.ToBase64String(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(sources))}";
+            if (!AppLogger.IsEnabled)
+            {
+                workerArgs += " --no-log";
+            }
+
             var psi = new ProcessStartInfo
             {
                 FileName = exePath,
-                Arguments = $"--chromecast-worker {pipeName} {Environment.ProcessId} {Convert.ToBase64String(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(sources))}",
+                Arguments = workerArgs,
                 UseShellExecute = true,
                 Verb = "runas",
                 WindowStyle = ProcessWindowStyle.Hidden

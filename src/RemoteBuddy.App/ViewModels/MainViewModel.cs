@@ -171,10 +171,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         EnvironmentVm = new EnvironmentViewModel();
         EnvironmentVm.RetryEtwCaptureAction = RetryEtwCapture;
         AppIntegrationVm = new AppIntegrationViewModel(_configService);
-        AboutVm = new AboutViewModel();
+        AboutVm = new AboutViewModel(_configService);
         SettingsVm = new SettingsViewModel(_configService, mode => RequestOpenWizard?.Invoke(mode));
         GeneralVm.PreferencesChanged += OnGeneralPreferencesChanged;
         SettingsVm.PreferencesChanged += OnSettingsPreferencesChanged;
+        AboutVm.PreferencesChanged += OnAboutPreferencesChanged;
         UpdateVoiceKeyGuard();
 
         _rawInputReceiver.DeviceFilter = IsTargetDevice;
@@ -1216,6 +1217,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ResetGestures();
         GeneralVm.PreferencesChanged -= OnGeneralPreferencesChanged;
         SettingsVm.PreferencesChanged -= OnSettingsPreferencesChanged;
+        AboutVm.PreferencesChanged -= OnAboutPreferencesChanged;
         GeneralVm.Dispose();
         MappingVm.PropertyChanged -= OnMappingSettingsChanged;
         DevicesVm.DevicesChanged -= OnDevicesChanged;
@@ -1225,7 +1227,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnGeneralPreferencesChanged() => SettingsVm.SyncFromConfig();
 
-    private void OnSettingsPreferencesChanged() => GeneralVm.SyncFromConfig();
+    private void OnSettingsPreferencesChanged()
+    {
+        GeneralVm.SyncFromConfig();
+        AboutVm.SyncFromConfig();
+    }
+
+    private void OnAboutPreferencesChanged() => SettingsVm.SyncFromConfig();
 
     internal void ReleaseVoiceKeysOnCrash()
     {

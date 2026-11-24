@@ -1359,6 +1359,21 @@ public partial class SettingsViewModel : ObservableObject
         }
     }
 
+    private bool _diagnosticLoggingEnabled;
+    public bool DiagnosticLoggingEnabled
+    {
+        get => _diagnosticLoggingEnabled;
+        set
+        {
+            if (SetProperty(ref _diagnosticLoggingEnabled, value))
+            {
+                AppLogger.SetEnabled(value);
+                _config.Update(cfg => cfg.DiagnosticLoggingEnabled = value);
+                PreferencesChanged?.Invoke();
+            }
+        }
+    }
+
     [ObservableProperty]
     private string _appVersion;
 
@@ -1371,20 +1386,9 @@ public partial class SettingsViewModel : ObservableObject
         _openWizard = openWizard;
         _launchAtStartup = StartupService.IsLaunchAtStartupEnabled();
         _minimizeToTrayOnClose = _config.Current.MinimizeToTrayOnClose;
+        _diagnosticLoggingEnabled = _config.Current.DiagnosticLoggingEnabled;
         LogDirectoryPath = AppLogger.LogDirectory;
-
-        var infoVer = Assembly.GetEntryAssembly()?
-            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
-            .InformationalVersion;
-        if (!string.IsNullOrEmpty(infoVer))
-        {
-            AppVersion = "v" + infoVer.Split('+')[0];
-        }
-        else
-        {
-            var ver = Assembly.GetExecutingAssembly().GetName().Version;
-            AppVersion = ver != null ? $"v{ver.Major}.{ver.Minor}.{ver.Build}" : "v1.0.0";
-        }
+        AppVersion = AboutViewModel.ResolveAppVersion();
     }
 
     public SettingsViewModel(ConfigService config, Action openOnboarding)
@@ -1399,6 +1403,7 @@ public partial class SettingsViewModel : ObservableObject
         bool launch = StartupService.IsLaunchAtStartupEnabled();
         SetProperty(ref _launchAtStartup, launch, nameof(LaunchAtStartup));
         SetProperty(ref _minimizeToTrayOnClose, _config.Current.MinimizeToTrayOnClose, nameof(MinimizeToTrayOnClose));
+        SetProperty(ref _diagnosticLoggingEnabled, _config.Current.DiagnosticLoggingEnabled, nameof(DiagnosticLoggingEnabled));
     }
 
     [RelayCommand]
@@ -1410,7 +1415,19 @@ public partial class SettingsViewModel : ObservableObject
     [RelayCommand]
     public void OpenLogFolder()
     {
-        AppLogger.OpenLogFolder();
+        OpenLogFolderWithPrompt();
+    }
+
+    internal static void OpenLogFolderWithPrompt()
+    {
+        if (!AppLogger.OpenLogFolder() && System.Windows.Application.Current != null)
+        {
+            System.Windows.MessageBox.Show(
+                "当前已关闭排错日志，尚未生成日志文件。\n如需记录，请先勾选“启用排错日志”。",
+                "暂无日志文件",
+                System.Windows.MessageBoxButton.OK,
+                System.Windows.MessageBoxImage.Information);
+        }
     }
 }
 
@@ -1739,6 +1756,23 @@ public partial class AppIntegrationViewModel : ObservableObject
 
 public partial class AboutViewModel : ObservableObject
 {
+    private readonly ConfigService? _config;
+
+    private bool _diagnosticLoggingEnabled;
+    public bool DiagnosticLoggingEnabled
+    {
+        get => _diagnosticLoggingEnabled;
+        set
+        {
+            if (SetProperty(ref _diagnosticLoggingEnabled, value))
+            {
+                AppLogger.SetEnabled(value);
+                _config?.Update(cfg => cfg.DiagnosticLoggingEnabled = value);
+                PreferencesChanged?.Invoke();
+            }
+        }
+    }
+
     [ObservableProperty]
     private string _appVersion;
 
@@ -1746,36 +1780,48 @@ public partial class AboutViewModel : ObservableObject
     private string _architecture = Environment.Is64BitProcess ? "x64 (64位)" : "x86 (32位)";
 
     [ObservableProperty]
-    private string _runtime = $".NET {Environment.Version}";
-
-    [ObservableProperty]
-    private string _osVersion = $"{Environment.OSVersion}";
-
-    [ObservableProperty]
     private string _logDirectoryPath;
 
-    public AboutViewModel()
+    public AboutViewModel() : this(null)
     {
-        LogDirectoryPath = AppLogger.LogDirectory;
+    }
 
+    public AboutViewModel(ConfigService? config)
+    {
+        _config = config;
+        _diagnosticLoggingEnabled = _config?.Current.DiagnosticLoggingEnabled ?? AppLogger.IsEnabled;
+        LogDirectoryPath = AppLogger.LogDirectory;
+        AppVersion = ResolveAppVersion();
+    }
+
+    public event Action? PreferencesChanged;
+
+    internal void SyncFromConfig()
+    {
+        if (_config != null)
+        {
+            SetProperty(ref _diagnosticLoggingEnabled, _config.Current.DiagnosticLoggingEnabled, nameof(DiagnosticLoggingEnabled));
+        }
+    }
+
+    internal static string ResolveAppVersion()
+    {
         var infoVer = Assembly.GetEntryAssembly()?
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
             .InformationalVersion;
         if (!string.IsNullOrEmpty(infoVer))
         {
-            AppVersion = "v" + infoVer.Split('+')[0];
+            return "v" + infoVer.Split('+')[0];
         }
-        else
-        {
-            var ver = Assembly.GetExecutingAssembly().GetName().Version;
-            AppVersion = ver != null ? $"v{ver.Major}.{ver.Minor}.{ver.Build}" : "v1.0.0";
-        }
+
+        var ver = Assembly.GetExecutingAssembly().GetName().Version;
+        return ver != null ? $"v{ver.Major}.{ver.Minor}.{ver.Build}" : "v1.0.0";
     }
 
     [RelayCommand]
     public void OpenLogFolder()
     {
-        AppLogger.OpenLogFolder();
+        SettingsViewModel.OpenLogFolderWithPrompt();
     }
 
     [RelayCommand]
