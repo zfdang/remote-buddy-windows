@@ -11,6 +11,7 @@ using Xunit;
 
 namespace RemoteBuddy.Tests;
 
+[Collection("VirtualAudioAuditor")]
 public class HidDeviceReaderTests
 {
     private sealed class TestBluetoothManager : IBluetoothManager

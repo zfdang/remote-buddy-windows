@@ -1063,6 +1063,7 @@ public partial class IntegrationsViewModel : ObservableObject
 {
     private readonly ConfigService _config;
     private DriverReadinessStatus _driverStatus;
+    private CableOutputReadiness _cableOutputStatus = CableOutputReadiness.Unknown;
 
     public TargetInputTool SelectedTool => _config.Current.InputTool.Tool;
 
@@ -1081,8 +1082,10 @@ public partial class IntegrationsViewModel : ObservableObject
 
     public string VirtualCableStatusDescription => _driverStatus switch
     {
-        DriverReadinessStatus.Ready when VirtualAudioAuditor.IsCableOutputDisabled =>
+        DriverReadinessStatus.Ready when _cableOutputStatus == CableOutputReadiness.Disabled =>
             "CABLE Input 已就绪，但录音端 CABLE Output 已被禁用，请在 Windows 声音设置中启用",
+        DriverReadinessStatus.Ready when _cableOutputStatus == CableOutputReadiness.Missing =>
+            "CABLE Input 已就绪，但未检测到录音端 CABLE Output，请检查系统录音设备或重新安装 VB-CABLE",
         DriverReadinessStatus.Ready => "CABLE Input (VB-Audio Virtual Cable) 驱动已就绪",
         DriverReadinessStatus.NotInstalled => "未检测到 VB-CABLE 驱动，请前往【环境与驱动】安装",
         DriverReadinessStatus.Disabled => "CABLE Input 已被系统禁用，请在 Windows 声音设置中启用",
@@ -1092,7 +1095,7 @@ public partial class IntegrationsViewModel : ObservableObject
 
     public string VirtualCableStatusBrush => _driverStatus switch
     {
-        DriverReadinessStatus.Ready when VirtualAudioAuditor.IsCableOutputDisabled => "#FFB347",
+        DriverReadinessStatus.Ready when _cableOutputStatus is CableOutputReadiness.Disabled or CableOutputReadiness.Missing => "#FFB347",
         DriverReadinessStatus.Ready => "#00CC66",
         DriverReadinessStatus.Disabled or DriverReadinessStatus.RebootRequired => "#FFB347",
         _ => "#FF6666"
@@ -1113,6 +1116,7 @@ public partial class IntegrationsViewModel : ObservableObject
     public void Reload()
     {
         _driverStatus = VirtualAudioAuditor.AuditCableInputDevice();
+        _cableOutputStatus = VirtualAudioAuditor.GetCableOutputStatus();
         OnPropertyChanged(nameof(SelectedTool));
         OnPropertyChanged(nameof(CurrentToolDisplayName));
         OnPropertyChanged(nameof(CurrentShortcutDisplay));
@@ -1134,6 +1138,13 @@ public partial class EnvironmentViewModel : ObservableObject
     private DriverReadinessStatus _driverStatus;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DriverStatusBadgeText))]
+    [NotifyPropertyChangedFor(nameof(DriverStatusBadgeColor))]
+    [NotifyPropertyChangedFor(nameof(DriverStatusBadgeBgColor))]
+    [NotifyPropertyChangedFor(nameof(DriverStatusBadgeBorderColor))]
+    private CableOutputReadiness _cableOutputStatus = CableOutputReadiness.Unknown;
+
+    [ObservableProperty]
     private string _cableInstallMessage = string.Empty;
 
     public bool CanInstallCable => DriverStatus == DriverReadinessStatus.NotInstalled;
@@ -1147,6 +1158,8 @@ public partial class EnvironmentViewModel : ObservableObject
 
     public string DriverStatusBadgeText => DriverStatus switch
     {
+        DriverReadinessStatus.Ready when CableOutputStatus == CableOutputReadiness.Disabled => "录音端已禁用",
+        DriverReadinessStatus.Ready when CableOutputStatus == CableOutputReadiness.Missing => "录音端缺失",
         DriverReadinessStatus.Ready => "已就绪",
         DriverReadinessStatus.NotInstalled => "未安装",
         DriverReadinessStatus.Disabled => "已禁用",
@@ -1156,6 +1169,7 @@ public partial class EnvironmentViewModel : ObservableObject
 
     public string DriverStatusBadgeColor => DriverStatus switch
     {
+        DriverReadinessStatus.Ready when CableOutputStatus is CableOutputReadiness.Disabled or CableOutputReadiness.Missing => "#FFB347",
         DriverReadinessStatus.Ready => "#44FF88",
         DriverReadinessStatus.Disabled or DriverReadinessStatus.RebootRequired => "#FFB347",
         _ => "#FF6666"
@@ -1163,6 +1177,7 @@ public partial class EnvironmentViewModel : ObservableObject
 
     public string DriverStatusBadgeBgColor => DriverStatus switch
     {
+        DriverReadinessStatus.Ready when CableOutputStatus is CableOutputReadiness.Disabled or CableOutputReadiness.Missing => "#3D2E18",
         DriverReadinessStatus.Ready => "#1C3827",
         DriverReadinessStatus.Disabled or DriverReadinessStatus.RebootRequired => "#3D2E18",
         _ => "#3D1818"
@@ -1170,6 +1185,7 @@ public partial class EnvironmentViewModel : ObservableObject
 
     public string DriverStatusBadgeBorderColor => DriverStatus switch
     {
+        DriverReadinessStatus.Ready when CableOutputStatus is CableOutputReadiness.Disabled or CableOutputReadiness.Missing => "#8A5A1A",
         DriverReadinessStatus.Ready => "#2D6A42",
         DriverReadinessStatus.Disabled or DriverReadinessStatus.RebootRequired => "#8A5A1A",
         _ => "#8A2D2D"
@@ -1287,10 +1303,13 @@ public partial class EnvironmentViewModel : ObservableObject
     public void RefreshStatus()
     {
         DriverStatus = VirtualAudioAuditor.AuditCableInputDevice(forceRefresh: true);
+        CableOutputStatus = VirtualAudioAuditor.GetCableOutputStatus();
         StatusDescription = DriverStatus switch
         {
-            DriverReadinessStatus.Ready when VirtualAudioAuditor.IsCableOutputDisabled =>
+            DriverReadinessStatus.Ready when CableOutputStatus == CableOutputReadiness.Disabled =>
                 "CABLE Input 已就绪，但录音端 CABLE Output 已被禁用。请在 Windows 声音设置中启用“CABLE Output”。",
+            DriverReadinessStatus.Ready when CableOutputStatus == CableOutputReadiness.Missing =>
+                "CABLE Input 已就绪，但未检测到录音端 CABLE Output。请检查 Windows 声音设置或重新安装 VB-CABLE。",
             DriverReadinessStatus.Ready => "VB-CABLE 虚拟麦克风已就绪，音频服务工作正常。",
             DriverReadinessStatus.NotInstalled => "未检测到 VB-CABLE。可在这里下载并安装。",
             DriverReadinessStatus.Disabled => "检测到 CABLE Input 虚拟扬声器设备已被禁用。请打开 Windows 声音设置启用 “CABLE Input”。",
@@ -1442,9 +1461,22 @@ public partial class GeneralViewModel : ObservableObject, IDisposable
     [NotifyPropertyChangedFor(nameof(PermissionsSummary))]
     private DriverReadinessStatus _driverStatus = VirtualAudioAuditor.GetCachedStatus();
 
-    public bool PermissionsReady => DriverStatus == DriverReadinessStatus.Ready;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PermissionsReady))]
+    [NotifyPropertyChangedFor(nameof(PermissionsStatusText))]
+    [NotifyPropertyChangedFor(nameof(PermissionsStatusBrush))]
+    [NotifyPropertyChangedFor(nameof(PermissionsBadgeBackground))]
+    [NotifyPropertyChangedFor(nameof(PermissionsBorderBrush))]
+    [NotifyPropertyChangedFor(nameof(PermissionsIcon))]
+    [NotifyPropertyChangedFor(nameof(PermissionsSummary))]
+    private CableOutputReadiness _cableOutputStatus = VirtualAudioAuditor.GetCableOutputStatus();
+
+    public bool PermissionsReady => DriverStatus == DriverReadinessStatus.Ready &&
+        CableOutputStatus is CableOutputReadiness.Active or CableOutputReadiness.Unknown;
     public string PermissionsStatusText => DriverStatus switch
     {
+        DriverReadinessStatus.Ready when CableOutputStatus == CableOutputReadiness.Disabled => "录音端已禁用",
+        DriverReadinessStatus.Ready when CableOutputStatus == CableOutputReadiness.Missing => "录音端缺失",
         DriverReadinessStatus.Ready => "驱动就绪",
         DriverReadinessStatus.Disabled => "设备已禁用",
         DriverReadinessStatus.RebootRequired => "需重启",
@@ -1456,6 +1488,10 @@ public partial class GeneralViewModel : ObservableObject, IDisposable
     public string PermissionsIcon => PermissionsReady ? "✓" : "⚠";
     public string PermissionsSummary => DriverStatus switch
     {
+        DriverReadinessStatus.Ready when CableOutputStatus == CableOutputReadiness.Disabled =>
+            "CABLE Input 已就绪，但录音端 CABLE Output 已被禁用，请在 Windows 声音设置中启用",
+        DriverReadinessStatus.Ready when CableOutputStatus == CableOutputReadiness.Missing =>
+            "CABLE Input 已就绪，但未检测到录音端 CABLE Output，请检查系统录音设备或重新安装 VB-CABLE",
         DriverReadinessStatus.Ready => "VB-CABLE 虚拟麦克风已就绪，音频服务工作正常",
         DriverReadinessStatus.Disabled => "CABLE Input 音频设备已被禁用，请在 Windows 声音设置中启用",
         DriverReadinessStatus.RebootRequired => "VB-CABLE 安装尚未完成，请重启系统完成初始化",
@@ -1539,17 +1575,24 @@ public partial class GeneralViewModel : ObservableObject, IDisposable
         SyncFromConfig();
 
         DriverStatus = VirtualAudioAuditor.GetCachedStatus();
+        CableOutputStatus = VirtualAudioAuditor.GetCableOutputStatus();
         _ = Task.Run(() =>
         {
             var status = VirtualAudioAuditor.AuditCableInputDevice(forceRefresh: true);
+            var outputStatus = VirtualAudioAuditor.GetCableOutputStatus();
             var dispatcher = System.Windows.Application.Current?.Dispatcher;
             if (dispatcher != null && !dispatcher.CheckAccess())
             {
-                dispatcher.BeginInvoke(new Action(() => DriverStatus = status));
+                dispatcher.BeginInvoke(new Action(() =>
+                {
+                    DriverStatus = status;
+                    CableOutputStatus = outputStatus;
+                }));
             }
             else
             {
                 DriverStatus = status;
+                CableOutputStatus = outputStatus;
             }
         });
 

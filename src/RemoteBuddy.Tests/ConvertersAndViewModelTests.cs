@@ -13,6 +13,7 @@ using Xunit;
 
 namespace RemoteBuddy.Tests;
 
+[Collection("VirtualAudioAuditor")]
 public class ConvertersAndViewModelTests
 {
     private sealed class DummyBluetoothManager : IBluetoothManager
@@ -705,6 +706,51 @@ public class ConvertersAndViewModelTests
         }
         finally
         {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData(CableOutputReadiness.Missing, "录音端缺失")]
+    [InlineData(CableOutputReadiness.Disabled, "录音端已禁用")]
+    public void CableOutputMissingOrDisabled_UpdatesEnvironmentIntegrationsGeneralAndOnboardingViews(
+        CableOutputReadiness outputState,
+        string expectedBadgeText)
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-cableout-{Guid.NewGuid():N}.json");
+        var prevDriverOverride = VirtualAudioAuditor.StatusOverride;
+        var prevOutputOverride = VirtualAudioAuditor.CableOutputOverride;
+        try
+        {
+            VirtualAudioAuditor.StatusOverride = DriverReadinessStatus.Ready;
+            VirtualAudioAuditor.CableOutputOverride = outputState;
+            var config = new ConfigService(path);
+            var bt = new DummyBluetoothManager();
+
+            var envVm = new EnvironmentViewModel();
+            Assert.Equal(expectedBadgeText, envVm.DriverStatusBadgeText);
+            Assert.Equal("#FFB347", envVm.DriverStatusBadgeColor);
+            Assert.Contains("CABLE Output", envVm.StatusDescription);
+
+            var intVm = new IntegrationsViewModel(config);
+            Assert.Equal("#FFB347", intVm.VirtualCableStatusBrush);
+            Assert.Contains("CABLE Output", intVm.VirtualCableStatusDescription);
+
+            using var genVm = new GeneralViewModel(config, bt, () => { }, _ => { });
+            Assert.False(genVm.PermissionsReady);
+            Assert.Equal(expectedBadgeText, genVm.PermissionsStatusText);
+            Assert.Equal("#FFAA33", genVm.PermissionsStatusBrush);
+            Assert.Equal("⚠", genVm.PermissionsIcon);
+            Assert.Contains("CABLE Output", genVm.PermissionsSummary);
+
+            using var onbVm = new OnboardingViewModel(config, bt, WizardMode.Full);
+            Assert.DoesNotContain("✅ VB-CABLE 虚拟麦克风已就绪", onbVm.DriverStatusMessage);
+            Assert.Contains("CABLE Output", onbVm.DriverStatusMessage);
+        }
+        finally
+        {
+            VirtualAudioAuditor.StatusOverride = prevDriverOverride;
+            VirtualAudioAuditor.CableOutputOverride = prevOutputOverride;
             if (File.Exists(path)) File.Delete(path);
         }
     }

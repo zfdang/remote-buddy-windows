@@ -19,9 +19,18 @@ public enum DriverReadinessStatus
     InitializationFailed
 }
 
+public enum CableOutputReadiness
+{
+    Unknown,
+    Active,
+    Disabled,
+    Missing
+}
+
 public static class VirtualAudioAuditor
 {
     private static DriverReadinessStatus _cachedStatus = DriverReadinessStatus.NotInstalled;
+    private static CableOutputReadiness _cableOutputStatus = CableOutputReadiness.Unknown;
     private static DateTime _lastAuditTime = DateTime.MinValue;
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(5);
     private static readonly object _auditLock = new();
@@ -30,8 +39,28 @@ public static class VirtualAudioAuditor
     private static EndpointNotificationClient? _notificationClient;
 
     public static DriverReadinessStatus? StatusOverride { get; set; }
-    public static bool IsCableOutputActive { get; private set; }
-    public static bool IsCableOutputDisabled { get; private set; }
+    public static CableOutputReadiness? CableOutputOverride { get; set; }
+    public static bool IsCableOutputActive => GetCableOutputStatus() == CableOutputReadiness.Active;
+    public static bool IsCableOutputDisabled => GetCableOutputStatus() == CableOutputReadiness.Disabled;
+    public static bool IsCableOutputMissing => GetCableOutputStatus() == CableOutputReadiness.Missing;
+
+    public static CableOutputReadiness GetCableOutputStatus()
+    {
+        lock (_auditLock)
+        {
+            if (CableOutputOverride.HasValue)
+            {
+                return CableOutputOverride.Value;
+            }
+            if (StatusOverride.HasValue)
+            {
+                return StatusOverride.Value == DriverReadinessStatus.Ready
+                    ? CableOutputReadiness.Active
+                    : CableOutputReadiness.Unknown;
+            }
+            return _cableOutputStatus;
+        }
+    }
 
     private sealed class EndpointNotificationClient : IMMNotificationClient
     {
@@ -96,6 +125,7 @@ public static class VirtualAudioAuditor
                 _notificationClient = null;
             }
             _cachedCableInputId = null;
+            _cableOutputStatus = CableOutputReadiness.Unknown;
             _lastAuditTime = DateTime.MinValue;
         }
     }
@@ -105,6 +135,7 @@ public static class VirtualAudioAuditor
         lock (_auditLock)
         {
             _cachedCableInputId = null;
+            _cableOutputStatus = CableOutputReadiness.Unknown;
             _lastAuditTime = DateTime.MinValue;
         }
     }
@@ -183,8 +214,7 @@ public static class VirtualAudioAuditor
 
             if (cableInput == null)
             {
-                IsCableOutputActive = false;
-                IsCableOutputDisabled = false;
+                _cableOutputStatus = CableOutputReadiness.Unknown;
                 bool hasDisabled = false;
                 bool hasPendingReboot = false;
                 string statesSummary = string.Empty;
@@ -246,8 +276,9 @@ public static class VirtualAudioAuditor
                 AppLogger.Debug($"Failed to check CABLE Output status/volume: {ex.Message}", "VirtualAudioAuditor");
             }
 
-            IsCableOutputActive = foundActiveOutput;
-            IsCableOutputDisabled = !foundActiveOutput && foundDisabledOutput;
+            _cableOutputStatus = foundActiveOutput
+                ? CableOutputReadiness.Active
+                : (foundDisabledOutput ? CableOutputReadiness.Disabled : CableOutputReadiness.Missing);
             if (!foundActiveOutput)
             {
                 AppLogger.Warn(
@@ -402,9 +433,11 @@ public sealed class WasapiAudioPlayer : IDisposable
     private readonly WaveFormat _format = new(16000, 16, 1);
     private byte[] _sampleByteBuffer = new byte[4096];
     private readonly object _lock = new();
-    private volatile bool _isStopping;
+    private volatile bool _stopRequested;
     private volatile bool _disposed;
     private int _recoveryAttempts;
+
+    internal Func<MMDevice?> ResolveDeviceForTest { get; set; } = VirtualAudioAuditor.GetCableInputDevice;
 
     public event Action<string>? PlaybackRecoveryFailed;
 
@@ -432,14 +465,19 @@ public sealed class WasapiAudioPlayer : IDisposable
         {
             if (resetRecoveryCount)
             {
+                _stopRequested = false;
                 _recoveryAttempts = 0;
             }
+            else if (_stopRequested)
+            {
+                return false;
+            }
 
-            device ??= VirtualAudioAuditor.GetCableInputDevice();
+            device ??= ResolveDeviceForTest();
             if (device == null)
             {
                 AppLogger.Warn("WasapiAudioPlayer.Start failed: CABLE Input device not found", "WasapiAudioPlayer");
-                StopInternal(resetRecoveryCount: false);
+                CleanupStreamLocked();
                 return false;
             }
 
@@ -451,7 +489,7 @@ public sealed class WasapiAudioPlayer : IDisposable
                 return true;
             }
 
-            StopInternal(resetRecoveryCount: false);
+            CleanupStreamLocked();
 
             WaveFormat? mixFormat = null;
             try { mixFormat = device.AudioClient.MixFormat; } catch { }
@@ -470,7 +508,6 @@ public sealed class WasapiAudioPlayer : IDisposable
                 wasapiOut.Init(preRollProvider);
                 wasapiOut.Play();
 
-                _isStopping = false;
                 _wasapiOut = wasapiOut;
                 _waveProvider = waveProvider;
                 _preRollProvider = preRollProvider;
@@ -480,7 +517,7 @@ public sealed class WasapiAudioPlayer : IDisposable
             catch (Exception ex)
             {
                 AppLogger.Error($"WasapiAudioPlayer failed to initialize WASAPI stream (HResult=0x{ex.HResult:X8}, MixFormat={VirtualAudioAuditor.DescribeMixFormat(mixFormat)})", ex, "WasapiAudioPlayer");
-                StopInternal(resetRecoveryCount: false);
+                CleanupStreamLocked();
                 return false;
             }
         }
@@ -488,7 +525,7 @@ public sealed class WasapiAudioPlayer : IDisposable
 
     private void OnPlaybackStopped(object? sender, StoppedEventArgs e)
     {
-        if (_isStopping || _disposed) return;
+        if (_stopRequested || _disposed) return;
 
         bool shouldRecover;
         lock (_lock)
@@ -523,15 +560,17 @@ public sealed class WasapiAudioPlayer : IDisposable
         }
 
         // Recover off the playback callback thread to avoid Dispose() self-join deadlocks
-        _ = Task.Run(() =>
+        _ = Task.Run(RunRecoveryAttempt);
+    }
+
+    internal void RunRecoveryAttempt()
+    {
+        if (_disposed || _stopRequested) return;
+        AppLogger.Info("Attempting automatic WASAPI stream recovery...", "WasapiAudioPlayer");
+        if (!StartInternal(device: null, resetRecoveryCount: false) && !_disposed && !_stopRequested)
         {
-            if (_disposed || _isStopping) return;
-            AppLogger.Info("Attempting automatic WASAPI stream recovery...", "WasapiAudioPlayer");
-            if (!StartInternal(device: null, resetRecoveryCount: false) && !_disposed && !_isStopping)
-            {
-                PlaybackRecoveryFailed?.Invoke("虚拟音频输出流自动恢复失败，请检查 VB-CABLE 设备状态");
-            }
-        });
+            PlaybackRecoveryFailed?.Invoke("虚拟音频输出流自动恢复失败，请检查 VB-CABLE 设备状态");
+        }
     }
 
     public void WriteSamples(ReadOnlySpan<short> samples)
@@ -645,27 +684,33 @@ public sealed class WasapiAudioPlayer : IDisposable
 
     private void StopInternal(bool resetRecoveryCount)
     {
+        _stopRequested = true;
         lock (_lock)
         {
-            _isStopping = true;
+            _stopRequested = true;
             if (resetRecoveryCount)
             {
                 _recoveryAttempts = 0;
             }
-            if (_wasapiOut != null)
-            {
-                _wasapiOut.PlaybackStopped -= OnPlaybackStopped;
-                try
-                {
-                    _wasapiOut.Stop();
-                }
-                catch { }
-                _wasapiOut.Dispose();
-                _wasapiOut = null;
-            }
-            _waveProvider = null;
-            _preRollProvider = null;
+            CleanupStreamLocked();
         }
+    }
+
+    private void CleanupStreamLocked()
+    {
+        if (_wasapiOut != null)
+        {
+            _wasapiOut.PlaybackStopped -= OnPlaybackStopped;
+            try
+            {
+                _wasapiOut.Stop();
+            }
+            catch { }
+            _wasapiOut.Dispose();
+            _wasapiOut = null;
+        }
+        _waveProvider = null;
+        _preRollProvider = null;
     }
 
     public void Dispose()

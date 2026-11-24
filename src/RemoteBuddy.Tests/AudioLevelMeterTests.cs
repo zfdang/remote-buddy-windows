@@ -88,4 +88,35 @@ public class AudioLevelMeterTests
         sw.Stop();
         Assert.True(sw.ElapsedMilliseconds < 250);
     }
+
+    [Fact]
+    public void WasapiAudioPlayer_RecoveryFailure_RaisesPlaybackRecoveryFailed()
+    {
+        using var player = new WasapiAudioPlayer
+        {
+            ResolveDeviceForTest = () => null
+        };
+        string? failedReason = null;
+        player.PlaybackRecoveryFailed += reason => failedReason = reason;
+
+        player.RunRecoveryAttempt();
+
+        Assert.False(string.IsNullOrWhiteSpace(failedReason));
+    }
+
+    [Fact]
+    public void WasapiAudioPlayer_ExplicitStop_SuppressesPlaybackRecoveryFailed()
+    {
+        using var player = new WasapiAudioPlayer
+        {
+            ResolveDeviceForTest = () => null
+        };
+        bool raised = false;
+        player.PlaybackRecoveryFailed += _ => raised = true;
+
+        player.Stop();
+        player.RunRecoveryAttempt();
+
+        Assert.False(raised);
+    }
 }

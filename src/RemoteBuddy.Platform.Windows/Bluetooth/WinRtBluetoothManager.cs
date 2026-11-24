@@ -32,6 +32,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
         byte StepIndex,
         ushort FrameNumber,
         bool ResetLowNibbleFirst,
+        bool PrecededByDrop,
         TaskCompletionSource<bool>? Completion);
 
     private static readonly TimeSpan MicOpenWriteTimeout = TimeSpan.FromSeconds(3);
@@ -70,6 +71,8 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
             FullMode = BoundedChannelFullMode.Wait
         });
     private int _droppedAudioFrames;
+    private readonly object _audioQueueLock = new();
+    private int _pendingAudioGapGen = -1;
     private readonly Task _audioWorkerTask;
 
     private byte _currentSessionId = 0;
@@ -970,24 +973,84 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
         }
     }
 
-    private void EnqueueControlWorkItem(AudioWorkItem item)
+    private bool TryEnqueueAudioWorkItemLocked(AudioWorkItem item)
     {
-        if (_audioChannel.Writer.TryWrite(item)) return;
-        _ = _audioChannel.Writer.WriteAsync(item).AsTask();
+        bool precededByDrop = _pendingAudioGapGen == item.AudioGeneration;
+        var stamped = item with { PrecededByDrop = precededByDrop };
+        if (!_audioChannel.Writer.TryWrite(stamped))
+        {
+            return false;
+        }
+
+        if (precededByDrop)
+        {
+            _pendingAudioGapGen = -1;
+        }
+        return true;
+    }
+
+    private async Task EnqueueWhenSpaceAvailableAsync(AudioWorkItem item, CancellationToken ct = default)
+    {
+        try
+        {
+            while (await _audioChannel.Writer.WaitToWriteAsync(ct).ConfigureAwait(false))
+            {
+                lock (_audioQueueLock)
+                {
+                    if (item.Kind == AudioWorkKind.Reset)
+                    {
+                        var resetItem = item with { PrecededByDrop = false };
+                        if (_audioChannel.Writer.TryWrite(resetItem))
+                        {
+                            _pendingAudioGapGen = -1;
+                            return;
+                        }
+                    }
+                    else if (TryEnqueueAudioWorkItemLocked(item))
+                    {
+                        return;
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
     }
 
     private void EnqueueAudioReset(int audioGen, bool resetLowNibbleFirst = false)
     {
-        EnqueueControlWorkItem(new AudioWorkItem(
-            AudioWorkKind.Reset, audioGen, null, 0, 0, 0, 0, 0, 0, resetLowNibbleFirst, null));
+        var resetItem = new AudioWorkItem(
+            AudioWorkKind.Reset, audioGen, null, 0, 0, 0, 0, 0, 0, resetLowNibbleFirst, false, null);
+        lock (_audioQueueLock)
+        {
+            _pendingAudioGapGen = -1;
+            if (_audioChannel.Writer.TryWrite(resetItem)) return;
+        }
+        _ = EnqueueWhenSpaceAvailableAsync(resetItem);
+    }
+
+    private void EnqueueAudioSync(int audioGen, short predictor, byte stepIndex, ushort frameNumber)
+    {
+        var syncItem = new AudioWorkItem(
+            AudioWorkKind.Sync, audioGen, null, 0, 0, 0, predictor, stepIndex, frameNumber, false, false, null);
+        lock (_audioQueueLock)
+        {
+            if (TryEnqueueAudioWorkItemLocked(syncItem)) return;
+        }
+        _ = EnqueueWhenSpaceAvailableAsync(syncItem);
     }
 
     private async Task FlushAudioPipelineAsync(int audioGen, int frameSize, float gain)
     {
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var flushItem = new AudioWorkItem(
-            AudioWorkKind.Flush, audioGen, null, 0, frameSize, gain, 0, 0, 0, false, tcs);
-        if (_audioChannel.Writer.TryWrite(flushItem))
+            AudioWorkKind.Flush, audioGen, null, 0, frameSize, gain, 0, 0, 0, false, false, tcs);
+        bool written;
+        lock (_audioQueueLock)
+        {
+            written = TryEnqueueAudioWorkItemLocked(flushItem);
+        }
+
+        if (written)
         {
             await Task.WhenAny(tcs.Task, Task.Delay(150)).ConfigureAwait(false);
             return;
@@ -996,7 +1059,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
         try
         {
             using var cts = new CancellationTokenSource(150);
-            await _audioChannel.Writer.WriteAsync(flushItem, cts.Token).ConfigureAwait(false);
+            await EnqueueWhenSpaceAvailableAsync(flushItem, cts.Token).ConfigureAwait(false);
             await Task.WhenAny(tcs.Task, Task.Delay(150, cts.Token)).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { }
@@ -1557,11 +1620,20 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
         Volatile.Write(ref _lastAudioPacketTimeMs, Environment.TickCount64);
 
         byte[] rented = ArrayPool<byte>.Shared.Rent(len);
+        bool enqueued = false;
         try
         {
             args.CharacteristicValue.CopyTo(0, rented, 0, len);
-            if (!_audioChannel.Writer.TryWrite(new AudioWorkItem(
-                AudioWorkKind.Audio, currentAudioGen, rented, len, frameSize, gain, 0, 0, 0, false, null)))
+            lock (_audioQueueLock)
+            {
+                enqueued = TryEnqueueAudioWorkItemLocked(new AudioWorkItem(
+                    AudioWorkKind.Audio, currentAudioGen, rented, len, frameSize, gain, 0, 0, 0, false, false, null));
+                if (!enqueued)
+                {
+                    _pendingAudioGapGen = currentAudioGen;
+                }
+            }
+            if (!enqueued)
             {
                 ArrayPool<byte>.Shared.Return(rented);
                 int dropped = Interlocked.Increment(ref _droppedAudioFrames);
@@ -1573,9 +1645,20 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
         }
         catch
         {
-            ArrayPool<byte>.Shared.Return(rented);
+            if (!enqueued)
+            {
+                ArrayPool<byte>.Shared.Return(rented);
+            }
             throw;
         }
+    }
+
+    private void HandleAudioPacketLossLocked()
+    {
+        _frameAccumulator.NotifyPacketLoss();
+        _decoder.Reset();
+        _postprocessor.Reset();
+        AppLogger.Warn("Audio packet loss detected in queue order; awaiting AudioSync before resuming playback", "BluetoothManager");
     }
 
     private async Task ProcessAudioChannelAsync()
@@ -1606,6 +1689,10 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                             {
                                 if (item.AudioGeneration != Volatile.Read(ref _audioGeneration) || item.PooledBuffer == null)
                                     break;
+                                if (item.PrecededByDrop)
+                                {
+                                    HandleAudioPacketLossLocked();
+                                }
                                 _frameAccumulator.Append(item.PooledBuffer.AsSpan(0, item.Length), item.FrameSize, frame =>
                                 {
                                     latestLevel = DecodeAndPlayFrameLocked(frame, item.Gain);
@@ -1621,6 +1708,10 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                             lock (_audioLock)
                             {
                                 if (item.AudioGeneration != Volatile.Read(ref _audioGeneration)) break;
+                                if (item.PrecededByDrop)
+                                {
+                                    HandleAudioPacketLossLocked();
+                                }
                                 _frameAccumulator.Synchronize(item.Predictor, item.StepIndex, item.FrameNumber);
                             }
                             break;
@@ -1631,6 +1722,10 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                             {
                                 if (item.AudioGeneration == Volatile.Read(ref _audioGeneration))
                                 {
+                                    if (item.PrecededByDrop)
+                                    {
+                                        HandleAudioPacketLossLocked();
+                                    }
                                     _frameAccumulator.Flush(item.FrameSize, partial =>
                                     {
                                         flushLevel = DecodeAndPlayFrameLocked(partial, item.Gain);
@@ -1687,6 +1782,55 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
 
     internal G9N9NSmartToggleSession.Phase SmartTogglePhaseForTest => _smartToggle.CurrentPhase;
     internal BluetoothSessionState SessionStateForTest => _sessionState;
+
+    internal bool IsAudioAwaitingResyncForTest
+    {
+        get { lock (_audioLock) return _frameAccumulator.IsAwaitingResync; }
+    }
+
+    internal int PendingAccumulatorBytesForTest
+    {
+        get { lock (_audioLock) return _frameAccumulator.PendingCount; }
+    }
+
+    internal (int Predictor, int StepIndex) DecoderStateForTest
+    {
+        get { lock (_audioLock) return (_decoder.Predictor, _decoder.StepIndex); }
+    }
+
+    internal bool EnqueueAudioPacketForTest(ReadOnlySpan<byte> payload, int frameSize = 120, float gain = 1.0f)
+    {
+        int currentAudioGen = Volatile.Read(ref _audioGeneration);
+        byte[] rented = ArrayPool<byte>.Shared.Rent(payload.Length);
+        payload.CopyTo(rented);
+        bool enqueued = false;
+        lock (_audioQueueLock)
+        {
+            enqueued = TryEnqueueAudioWorkItemLocked(new AudioWorkItem(
+                AudioWorkKind.Audio, currentAudioGen, rented, payload.Length, frameSize, gain, 0, 0, 0, false, false, null));
+            if (!enqueued)
+            {
+                _pendingAudioGapGen = currentAudioGen;
+            }
+        }
+        if (!enqueued)
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
+        return enqueued;
+    }
+
+    internal void SimulateAudioQueueDropForTest()
+    {
+        int currentAudioGen = Volatile.Read(ref _audioGeneration);
+        lock (_audioQueueLock)
+        {
+            _pendingAudioGapGen = currentAudioGen;
+        }
+    }
+
+    internal Task FlushAudioPipelineForTestAsync(int frameSize = 120, float gain = 1.0f) =>
+        FlushAudioPipelineAsync(Volatile.Read(ref _audioGeneration), frameSize, gain);
 
     internal void SetSessionStateForTest(BluetoothSessionState state, byte sessionId = 0, G9N9NSmartToggleSession.Phase? smartTogglePhase = null)
     {
@@ -2038,8 +2182,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 if (ATVVProtocol.ParseAudioSync(data, out short predictor, out byte stepIndex, out ushort frameNumber))
                 {
                     AppLogger.Debug($"ATVV packet AudioSync (0x0A): Frame={frameNumber}, Predictor={predictor}, StepIndex={stepIndex}", "BluetoothManager");
-                    EnqueueControlWorkItem(new AudioWorkItem(
-                        AudioWorkKind.Sync, capturedAudioGen, null, 0, 0, 0, predictor, stepIndex, frameNumber, false, null));
+                    EnqueueAudioSync(capturedAudioGen, predictor, stepIndex, frameNumber);
                 }
                 break;
 

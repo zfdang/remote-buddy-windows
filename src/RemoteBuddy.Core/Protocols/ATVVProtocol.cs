@@ -169,17 +169,53 @@ public sealed class ATVVFrameAccumulator
     private int _framesBeforeSync = 0;
     private ushort _decodedFrameIndex;
     private bool _sawNonZeroSyncFrame;
+    private bool _awaitingResync;
 
     public int PendingCount => _count;
+    public bool IsAwaitingResync => _awaitingResync;
+
+    public void NotifyPacketLoss()
+    {
+        _offset = 0;
+        _count = 0;
+        _pendingSync = null;
+        _framesBeforeSync = 0;
+        _awaitingResync = true;
+    }
 
     public void Synchronize(short predictor, byte stepIndex)
     {
+        if (_awaitingResync)
+        {
+            _offset = 0;
+            _count = 0;
+            _pendingSync = (predictor, stepIndex);
+            _framesBeforeSync = 0;
+            _awaitingResync = false;
+            return;
+        }
+
         _pendingSync = (predictor, stepIndex);
         _framesBeforeSync = _count == 0 ? 0 : 1;
     }
 
     public void Synchronize(short predictor, byte stepIndex, ushort frameNumber)
     {
+        if (_awaitingResync)
+        {
+            _offset = 0;
+            _count = 0;
+            _pendingSync = (predictor, stepIndex);
+            _framesBeforeSync = 0;
+            _decodedFrameIndex = frameNumber;
+            if (frameNumber != 0)
+            {
+                _sawNonZeroSyncFrame = true;
+            }
+            _awaitingResync = false;
+            return;
+        }
+
         if (frameNumber != 0 || _sawNonZeroSyncFrame)
         {
             _sawNonZeroSyncFrame = true;
@@ -209,11 +245,12 @@ public sealed class ATVVFrameAccumulator
         _framesBeforeSync = 0;
         _decodedFrameIndex = 0;
         _sawNonZeroSyncFrame = false;
+        _awaitingResync = false;
     }
 
     public void Append(ReadOnlySpan<byte> data, int frameSize, SpanAction onFrame)
     {
-        if (frameSize <= 0 || data.IsEmpty) return;
+        if (frameSize <= 0 || data.IsEmpty || _awaitingResync) return;
         if (data.Length > MaxBufferBytes)
         {
             Reset();
@@ -240,9 +277,10 @@ public sealed class ATVVFrameAccumulator
 
     public void Flush(int frameSize, SpanAction onPartialFrame)
     {
-        if (_count <= 0)
+        if (_awaitingResync || _count <= 0)
         {
             _offset = 0;
+            _count = 0;
             return;
         }
 
