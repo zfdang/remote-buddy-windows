@@ -56,9 +56,11 @@
                 <StackPanel Visibility="{Binding Action, Converter={StaticResource EqualValueToVisibilityConverter}, ConverterParameter=KeyboardShortcut}">
                     <TextBlock Text="键盘快捷键" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,6"/>
                     <DockPanel Margin="0,0,0,8">
-                        <ToggleButton DockPanel.Dock="Right" Margin="8,0,0,0" Padding="8,5" ToolTip="按 Esc 取消录制"
+                        <ToggleButton DockPanel.Dock="Right" Margin="8,0,0,0" Padding="8,5" ToolTip="按 Esc 取消录制（支持独立 RAlt / RCtrl / 组合键）"
                                       InputMethod.IsInputMethodEnabled="False"
-                                      PreviewKeyDown="RecordShortcut" LostKeyboardFocus="StopRecordingShortcut">
+                                      Checked="OnRecordShortcutChecked"
+                                      PreviewKeyDown="RecordShortcut" PreviewKeyUp="RecordShortcutKeyUp"
+                                      LostKeyboardFocus="StopRecordingShortcut">
                             <ToggleButton.Style>
                                 <Style TargetType="ToggleButton">
                                     <Setter Property="Content" Value="录制"/>

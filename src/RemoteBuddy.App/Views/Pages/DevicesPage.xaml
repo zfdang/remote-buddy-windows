@@ -17,6 +17,20 @@
                     Command="{Binding AddDeviceCommand}"/>
         </Grid>
 
+        <!-- Connection Failure Banner -->
+        <Border DockPanel.Dock="Top" Background="#3D2E18" BorderBrush="#8A5A1A" BorderThickness="1" CornerRadius="8" Padding="14,10" Margin="0,0,0,14"
+                Visibility="{Binding HasConnectionFeedback, Converter={StaticResource BoolToVisibilityConverter}}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="{Binding ConnectionFeedbackMessage}" Foreground="#FFD480" FontSize="13" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,12,0"/>
+                <Button Grid.Column="1" Content="✕" Padding="8,4" Background="Transparent" BorderBrush="#8A5A1A" Foreground="#FFD480" VerticalAlignment="Center"
+                        Command="{Binding DismissConnectionFeedbackCommand}"/>
+            </Grid>
+        </Border>
+
         <!-- Device Cards List -->
         <ScrollViewer VerticalScrollBarVisibility="Auto">
             <StackPanel>

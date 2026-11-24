@@ -40,6 +40,12 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     private float _deviceGain = RemoteDevice.DefaultMicrophoneGain;
 
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasConnectionFeedback))]
+    private string _connectionFeedbackMessage = string.Empty;
+
+    public bool HasConnectionFeedback => !string.IsNullOrEmpty(ConnectionFeedbackMessage);
+
     public event Action? DevicesChanged;
 
     public bool HasDevices => DiscoveredDevices.Count > 0;
@@ -111,6 +117,10 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
                     dev.IsConnected = _bt.IsDeviceReady(dev.BluetoothAddress);
                 }
                 var connectedDev = DiscoveredDevices.FirstOrDefault(d => d.IsConnected);
+                if (connectedDev != null)
+                {
+                    ConnectionFeedbackMessage = string.Empty;
+                }
                 if (connectedDev != null && (SelectedDevice == null || !DiscoveredDevices.Contains(SelectedDevice)))
                 {
                     SelectedDevice = connectedDev;
@@ -276,14 +286,30 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
+    public void DismissConnectionFeedback() => ConnectionFeedbackMessage = string.Empty;
+
+    [RelayCommand]
     public async Task ConnectDeviceAsync(RemoteDevice? device)
     {
         if (device == null) return;
 
-        _bt.SetDeviceVoiceSettings(device);
-        bool ok = await _bt.ConnectAsync(device.BluetoothAddress);
+        ConnectionFeedbackMessage = string.Empty;
+        bool ok = false;
+        string? errorMessage = null;
+        try
+        {
+            _bt.SetDeviceVoiceSettings(device);
+            ok = await _bt.ConnectAsync(device.BluetoothAddress);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+            AppLogger.Error($"ConnectDeviceAsync failed for '{device.Name}' (0x{device.BluetoothAddress:X12})", ex, "DevicesViewModel");
+        }
+
         if (ok && _bt.IsDeviceReady(device.BluetoothAddress))
         {
+            ConnectionFeedbackMessage = string.Empty;
             if (string.IsNullOrEmpty(device.Id))
             {
                 device.Id = device.BluetoothAddress != 0 ? device.BluetoothAddress.ToString("X12") : Guid.NewGuid().ToString("N");
@@ -304,6 +330,13 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
                 Reload();
                 DevicesChanged?.Invoke();
             }
+        }
+        else
+        {
+            ConnectionFeedbackMessage = string.IsNullOrWhiteSpace(errorMessage)
+                ? $"无法连接「{device.Name}」的蓝牙语音服务。请确保遥控器已配对、电量充足，且未被其他应用或设备独占连接。"
+                : $"连接「{device.Name}」失败：{errorMessage}";
+            AppLogger.Warn($"DevicesViewModel connect failed for '{device.Name}' (0x{device.BluetoothAddress:X12}): {ConnectionFeedbackMessage}", "DevicesViewModel");
         }
     }
 
@@ -403,12 +436,14 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         {
             _bt.SetDeviceVoiceSettings(value);
             if (_isReloading) return;
-            _config.Current.SelectedDeviceId = value.Id;
-            if (value.Mappings == null || value.Mappings.Count == 0)
+            _config.Update(cfg =>
             {
-                value.Mappings = RemoteDevice.CreateDefaultMappings(value.ModelType);
-            }
-            _config.Save();
+                cfg.SelectedDeviceId = value.Id;
+                if (value.Mappings == null || value.Mappings.Count == 0)
+                {
+                    value.Mappings = RemoteDevice.CreateDefaultMappings(value.ModelType);
+                }
+            });
         }
     }
 
@@ -1027,6 +1062,7 @@ public partial class MappingViewModel : ObservableObject
 public partial class IntegrationsViewModel : ObservableObject
 {
     private readonly ConfigService _config;
+    private DriverReadinessStatus _driverStatus;
 
     public TargetInputTool SelectedTool => _config.Current.InputTool.Tool;
 
@@ -1043,24 +1079,20 @@ public partial class IntegrationsViewModel : ObservableObject
 
     public string CurrentTriggerModeDisplay => _config.Current.InputTool.TriggerMode == VoiceTriggerMode.HoldToTalk ? "按住说话" : "单击切换";
 
-    public string VirtualCableStatusDescription
+    public string VirtualCableStatusDescription => _driverStatus switch
     {
-        get
-        {
-            var status = VirtualAudioAuditor.AuditCableInputDevice();
-            return status switch
-            {
-                DriverReadinessStatus.Ready => "CABLE Input (VB-Audio Virtual Cable) 驱动已就绪",
-                DriverReadinessStatus.NotInstalled => "未检测到 VB-CABLE 驱动，请前往【环境与驱动】安装",
-                DriverReadinessStatus.Disabled => "CABLE Input 已被系统禁用，请在 Windows 声音设置中启用",
-                DriverReadinessStatus.RebootRequired => "VB-CABLE 需要重启系统完成初始化",
-                _ => "虚拟音频设备未就绪"
-            };
-        }
-    }
+        DriverReadinessStatus.Ready when VirtualAudioAuditor.IsCableOutputDisabled =>
+            "CABLE Input 已就绪，但录音端 CABLE Output 已被禁用，请在 Windows 声音设置中启用",
+        DriverReadinessStatus.Ready => "CABLE Input (VB-Audio Virtual Cable) 驱动已就绪",
+        DriverReadinessStatus.NotInstalled => "未检测到 VB-CABLE 驱动，请前往【环境与驱动】安装",
+        DriverReadinessStatus.Disabled => "CABLE Input 已被系统禁用，请在 Windows 声音设置中启用",
+        DriverReadinessStatus.RebootRequired => "VB-CABLE 需要重启系统完成初始化",
+        _ => "虚拟音频设备未就绪"
+    };
 
-    public string VirtualCableStatusBrush => VirtualAudioAuditor.AuditCableInputDevice() switch
+    public string VirtualCableStatusBrush => _driverStatus switch
     {
+        DriverReadinessStatus.Ready when VirtualAudioAuditor.IsCableOutputDisabled => "#FFB347",
         DriverReadinessStatus.Ready => "#00CC66",
         DriverReadinessStatus.Disabled or DriverReadinessStatus.RebootRequired => "#FFB347",
         _ => "#FF6666"
@@ -1080,6 +1112,7 @@ public partial class IntegrationsViewModel : ObservableObject
 
     public void Reload()
     {
+        _driverStatus = VirtualAudioAuditor.AuditCableInputDevice();
         OnPropertyChanged(nameof(SelectedTool));
         OnPropertyChanged(nameof(CurrentToolDisplayName));
         OnPropertyChanged(nameof(CurrentShortcutDisplay));
@@ -1240,7 +1273,14 @@ public partial class EnvironmentViewModel : ObservableObject
     [RelayCommand]
     public void RestartAsAdministrator()
     {
-        BluetoothAdapterHelper.RestartAppAsAdministrator();
+        if (BluetoothAdapterHelper.RestartAppAsAdministrator())
+        {
+            if (System.Windows.Application.Current?.MainWindow is Views.MainWindow mw)
+            {
+                mw.IsExplicitExit = true;
+            }
+            System.Windows.Application.Current?.Shutdown();
+        }
     }
 
     [RelayCommand]
@@ -1249,6 +1289,8 @@ public partial class EnvironmentViewModel : ObservableObject
         DriverStatus = VirtualAudioAuditor.AuditCableInputDevice(forceRefresh: true);
         StatusDescription = DriverStatus switch
         {
+            DriverReadinessStatus.Ready when VirtualAudioAuditor.IsCableOutputDisabled =>
+                "CABLE Input 已就绪，但录音端 CABLE Output 已被禁用。请在 Windows 声音设置中启用“CABLE Output”。",
             DriverReadinessStatus.Ready => "VB-CABLE 虚拟麦克风已就绪，音频服务工作正常。",
             DriverReadinessStatus.NotInstalled => "未检测到 VB-CABLE。可在这里下载并安装。",
             DriverReadinessStatus.Disabled => "检测到 CABLE Input 虚拟扬声器设备已被禁用。请打开 Windows 声音设置启用 “CABLE Input”。",
@@ -1269,11 +1311,34 @@ public partial class SettingsViewModel : ObservableObject
     private readonly ConfigService _config;
     private readonly Action<WizardMode>? _openWizard;
 
-    [ObservableProperty]
     private bool _launchAtStartup;
+    public bool LaunchAtStartup
+    {
+        get => _launchAtStartup;
+        set
+        {
+            if (SetProperty(ref _launchAtStartup, value))
+            {
+                StartupService.SetLaunchAtStartup(value);
+                _config.Update(cfg => cfg.LaunchAtStartup = value);
+                PreferencesChanged?.Invoke();
+            }
+        }
+    }
 
-    [ObservableProperty]
     private bool _minimizeToTrayOnClose;
+    public bool MinimizeToTrayOnClose
+    {
+        get => _minimizeToTrayOnClose;
+        set
+        {
+            if (SetProperty(ref _minimizeToTrayOnClose, value))
+            {
+                _config.Update(cfg => cfg.MinimizeToTrayOnClose = value);
+                PreferencesChanged?.Invoke();
+            }
+        }
+    }
 
     [ObservableProperty]
     private string _appVersion;
@@ -1285,8 +1350,8 @@ public partial class SettingsViewModel : ObservableObject
     {
         _config = config;
         _openWizard = openWizard;
-        LaunchAtStartup = StartupService.IsLaunchAtStartupEnabled();
-        MinimizeToTrayOnClose = _config.Current.MinimizeToTrayOnClose;
+        _launchAtStartup = StartupService.IsLaunchAtStartupEnabled();
+        _minimizeToTrayOnClose = _config.Current.MinimizeToTrayOnClose;
         LogDirectoryPath = AppLogger.LogDirectory;
 
         var infoVer = Assembly.GetEntryAssembly()?
@@ -1308,17 +1373,13 @@ public partial class SettingsViewModel : ObservableObject
     {
     }
 
-    partial void OnLaunchAtStartupChanged(bool value)
-    {
-        StartupService.SetLaunchAtStartup(value);
-        _config.Current.LaunchAtStartup = value;
-        _config.Save();
-    }
+    public event Action? PreferencesChanged;
 
-    partial void OnMinimizeToTrayOnCloseChanged(bool value)
+    internal void SyncFromConfig()
     {
-        _config.Current.MinimizeToTrayOnClose = value;
-        _config.Save();
+        bool launch = StartupService.IsLaunchAtStartupEnabled();
+        SetProperty(ref _launchAtStartup, launch, nameof(LaunchAtStartup));
+        SetProperty(ref _minimizeToTrayOnClose, _config.Current.MinimizeToTrayOnClose, nameof(MinimizeToTrayOnClose));
     }
 
     [RelayCommand]
@@ -1334,18 +1395,42 @@ public partial class SettingsViewModel : ObservableObject
     }
 }
 
-public partial class GeneralViewModel : ObservableObject
+public partial class GeneralViewModel : ObservableObject, IDisposable
 {
     private readonly ConfigService _config;
     private readonly IBluetoothManager _bt;
     private readonly Action<WizardMode> _openWizard;
     private readonly Action<string> _navigate;
+    private readonly Action<ulong, bool, string> _connectionChangedHandler;
 
-    [ObservableProperty]
     private bool _launchAtStartup;
+    public bool LaunchAtStartup
+    {
+        get => _launchAtStartup;
+        set
+        {
+            if (SetProperty(ref _launchAtStartup, value))
+            {
+                StartupService.SetLaunchAtStartup(value);
+                _config.Update(cfg => cfg.LaunchAtStartup = value);
+                PreferencesChanged?.Invoke();
+            }
+        }
+    }
 
-    [ObservableProperty]
     private bool _minimizeToTrayOnClose;
+    public bool MinimizeToTrayOnClose
+    {
+        get => _minimizeToTrayOnClose;
+        set
+        {
+            if (SetProperty(ref _minimizeToTrayOnClose, value))
+            {
+                _config.Update(cfg => cfg.MinimizeToTrayOnClose = value);
+                PreferencesChanged?.Invoke();
+            }
+        }
+    }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(PermissionsReady))]
@@ -1425,10 +1510,10 @@ public partial class GeneralViewModel : ObservableObject
         _openWizard = openWizard;
         _navigate = navigate;
 
-        LaunchAtStartup = StartupService.IsLaunchAtStartupEnabled();
-        MinimizeToTrayOnClose = _config.Current.MinimizeToTrayOnClose;
+        _launchAtStartup = StartupService.IsLaunchAtStartupEnabled();
+        _minimizeToTrayOnClose = _config.Current.MinimizeToTrayOnClose;
 
-        _bt.ConnectionStatusChanged += (_, _, _) =>
+        _connectionChangedHandler = (_, _, _) =>
         {
             if (System.Windows.Application.Current?.Dispatcher != null)
             {
@@ -1439,6 +1524,7 @@ public partial class GeneralViewModel : ObservableObject
                 RefreshState();
             }
         };
+        _bt.ConnectionStatusChanged += _connectionChangedHandler;
     }
 
     public GeneralViewModel(ConfigService config, IBluetoothManager bt, Action openOnboarding, Action<string> navigate)
@@ -1446,8 +1532,12 @@ public partial class GeneralViewModel : ObservableObject
     {
     }
 
+    public event Action? PreferencesChanged;
+
     public void RefreshState()
     {
+        SyncFromConfig();
+
         DriverStatus = VirtualAudioAuditor.GetCachedStatus();
         _ = Task.Run(() =>
         {
@@ -1488,17 +1578,16 @@ public partial class GeneralViewModel : ObservableObject
         OnPropertyChanged(nameof(IntegrationSummary));
     }
 
-    partial void OnLaunchAtStartupChanged(bool value)
+    internal void SyncFromConfig()
     {
-        StartupService.SetLaunchAtStartup(value);
-        _config.Current.LaunchAtStartup = value;
-        _config.Save();
+        bool launch = StartupService.IsLaunchAtStartupEnabled();
+        SetProperty(ref _launchAtStartup, launch, nameof(LaunchAtStartup));
+        SetProperty(ref _minimizeToTrayOnClose, _config.Current.MinimizeToTrayOnClose, nameof(MinimizeToTrayOnClose));
     }
 
-    partial void OnMinimizeToTrayOnCloseChanged(bool value)
+    public void Dispose()
     {
-        _config.Current.MinimizeToTrayOnClose = value;
-        _config.Save();
+        _bt.ConnectionStatusChanged -= _connectionChangedHandler;
     }
 
     [RelayCommand]
@@ -1576,12 +1665,14 @@ public partial class AppIntegrationViewModel : ObservableObject
 
     private void Save()
     {
-        _config.Current.AppIntegrations ??= new();
-        foreach (var app in Applications)
+        _config.Update(cfg =>
         {
-            _config.Current.AppIntegrations[app.Id] = app.IsEnabled;
-        }
-        _config.Save();
+            cfg.AppIntegrations ??= new();
+            foreach (var app in Applications)
+            {
+                cfg.AppIntegrations[app.Id] = app.IsEnabled;
+            }
+        });
     }
 
     [RelayCommand]

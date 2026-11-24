@@ -46,6 +46,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly HashSet<ulong> _unboundEtwAddresses = [];
     private readonly object _etwProbeLock = new();
     private bool _etwElevationDeclined;
+    private bool _voiceKeyGuardInstalled;
 
     private void ResetGestures()
     {
@@ -140,8 +141,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public bool IsMainWindowActive { get; set; }
 
+    public bool IsModalConfirmationOpen { get; set; }
+
     internal bool IsMappingPreviewSuppressed() =>
-        ActiveOnboardingVm == null && IsMainWindowActive && ActivePageName == "Mapping";
+        ActiveOnboardingVm == null && (IsMainWindowActive || IsModalConfirmationOpen) && ActivePageName == "Mapping";
 
     private int _buttonSourceGeneration;
 
@@ -170,6 +173,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         AppIntegrationVm = new AppIntegrationViewModel(_configService);
         AboutVm = new AboutViewModel();
         SettingsVm = new SettingsViewModel(_configService, mode => RequestOpenWizard?.Invoke(mode));
+        GeneralVm.PreferencesChanged += OnGeneralPreferencesChanged;
+        SettingsVm.PreferencesChanged += OnSettingsPreferencesChanged;
         UpdateVoiceKeyGuard();
 
         _rawInputReceiver.DeviceFilter = IsTargetDevice;
@@ -257,7 +262,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         switch (_activeWarningKind)
         {
             case WarningKind.DoubaoKeyboard:
-                BluetoothAdapterHelper.RestartAppAsAdministrator();
+                if (BluetoothAdapterHelper.RestartAppAsAdministrator())
+                {
+                    if (System.Windows.Application.Current?.MainWindow is Views.MainWindow mw)
+                    {
+                        mw.IsExplicitExit = true;
+                    }
+                    System.Windows.Application.Current?.Shutdown();
+                }
                 break;
             case WarningKind.Audio:
                 Navigate("Permissions");
@@ -305,7 +317,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (_hidReaders.Remove(address, out var reader)) reader.Dispose();
         }
 
-        var existingByAddress = _etwSources
+        var currentEtwSources = Volatile.Read(ref _etwSources);
+        var existingByAddress = currentEtwSources
             .GroupBy(source => source.Address)
             .ToDictionary(group => group.Key, group => group.First());
         var wanted = devices.Select(device =>
@@ -335,14 +348,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 filter.HidHandleEnd,
                 filter.ExcludedAttributes);
         }).ToArray();
-        bool rebuild = !EtwSourcesMatch(_etwSources, wanted) || !_chromecastButtonReceiver.IsRunning;
+        bool rebuild = !EtwSourcesMatch(currentEtwSources, wanted) || !_chromecastButtonReceiver.IsRunning;
         if (rebuild && ready.Length > 0)
         {
             int generation = Interlocked.Increment(ref _buttonSourceGeneration);
             CancelEtwTasks();
             _chromecastButtonReceiver.Stop();
             ResetGestures();
-            _etwSources = wanted;
+            Volatile.Write(ref _etwSources, wanted);
             lock (_etwProbeLock)
             {
                 _unboundEtwAddresses.Clear();
@@ -351,9 +364,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             if (!_etwElevationDeclined)
             {
-                _etwStartCts = new CancellationTokenSource();
-                var startToken = _etwStartCts.Token;
-                _ = StartAndProbeEtwAsync(_etwSources, generation, startToken);
+                var startCts = new CancellationTokenSource();
+                _etwStartCts = startCts;
+                _ = StartAndProbeEtwAsync(wanted, generation, startCts.Token);
             }
         }
         else if (ready.Length == 0)
@@ -372,7 +385,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             ulong address = device.BluetoothAddress;
             if (!rebuild && !_readyAddresses.Contains(address))
             {
-                var source = _etwSources.FirstOrDefault(entry => entry.Address == address);
+                var source = Volatile.Read(ref _etwSources).FirstOrDefault(entry => entry.Address == address);
                 if (source.Address != 0 && _chromecastButtonReceiver.IsRunning)
                 {
                     lock (_etwProbeLock) _unboundEtwAddresses.Add(address);
@@ -407,19 +420,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void CancelEtwTasks()
     {
-        try { _etwStartCts?.Cancel(); } catch { }
-        _etwStartCts?.Dispose();
+        var startCts = _etwStartCts;
         _etwStartCts = null;
+        try { startCts?.Cancel(); } catch { }
 
+        CancellationTokenSource? retryCts;
         lock (_etwProbeLock)
         {
-            try { _probeRetryCts?.Cancel(); } catch { }
-            _probeRetryCts?.Dispose();
+            retryCts = _probeRetryCts;
             _probeRetryCts = null;
         }
+        try { retryCts?.Cancel(); } catch { }
     }
 
-    internal EtwButtonSource[] EtwSourcesForTest => _etwSources;
+    internal EtwButtonSource[] EtwSourcesForTest => Volatile.Read(ref _etwSources);
 
     internal static bool EtwSourcesMatch(EtwButtonSource[] existing, EtwButtonSource[] wanted)
     {
@@ -472,13 +486,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private void StartProbeRetryLoop(int generation)
     {
         CancellationToken token;
+        CancellationTokenSource? oldCts;
         lock (_etwProbeLock)
         {
-            try { _probeRetryCts?.Cancel(); } catch { }
-            _probeRetryCts?.Dispose();
+            oldCts = _probeRetryCts;
             _probeRetryCts = new CancellationTokenSource();
             token = _probeRetryCts.Token;
         }
+        try { oldCts?.Cancel(); } catch { }
 
         _ = Task.Run(async () =>
         {
@@ -496,10 +511,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
 
                 EtwButtonSource[] remaining;
+                var sourcesSnapshot = Volatile.Read(ref _etwSources);
                 lock (_etwProbeLock)
                 {
                     if (_unboundEtwAddresses.Count == 0) return;
-                    remaining = _etwSources
+                    remaining = sourcesSnapshot
                         .Where(s => _unboundEtwAddresses.Contains(s.Address) && _bluetoothManager.IsDeviceReady(s.Address))
                         .ToArray();
                 }
@@ -635,7 +651,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 ?? _configService.Current.Devices.FirstOrDefault(d => d.Id == _configService.Current.SelectedDeviceId);
             if (device != null)
             {
-                _configService.Current.SelectedDeviceId = device.Id;
+                _configService.Update(cfg => cfg.SelectedDeviceId = device.Id, save: false);
                 _bluetoothManager.VoiceButtonMode = device.VoiceButtonMode;
                 _bluetoothManager.CurrentGain = device.Gain;
                 MappingVm.SyncSelectedDeviceWithConfig();
@@ -863,7 +879,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public void RegisterRawInput(IntPtr hwnd)
     {
         _registeredHwnd = hwnd;
-        AppLogger.Info($"Remote voice F5 guard installed: {_voiceKeyGuard.Install()}", "MainViewModel");
+        if (!_voiceKeyGuardInstalled)
+        {
+            bool installed = _voiceKeyGuard.Install();
+            _voiceKeyGuardInstalled = installed;
+            AppLogger.Info($"Remote voice F5 guard installed: {installed}", "MainViewModel");
+        }
         _rawInputReceiver.Register(hwnd);
     }
     public void ProcessRawInput(IntPtr lParam) => _rawInputReceiver.ProcessMessage(lParam);
@@ -1112,7 +1133,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         AppLogger.Info($"Device removal notification received for hDevice=0x{hDevice:X}", "MainViewModel");
         _nonTargetRawHandles.Remove(hDevice);
-        _rawInputReceiver.InvalidateDeviceCache(hDevice);
+        _rawInputReceiver.ResetDeviceState(hDevice);
         if (_rawAddresses.Remove(hDevice, out ulong address)) ResetDeviceGestures(address);
     }
 
@@ -1193,9 +1214,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _doubaoKeyboard.Dispose();
         _voiceKeyGuard.Dispose();
         ResetGestures();
+        GeneralVm.PreferencesChanged -= OnGeneralPreferencesChanged;
+        SettingsVm.PreferencesChanged -= OnSettingsPreferencesChanged;
+        GeneralVm.Dispose();
         MappingVm.PropertyChanged -= OnMappingSettingsChanged;
         DevicesVm.DevicesChanged -= OnDevicesChanged;
         DevicesVm.Dispose();
         _rawInputReceiver.Dispose();
+    }
+
+    private void OnGeneralPreferencesChanged() => SettingsVm.SyncFromConfig();
+
+    private void OnSettingsPreferencesChanged() => GeneralVm.SyncFromConfig();
+
+    internal void ReleaseVoiceKeysOnCrash()
+    {
+        try { ReleaseHeldVoiceShortcut(); } catch { }
+        try { _voiceKeyGuard.Clear(); } catch { }
     }
 }

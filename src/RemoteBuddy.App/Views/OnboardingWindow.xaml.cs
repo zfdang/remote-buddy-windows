@@ -44,6 +44,23 @@ public partial class OnboardingWindow : Window
                 vm.ProcessRawInput(lParam);
             }
         }
+        else if (msg == 0x00FE /* WM_INPUT_DEVICE_CHANGE */)
+        {
+            if (Application.Current?.MainWindow?.DataContext is MainViewModel vm)
+            {
+                int change = wParam.ToInt32();
+                if (change == 1 /* GIDC_ARRIVAL */)
+                {
+                    vm.HandleDeviceArrival(lParam);
+                }
+                else if (change == 2 /* GIDC_REMOVAL */)
+                {
+                    vm.HandleDeviceRemoval(lParam);
+                }
+            }
+            handled = true;
+            return IntPtr.Zero;
+        }
         else if (msg == 0x0319 /* WM_APPCOMMAND */)
         {
             if (DataContext is OnboardingViewModel onboardingVm && onboardingVm.CurrentWizardStep == WizardStep.ButtonTest &&
