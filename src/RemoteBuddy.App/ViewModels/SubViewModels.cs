@@ -6,6 +6,7 @@ using System.ComponentModel;
 using System.Reflection;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using RemoteBuddy.App.Services;
 using RemoteBuddy.Core.Bluetooth;
 using RemoteBuddy.Core.Config;
 using RemoteBuddy.Core.Diagnostics;
@@ -1786,9 +1787,15 @@ public partial class AboutViewModel : ObservableObject
     {
     }
 
-    public AboutViewModel(ConfigService? config)
+    public AboutViewModel(ConfigService? config) : this(config, WindowsRelease.FetchAsync)
+    {
+    }
+
+    internal AboutViewModel(ConfigService? config, Func<CancellationToken, Task<WindowsRelease>> fetchRelease)
     {
         _config = config;
+        _fetchRelease = fetchRelease;
+        _receiveUpdateNotifications = _config?.Current.ReceiveUpdateNotifications ?? true;
         _diagnosticLoggingEnabled = _config?.Current.DiagnosticLoggingEnabled ?? AppLogger.IsEnabled;
         LogDirectoryPath = AppLogger.LogDirectory;
         AppVersion = ResolveAppVersion();

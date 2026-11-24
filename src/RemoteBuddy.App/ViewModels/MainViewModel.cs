@@ -839,6 +839,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     partial void OnActivePageNameChanged(string value)
     {
+        _ = AboutVm.SetUpdatePageActiveAsync(value == "About");
         ResetGestures();
         if (value == "General")
         {
@@ -1217,6 +1218,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         ResetGestures();
         GeneralVm.PreferencesChanged -= OnGeneralPreferencesChanged;
         SettingsVm.PreferencesChanged -= OnSettingsPreferencesChanged;
+        AboutVm.ResetUpdateCheck();
         AboutVm.PreferencesChanged -= OnAboutPreferencesChanged;
         GeneralVm.Dispose();
         MappingVm.PropertyChanged -= OnMappingSettingsChanged;
