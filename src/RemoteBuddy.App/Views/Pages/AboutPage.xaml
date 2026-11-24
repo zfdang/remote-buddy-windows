@@ -43,8 +43,7 @@
 
                     <DockPanel Margin="0,14,0,0">
                         <Button DockPanel.Dock="Right" Content="立即检查更新" Command="{Binding CheckForUpdatesCommand}"
-                                Margin="12,0,0,0" Padding="12,6"
-                                Visibility="{Binding ReceiveUpdateNotifications, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Inverse}"/>
+                                Margin="12,0,0,0" Padding="12,6"/>
                         <CheckBox Content="接收更新提醒" IsChecked="{Binding ReceiveUpdateNotifications, Mode=TwoWay}"
                                   VerticalAlignment="Center" Foreground="{StaticResource PrimaryTextBrush}"/>
                     </DockPanel>
