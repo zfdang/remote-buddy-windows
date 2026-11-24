@@ -130,6 +130,11 @@ public static class NativeInputSender
         var inputs = new INPUT[1];
         inputs[0] = CreateKeyInput(vk, isKeyUp);
         uint sent = SendInput(1, inputs, Marshal.SizeOf<INPUT>());
+        if (sent == 1 && vk != 0)
+        {
+            if (isKeyUp) _heldSyntheticKeys.TryRemove(vk, out _);
+            else TrackHeldKey(vk);
+        }
         return sent == 1;
     }
 
@@ -154,23 +159,25 @@ public static class NativeInputSender
         int count = Math.Min((int)sentCount, inputs.Length);
         if (count <= 0) return [];
 
-        var openKeys = new List<ushort>(count);
+        var openKeys = new List<(ushort Vk, ushort Scan, bool IsUnicode)>(count);
         for (int i = 0; i < count; i++)
         {
             if (inputs[i].type != INPUT_KEYBOARD) continue;
-            ushort vk = inputs[i].u.ki.wVk;
-            if (vk == 0) continue;
+            var ki = inputs[i].u.ki;
+            bool isUnicode = (ki.dwFlags & KEYEVENTF_UNICODE) != 0;
+            if (!isUnicode && ki.wVk == 0) continue;
 
-            bool isUp = (inputs[i].u.ki.dwFlags & KEYEVENTF_KEYUP) != 0;
+            bool isUp = (ki.dwFlags & KEYEVENTF_KEYUP) != 0;
+            var entry = (ki.wVk, isUnicode ? ki.wScan : (ushort)0, isUnicode);
             if (!isUp)
             {
-                openKeys.Add(vk);
+                openKeys.Add(entry);
             }
             else
             {
                 for (int j = openKeys.Count - 1; j >= 0; j--)
                 {
-                    if (openKeys[j] == vk)
+                    if (openKeys[j] == entry)
                     {
                         openKeys.RemoveAt(j);
                         break;
@@ -183,7 +190,22 @@ public static class NativeInputSender
         var releases = new INPUT[openKeys.Count];
         for (int i = 0; i < openKeys.Count; i++)
         {
-            releases[i] = CreateKeyInput(openKeys[openKeys.Count - 1 - i], isKeyUp: true);
+            var entry = openKeys[openKeys.Count - 1 - i];
+            releases[i] = entry.IsUnicode
+                ? new INPUT
+                {
+                    type = INPUT_KEYBOARD,
+                    u = new InputUnion
+                    {
+                        ki = new KEYBDINPUT
+                        {
+                            wScan = entry.Scan,
+                            dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
+                            dwExtraInfo = SyntheticEventMarker
+                        }
+                    }
+                }
+                : CreateKeyInput(entry.Vk, isKeyUp: true);
         }
         return releases;
     }
@@ -196,7 +218,10 @@ public static class NativeInputSender
         uint relSent = SendInput((uint)releases.Length, releases, Marshal.SizeOf<INPUT>());
         for (int i = (int)relSent; i < releases.Length; i++)
         {
-            TrackHeldKey(releases[i].u.ki.wVk);
+            if (releases[i].u.ki.wVk != 0)
+            {
+                TrackHeldKey(releases[i].u.ki.wVk);
+            }
         }
     }
 
@@ -273,10 +298,18 @@ public static class NativeInputSender
         {
             inputs.Add(CreateKeyInput(mainKey, false));
         }
-        uint sent = SendInput((uint)inputs.Count, inputs.ToArray(), Marshal.SizeOf<INPUT>());
-        for (int i = 0; i < sent; i++) TrackHeldKey(inputs[i].u.ki.wVk);
-        if (sent != inputs.Count) ReleaseAllHeldSyntheticKeys();
-        return sent == inputs.Count;
+        var inputArray = inputs.ToArray();
+        uint sent = SendInput((uint)inputArray.Length, inputArray, Marshal.SizeOf<INPUT>());
+        if (sent == inputArray.Length)
+        {
+            for (int i = 0; i < sent; i++) TrackHeldKey(inputArray[i].u.ki.wVk);
+            return true;
+        }
+        if (sent > 0)
+        {
+            ReleasePartialSendInputs(inputArray, sent);
+        }
+        return false;
     }
 
     public static INPUT[] CreateShortcutReleaseInputs(string shortcut)
@@ -342,7 +375,12 @@ public static class NativeInputSender
 
         if (vk == 0) return false;
         var inputs = new[] { CreateKeyInput(vk, false), CreateKeyInput(vk, true) };
-        return SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>()) == inputs.Length;
+        uint sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+        if (sent > 0 && sent < inputs.Length)
+        {
+            ReleasePartialSendInputs(inputs, sent);
+        }
+        return sent == inputs.Length;
     }
 
     public static bool SendUnicodeText(string text)

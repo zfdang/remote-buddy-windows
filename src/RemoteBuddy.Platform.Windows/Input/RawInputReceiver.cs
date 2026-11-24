@@ -128,6 +128,7 @@ public sealed class RawInputReceiver : IDisposable
     private IntPtr _hwnd;
     private bool _isRegistered;
     private readonly Dictionary<IntPtr, string> _devicePathCache = new();
+    private readonly Dictionary<IntPtr, IntPtr> _preparsedDataCache = new();
     private readonly Dictionary<IntPtr, Dictionary<byte, HashSet<RemoteButton>>> _deviceReportButtons = new();
     private readonly HashSet<IntPtr> _devicesHoldingF5 = new();
     private readonly object _lock = new();
@@ -142,7 +143,10 @@ public sealed class RawInputReceiver : IDisposable
         }
 
         var resolved = ResolveDeviceContainerIdInternal(devicePath);
-        _containerIdCache[devicePath] = resolved;
+        if (resolved.HasValue)
+        {
+            _containerIdCache[devicePath] = resolved;
+        }
 
         return resolved;
     }
@@ -212,6 +216,10 @@ public sealed class RawInputReceiver : IDisposable
                 {
                     _containerIdCache.TryRemove(oldPath, out _);
                 }
+                if (_preparsedDataCache.Remove(hDevice.Value, out var preparsed) && preparsed != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(preparsed);
+                }
                 _devicesHoldingF5.Remove(hDevice.Value);
             }
             else
@@ -227,6 +235,11 @@ public sealed class RawInputReceiver : IDisposable
                 {
                     if (!string.IsNullOrEmpty(oldPath)) _containerIdCache.TryRemove(oldPath, out _);
                 }
+                foreach (var preparsed in _preparsedDataCache.Values)
+                {
+                    if (preparsed != IntPtr.Zero) Marshal.FreeHGlobal(preparsed);
+                }
+                _preparsedDataCache.Clear();
                 _deviceReportButtons.Clear();
                 _devicePathCache.Clear();
                 _devicesHoldingF5.Clear();
@@ -245,6 +258,10 @@ public sealed class RawInputReceiver : IDisposable
         lock (_lock)
         {
             _devicePathCache.Remove(hDevice, out cachedPath);
+            if (_preparsedDataCache.Remove(hDevice, out var preparsed) && preparsed != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(preparsed);
+            }
         }
         if (!string.IsNullOrEmpty(cachedPath))
         {
@@ -492,9 +509,18 @@ public sealed class RawInputReceiver : IDisposable
                 devicePath = path;
             }
 
-            if (DeviceFilter != null && !DeviceFilter(hDevice, devicePath))
+            bool filterRejected = DeviceFilter != null && !DeviceFilter(hDevice, devicePath);
+            if (filterRejected)
             {
-                return;
+                bool hasActiveState;
+                lock (_lock)
+                {
+                    hasActiveState = _devicesHoldingF5.Contains(hDevice) || _deviceReportButtons.ContainsKey(hDevice);
+                }
+                if (!hasActiveState)
+                {
+                    return;
+                }
             }
 
             int headerSize = Marshal.SizeOf<RAWINPUTHEADER>();
@@ -506,6 +532,10 @@ public sealed class RawInputReceiver : IDisposable
                 ushort flags = (ushort)Marshal.ReadInt16(buffer, headerSize + 2);
                 ushort vkey = (ushort)Marshal.ReadInt16(buffer, headerSize + 6);
                 bool isDown = (flags & 1) == 0;
+                if (filterRejected && isDown)
+                {
+                    return;
+                }
 
                 if (vkey == 0x74)
                 {
@@ -542,12 +572,14 @@ public sealed class RawInputReceiver : IDisposable
                 {
                     if (!_deviceReportButtons.TryGetValue(hDevice, out var reportMap))
                     {
+                        if (filterRejected) return;
                         reportMap = new Dictionary<byte, HashSet<RemoteButton>>();
                         _deviceReportButtons[hDevice] = reportMap;
                     }
 
                     if (!reportMap.TryGetValue(KeyboardReportId, out var pressedButtons))
                     {
+                        if (filterRejected) return;
                         pressedButtons = new HashSet<RemoteButton>();
                         reportMap[KeyboardReportId] = pressedButtons;
                     }
@@ -580,8 +612,10 @@ public sealed class RawInputReceiver : IDisposable
             uint dwSizeHid = (uint)Marshal.ReadInt32(buffer, headerSize);
             uint dwCount = (uint)Marshal.ReadInt32(buffer, headerSize + 4);
 
-            int totalRawBytes = (int)(dwSizeHid * dwCount);
-            if (totalRawBytes <= 0 || dataOffset + totalRawBytes > (int)dwSize) return;
+            ulong totalRawBytesU = (ulong)dwSizeHid * dwCount;
+            if (dwSizeHid == 0 || totalRawBytesU == 0 || totalRawBytesU > int.MaxValue ||
+                (ulong)dataOffset + totalRawBytesU > dwSize) return;
+            int totalRawBytes = (int)totalRawBytesU;
 
             byte[] rawBytes = new byte[totalRawBytes];
             Marshal.Copy(IntPtr.Add(buffer, dataOffset), rawBytes, 0, totalRawBytes);
@@ -600,8 +634,30 @@ public sealed class RawInputReceiver : IDisposable
             {
                 if (!_deviceReportButtons.TryGetValue(hDevice, out var reportMap))
                 {
+                    if (filterRejected) return;
                     reportMap = new Dictionary<byte, HashSet<RemoteButton>>();
                     _deviceReportButtons[hDevice] = reportMap;
+                }
+
+                try
+                {
+                    if (!_preparsedDataCache.TryGetValue(hDevice, out IntPtr preparsed))
+                {
+                    uint preparsedSize = 0;
+                    GetRawInputDeviceInfo(hDevice, RIDI_PREPARSEDDATA, IntPtr.Zero, ref preparsedSize);
+                    if (preparsedSize > 0 && preparsedSize <= 65536)
+                    {
+                        IntPtr alloc = Marshal.AllocHGlobal((int)preparsedSize);
+                        if (GetRawInputDeviceInfo(hDevice, RIDI_PREPARSEDDATA, alloc, ref preparsedSize) == preparsedSize)
+                        {
+                            preparsed = alloc;
+                            _preparsedDataCache[hDevice] = preparsed;
+                        }
+                        else
+                        {
+                            Marshal.FreeHGlobal(alloc);
+                        }
+                    }
                 }
 
                 for (int i = 0; i < (int)dwCount; i++)
@@ -611,35 +667,22 @@ public sealed class RawInputReceiver : IDisposable
                     List<RemoteButton> currentButtons = new();
 
                     // 1. First try parsing through Windows HID API (HidP_GetUsages)
-                    uint preparsedSize = 0;
-                    GetRawInputDeviceInfo(hDevice, RIDI_PREPARSEDDATA, IntPtr.Zero, ref preparsedSize);
-                    if (preparsedSize > 0)
+                    if (preparsed != IntPtr.Zero)
                     {
-                        IntPtr preparsed = Marshal.AllocHGlobal((int)preparsedSize);
-                        try
+                        uint usageLength = 16;
+                        ushort[] usages = new ushort[usageLength];
+                        IntPtr pReport = IntPtr.Add(buffer, dataOffset + (i * reportSize));
+                        if (HidP_GetUsages(0, 0x0C, 0, usages, ref usageLength, preparsed, pReport, (uint)reportSize) >= 0 && usageLength > 0)
                         {
-                            if (GetRawInputDeviceInfo(hDevice, RIDI_PREPARSEDDATA, preparsed, ref preparsedSize) == preparsedSize)
+                            for (int u = 0; u < usageLength; u++)
                             {
-                                uint usageLength = 16;
-                                ushort[] usages = new ushort[usageLength];
-                                IntPtr pReport = IntPtr.Add(buffer, dataOffset + (i * reportSize));
-                                if (HidP_GetUsages(0, 0x0C, 0, usages, ref usageLength, preparsed, pReport, (uint)reportSize) >= 0 && usageLength > 0)
+                                if (modelType == RemoteModelType.T1Remote && usages[u] == 0x0221) continue;
+                                if (G9N9NProtocol.ConsumerButtons.TryGetValue(usages[u], out var btn))
                                 {
-                                    for (int u = 0; u < usageLength; u++)
-                                    {
-                                        if (modelType == RemoteModelType.T1Remote && usages[u] == 0x0221) continue;
-                                        if (G9N9NProtocol.ConsumerButtons.TryGetValue(usages[u], out var btn))
-                                        {
-                                            currentButtons.Add(btn);
-                                        }
-                                    }
-                                    recognized = true;
+                                    currentButtons.Add(btn);
                                 }
                             }
-                        }
-                        finally
-                        {
-                            Marshal.FreeHGlobal(preparsed);
+                            recognized = true;
                         }
                     }
 
@@ -752,9 +795,17 @@ public sealed class RawInputReceiver : IDisposable
                         }
                     }
                 }
+                }
+                finally
+                {
+                    if (filterRejected && reportMap.Values.All(btns => btns.Count == 0))
+                    {
+                        _deviceReportButtons.Remove(hDevice);
+                    }
+                }
             }
 
-            if (notifyVoiceHold)
+            if (notifyVoiceHold && !filterRejected)
             {
                 PhysicalVoiceKeyPressed?.Invoke(hDevice);
             }
@@ -837,8 +888,14 @@ public sealed class RawInputReceiver : IDisposable
 
         lock (_lock)
         {
+            foreach (var preparsed in _preparsedDataCache.Values)
+            {
+                if (preparsed != IntPtr.Zero) Marshal.FreeHGlobal(preparsed);
+            }
+            _preparsedDataCache.Clear();
             _deviceReportButtons.Clear();
             _devicePathCache.Clear();
+            _devicesHoldingF5.Clear();
         }
     }
 }

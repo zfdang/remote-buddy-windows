@@ -16,26 +16,32 @@ public sealed class RemoteVoiceKeyGuard(Func<bool> voiceSessionActive) : IDispos
     private IntPtr _hook;
     private volatile bool _armed;
     private long _armedAt;
-    private bool _ownsF5;
+    private volatile bool _ownsF5;
     private long _holdStartedAt;
     private int _blockedDowns;
     private int _blockedUps;
+    private volatile bool _isSuppressionEnabled = true;
 
     public void BeginShortcutHold(string shortcut)
     {
         _ownsF5 = NativeInputSender.TryParseShortcut(shortcut, out _, out var key) && key == 0x74;
-        _holdStartedAt = Environment.TickCount64;
-        _blockedDowns = _blockedUps = 0;
+        Volatile.Write(ref _holdStartedAt, Environment.TickCount64);
+        Interlocked.Exchange(ref _blockedDowns, 0);
+        Interlocked.Exchange(ref _blockedUps, 0);
     }
 
     public void EndShortcutHold()
     {
         if (_ownsF5)
-            AppLogger.Info($"F5 hold finished: PhysicalDownsBlocked={_blockedDowns}, PhysicalUpsBlocked={_blockedUps}", "RemoteVoiceKeyGuard");
+            AppLogger.Info($"F5 hold finished: PhysicalDownsBlocked={Volatile.Read(ref _blockedDowns)}, PhysicalUpsBlocked={Volatile.Read(ref _blockedUps)}", "RemoteVoiceKeyGuard");
         _ownsF5 = false;
     }
 
-    public bool IsSuppressionEnabled { get; set; } = true;
+    public bool IsSuppressionEnabled
+    {
+        get => _isSuppressionEnabled;
+        set => _isSuppressionEnabled = value;
+    }
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern IntPtr SetWindowsHookExW(int id, HookProc callback, IntPtr module, uint threadId);
@@ -61,7 +67,7 @@ public sealed class RemoteVoiceKeyGuard(Func<bool> voiceSessionActive) : IDispos
     public void Arm()
     {
         if (!IsSuppressionEnabled) return;
-        _armedAt = Environment.TickCount64;
+        Volatile.Write(ref _armedAt, Environment.TickCount64);
         _armed = true;
         bool released = NativeInputSender.SendKey(0x74, true);
         AppLogger.Info($"Remote F5 guard armed; cleanup key-up accepted={released}", "RemoteVoiceKeyGuard");
@@ -88,21 +94,21 @@ public sealed class RemoteVoiceKeyGuard(Func<bool> voiceSessionActive) : IDispos
                     // can release the injected hold before our balanced key-up.
                     if (_ownsF5)
                     {
-                        long heldMs = Environment.TickCount64 - _holdStartedAt;
+                        long heldMs = Environment.TickCount64 - Volatile.Read(ref _holdStartedAt);
                         if (heldMs > AbsoluteMaxHoldDurationMs || (heldMs > MaxHoldDurationMs && !voiceSessionActive()))
                         {
                             _ownsF5 = false;
                         }
                         else
                         {
-                            if (message.ToInt64() is 0x101 or 0x105) _blockedUps++;
-                            else _blockedDowns++;
+                            if (message.ToInt64() is 0x101 or 0x105) Interlocked.Increment(ref _blockedUps);
+                            else Interlocked.Increment(ref _blockedDowns);
                             return (IntPtr)1;
                         }
                     }
                     if (!IsSuppressionEnabled) return CallNextHookEx(_hook, code, message, data);
                     bool sessionActive = voiceSessionActive();
-                    if (!sessionActive && _armed && Environment.TickCount64 - _armedAt > 2000)
+                    if (!sessionActive && _armed && Environment.TickCount64 - Volatile.Read(ref _armedAt) > 2000)
                         _armed = false;
                     if (sessionActive || _armed)
                     {

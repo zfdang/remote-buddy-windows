@@ -3,8 +3,10 @@
 
 using System.Diagnostics;
 using System.IO.Pipes;
+using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using Microsoft.Win32.SafeHandles;
 using RemoteBuddy.Core.Diagnostics;
 using RemoteBuddy.Core.Models;
 
@@ -16,6 +18,9 @@ namespace RemoteBuddy.Platform.Windows.Input;
 /// </summary>
 public sealed class ChromecastWorkerClient : IDisposable
 {
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetNamedPipeClientProcessId(SafePipeHandle Pipe, out uint ClientProcessId);
+
     public event Action<ulong, RemoteButton, bool>? ButtonEvent;
     public event Action<ulong>? TruncatedPacketDetected;
     public event Action<ulong>? DeviceDisconnected;
@@ -72,8 +77,14 @@ public sealed class ChromecastWorkerClient : IDisposable
             string pipeName = "RemoteBuddy_ChromecastEtw_" + Guid.NewGuid().ToString("N");
             var pipeSecurity = new PipeSecurity();
             using var currentIdentity = WindowsIdentity.GetCurrent();
+            if (currentIdentity.User == null)
+            {
+                LastError = "Unable to resolve current Windows user SID for named pipe ACL";
+                AppLogger.Warn(LastError, "ChromecastWorkerClient");
+                return false;
+            }
             pipeSecurity.AddAccessRule(new PipeAccessRule(
-                currentIdentity.User ?? new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null),
+                currentIdentity.User,
                 PipeAccessRights.ReadWrite,
                 AccessControlType.Allow));
             pipeSecurity.AddAccessRule(new PipeAccessRule(
@@ -129,6 +140,15 @@ public sealed class ChromecastWorkerClient : IDisposable
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(localStartCts.Token, timeoutCts.Token);
 
             await pipeServer.WaitForConnectionAsync(linkedCts.Token).ConfigureAwait(false);
+
+            if (!GetNamedPipeClientProcessId(pipeServer.SafePipeHandle, out uint clientPid) ||
+                (clientPid != (uint)workerProcess.Id && clientPid != 0))
+            {
+                LastError = $"Unexpected worker PID connected to named pipe (expected={workerProcess.Id}, actual={clientPid})";
+                AppLogger.Warn(LastError, "ChromecastWorkerClient");
+                DisposeResources(pipeServer, workerProcess, null);
+                return false;
+            }
 
             byte[] readyBuf = new byte[1];
             int read = await pipeServer.ReadAsync(readyBuf.AsMemory(), linkedCts.Token).ConfigureAwait(false);
@@ -227,6 +247,11 @@ public sealed class ChromecastWorkerClient : IDisposable
                     else
                         SourceBound?.Invoke(address);
                 }
+                else
+                {
+                    AppLogger.Warn($"Unknown ETW worker pipe message type 0x{msgType:X2}; terminating listener to avoid frame desync.", "ChromecastWorkerClient");
+                    break;
+                }
             }
         }
         catch (OperationCanceledException) { }
@@ -312,7 +337,7 @@ public sealed class ChromecastWorkerClient : IDisposable
             {
                 try
                 {
-                    if (!proc.HasExited && !proc.WaitForExit(300))
+                    if (!proc.HasExited && !proc.WaitForExit(1500))
                     {
                         proc.Kill(entireProcessTree: true);
                     }

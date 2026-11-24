@@ -1007,11 +1007,15 @@ public sealed class ChromecastEtwReceiver : IDisposable
 
     public void Stop()
     {
+        Thread? threadToJoin;
+        IntPtr logfileToFree;
+        IntPtr propertiesToFree;
+        EventRecordCallback? callbackToKeepAlive;
+
         lock (_lock)
         {
             _isRunning = false;
-            _flushCancellation?.Cancel();
-            _flushCancellation?.Dispose();
+            try { _flushCancellation?.Cancel(); } catch { }
             _flushCancellation = null;
 
             if (_traceHandle != 0 && _traceHandle != 0xFFFFFFFFFFFFFFFF)
@@ -1031,35 +1035,56 @@ public sealed class ChromecastEtwReceiver : IDisposable
 
             SetSources([]);
 
-            CleanupUnmanaged();
+            threadToJoin = _processThread;
+            _processThread = null;
+            logfileToFree = _logfileBuffer;
+            _logfileBuffer = IntPtr.Zero;
+            propertiesToFree = _propertiesBuffer;
+            _propertiesBuffer = IntPtr.Zero;
+            callbackToKeepAlive = _callbackHolder;
+            _callbackHolder = null;
         }
 
-        if (_processThread != null && _processThread.IsAlive)
+        bool exited = true;
+        if (threadToJoin != null && threadToJoin.IsAlive)
         {
-            _processThread.Join(500);
-            _processThread = null;
+            exited = threadToJoin.Join(2000);
         }
+
+        if (exited)
+        {
+            FreeUnmanagedBuffers(logfileToFree, propertiesToFree);
+        }
+        else
+        {
+            AppLogger.Warn("Chromecast ETW worker thread did not exit within 2000ms during Stop(); skipping unmanaged buffer free to avoid use-after-free", "ChromecastEtwReceiver");
+        }
+        GC.KeepAlive(callbackToKeepAlive);
 
         AppLogger.Info("Chromecast ETW receiver stopped", "ChromecastEtwReceiver");
     }
 
     private void CleanupUnmanaged()
     {
-        if (_logfileBuffer != IntPtr.Zero)
-        {
-            var logfile = Marshal.PtrToStructure<EVENT_TRACE_LOGFILEW>(_logfileBuffer);
-            if (logfile.LoggerName != IntPtr.Zero) Marshal.FreeHGlobal(logfile.LoggerName);
-            Marshal.FreeHGlobal(_logfileBuffer);
-            _logfileBuffer = IntPtr.Zero;
-        }
-
-        if (_propertiesBuffer != IntPtr.Zero)
-        {
-            Marshal.FreeHGlobal(_propertiesBuffer);
-            _propertiesBuffer = IntPtr.Zero;
-        }
-
+        FreeUnmanagedBuffers(_logfileBuffer, _propertiesBuffer);
+        _logfileBuffer = IntPtr.Zero;
+        _propertiesBuffer = IntPtr.Zero;
         _callbackHolder = null;
+    }
+
+    private static void FreeUnmanagedBuffers(IntPtr logfileBuffer, IntPtr propertiesBuffer)
+    {
+        if (logfileBuffer != IntPtr.Zero)
+        {
+            var logfile = Marshal.PtrToStructure<EVENT_TRACE_LOGFILEW>(logfileBuffer);
+            if (logfile.LoggerName != IntPtr.Zero) Marshal.FreeHGlobal(logfile.LoggerName);
+            Marshal.FreeHGlobal(logfileBuffer);
+        }
+
+        if (propertiesBuffer != IntPtr.Zero)
+        {
+            Marshal.FreeHGlobal(propertiesBuffer);
+        }
     }
 
     public void Dispose()

@@ -22,6 +22,7 @@ public sealed class MultiRemoteBluetoothManager : IBluetoothManager
 
     private readonly WinRtBluetoothManager _scanner = new();
     private readonly ConcurrentDictionary<ulong, ManagedRemote> _remotes = new();
+    private readonly ConcurrentDictionary<ulong, (float Gain, G9N9NVoiceButtonMode VoiceButtonMode)> _voiceSettings = new();
     private readonly object _remotesLock = new();
     private readonly VoiceSessionArbiter _voice = new();
     private readonly Action<RemoteDevice> _scannerDiscoveredHandler;
@@ -70,9 +71,12 @@ public sealed class MultiRemoteBluetoothManager : IBluetoothManager
     public void SetDeviceVoiceSettings(RemoteDevice device)
     {
         if (Volatile.Read(ref _disposed) != 0) return;
-        var remote = GetOrCreate(device.BluetoothAddress);
-        remote.CurrentGain = device.Gain;
-        remote.VoiceButtonMode = device.VoiceButtonMode;
+        _voiceSettings[device.BluetoothAddress] = (device.Gain, device.VoiceButtonMode);
+        if (_remotes.TryGetValue(device.BluetoothAddress, out var existing))
+        {
+            existing.Remote.CurrentGain = device.Gain;
+            existing.Remote.VoiceButtonMode = device.VoiceButtonMode;
+        }
     }
 
     public event Action<RemoteDevice>? DeviceDiscovered;
@@ -101,6 +105,11 @@ public sealed class MultiRemoteBluetoothManager : IBluetoothManager
             if (_remotes.TryGetValue(address, out var existing)) return existing.Remote;
 
             var remote = new WinRtBluetoothManager(_voice);
+            if (_voiceSettings.TryGetValue(address, out var savedSettings))
+            {
+                remote.CurrentGain = savedSettings.Gain;
+                remote.VoiceButtonMode = savedSettings.VoiceButtonMode;
+            }
             Action<ulong, bool, string> connHandler = (addr, connected, message) =>
             {
                 ulong effective = addr != 0 ? addr : address;
@@ -158,6 +167,7 @@ public sealed class MultiRemoteBluetoothManager : IBluetoothManager
 
     public void RemoveDevice(ulong address)
     {
+        _voiceSettings.TryRemove(address, out _);
         ManagedRemote? removed;
         lock (_remotesLock)
         {
