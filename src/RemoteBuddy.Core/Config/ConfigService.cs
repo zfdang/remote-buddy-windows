@@ -386,6 +386,7 @@ public class ConfigService
             Language = source.Language,
             LaunchAtStartup = source.LaunchAtStartup,
             MinimizeToTrayOnClose = source.MinimizeToTrayOnClose,
+            ReceiveUpdateNotifications = source.ReceiveUpdateNotifications,
             DiagnosticLoggingEnabled = source.DiagnosticLoggingEnabled,
             HasCompletedOnboarding = source.HasCompletedOnboarding,
             SelectedDeviceId = source.SelectedDeviceId,

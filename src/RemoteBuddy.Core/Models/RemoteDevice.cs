@@ -309,6 +309,7 @@ public class AppConfig
     public string Language { get; set; } = "system"; // "system", "zh-CN", "en-US"
     public bool LaunchAtStartup { get; set; } = false;
     public bool MinimizeToTrayOnClose { get; set; } = true;
+    public bool ReceiveUpdateNotifications { get; set; } = true;
     public bool DiagnosticLoggingEnabled { get; set; } = true;
     public bool HasCompletedOnboarding { get; set; } = false;
 
