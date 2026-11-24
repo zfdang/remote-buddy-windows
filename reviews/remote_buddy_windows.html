@@ -1,0 +1,872 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Remote Buddy Windows 全面深度代码审查报告</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
+<style>
+/* Utilitarian · Technical Code Review · answer-first split hero · verdict -> chart -> P0 table -> cross-module matrix -> 5 subsystem deep dives -> roadmap -> sources · Space Grotesk + IBM Plex Sans/Mono + Noto Sans SC · crisp gallery white (#FFFFFF) + cobalt (#1D4ED8/#1E3A8A) + crimson (#991B1B) · 0px radius · single inline emphasis numeral · stacked horizontal SVG bar chart · 3 open tables */
+:root {
+  --paper: #FFFFFF;
+  --ink: #111827;
+  --ink2: #374151;
+  --mute: #4B5563;
+  --hair: #D1D5DB;
+  --accent: #1D4ED8;
+  --accent-text: #1E3A8A;
+  --accent-2: #B91C1C;
+  --accent-2-text: #991B1B;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "IBM Plex Sans", "Noto Sans SC", -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 16px;
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+}
+main {
+  padding: 68px clamp(24px, 10.4vw, 112px) 92px;
+  width: 100%;
+}
+.measure { max-width: 68ch; }
+h1 {
+  font-family: "Space Grotesk", "Noto Sans SC", sans-serif;
+  font-size: clamp(36px, 4.2vw, 52px);
+  line-height: 1.16;
+  letter-spacing: -0.025em;
+  font-weight: 700;
+  margin: 0 0 20px;
+  text-wrap: balance;
+  color: var(--ink);
+}
+.hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 32px 48px;
+  align-items: end;
+  padding-bottom: 36px;
+  border-bottom: 2px solid var(--ink);
+}
+.deck {
+  font-size: 17px;
+  line-height: 1.65;
+  color: var(--ink2);
+  margin: 0;
+  max-width: 66ch;
+}
+.hero-emphasis {
+  text-align: right;
+  white-space: nowrap;
+}
+.hero-num {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 68px;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--accent-2-text);
+  display: block;
+}
+.hero-num-sub {
+  font-family: "IBM Plex Mono", "Noto Sans SC", monospace;
+  font-size: 13px;
+  color: var(--mute);
+  margin-top: 6px;
+  display: block;
+}
+.sec {
+  margin-top: 64px;
+  padding-top: 32px;
+  border-top: 1px solid var(--hair);
+}
+.sec.first-sec {
+  margin-top: 40px;
+  padding-top: 0;
+  border-top: none;
+}
+h2 {
+  font-family: "Space Grotesk", "Noto Sans SC", sans-serif;
+  font-size: clamp(24px, 2.4vw, 30px);
+  line-height: 1.28;
+  letter-spacing: -0.02em;
+  font-weight: 700;
+  margin: 0 0 20px;
+  color: var(--ink);
+  text-wrap: balance;
+}
+h3 {
+  font-size: 19px;
+  font-weight: 700;
+  margin: 32px 0 12px;
+  color: var(--ink);
+}
+h4.sev-head {
+  font-family: "IBM Plex Mono", "Noto Sans SC", monospace;
+  font-size: 15px;
+  font-weight: 600;
+  margin: 28px 0 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--hair);
+  color: var(--ink);
+}
+h4.sev-p0 { color: var(--accent-2-text); border-bottom-color: var(--accent-2); }
+h4.sev-p1 { color: var(--accent-text); border-bottom-color: var(--accent); }
+p { margin: 0 0 16px; color: var(--ink2); }
+p.scope-note {
+  font-size: 14px;
+  color: var(--mute);
+  margin-bottom: 20px;
+}
+a {
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+a:hover { color: var(--accent); }
+code {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 13.5px;
+  color: var(--ink);
+  background: #F3F4F6;
+  padding: 1px 5px;
+}
+ul.plain-list, ol.finding-list {
+  margin: 0 0 20px;
+  padding-left: 22px;
+  max-width: 74ch;
+}
+ul.plain-list li, ol.finding-list > li {
+  margin-bottom: 12px;
+  color: var(--ink2);
+}
+ul.sub-list {
+  margin: 8px 0 4px;
+  padding-left: 20px;
+  list-style-type: disc;
+}
+ul.sub-list li {
+  margin-bottom: 6px;
+  color: var(--ink2);
+}
+.viz-block {
+  margin: 36px 0 44px;
+  padding: 0;
+  width: 100%;
+}
+.fig-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 14px;
+}
+figcaption {
+  font-size: 13px;
+  color: var(--mute);
+  margin-top: 10px;
+}
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  margin: 24px 0 32px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14.5px;
+  line-height: 1.55;
+}
+thead th {
+  font-family: "IBM Plex Mono", "Noto Sans SC", monospace;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: left;
+  padding: 10px 12px 10px 0;
+  border-bottom: 2px solid var(--ink);
+  color: var(--ink);
+  white-space: nowrap;
+}
+tbody td {
+  padding: 12px 12px 12px 0;
+  border-bottom: 1px solid var(--hair);
+  vertical-align: top;
+  color: var(--ink2);
+}
+td.mono-col {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 13px;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--ink);
+}
+td.p0-id { color: var(--accent-2-text); }
+.pull-quote {
+  margin: 48px 0;
+  padding-left: 24px;
+  border-left: 3px solid var(--accent);
+  font-size: 22px;
+  line-height: 1.48;
+  font-weight: 500;
+  color: var(--ink);
+  max-width: 52ch;
+}
+.sources-list {
+  padding-left: 22px;
+  font-size: 14px;
+  line-height: 1.75;
+  color: var(--ink2);
+  columns: 2;
+  column-gap: 40px;
+}
+.sources-list li { break-inside: avoid; margin-bottom: 6px; }
+@media (max-width: 820px) {
+  .hero-grid { grid-template-columns: 1fr; }
+  .hero-emphasis { text-align: left; }
+  .sources-list { columns: 1; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header class="hero-grid">
+    <div>
+      <h1>Remote Buddy Windows 底层工程扎实，但 11 项 P0 缺陷与合规冲突亟待止血</h1>
+      <p class="deck">本次审查覆盖 <a href="https://github.com/zfdang/remote-buddy-windows" target="_blank" rel="noopener noreferrer">zfdang/remote-buddy-windows</a>（<code>main</code> 分支截至 2026 年 11 月 23 日共 116 次提交，最新 <code>8d5e82f</code>）全部 4 个 C# 项目、7 个构建脚本、CI 发布流水线与 9 篇技术文档。项目在音频零分配解码、GATT 保活与实机排障上功底深厚，但在提权安全、原生资源释放顺序、键盘钩子放行与开源许可合规上存在必须优先修复的阻断项。</p>
+    </div>
+    <div class="hero-emphasis">
+      <span class="hero-num">69</span>
+      <span class="hero-num-sub">11 P0 · 32 P1 · 20 P2 · 6 P3</span>
+    </div>
+  </header>
+
+  <section class="sec first-sec">
+    <h2>先看结论：四条高杠杆修复可一次性化解最紧迫风险</h2>
+    <p class="measure">综合 5 路独立子代理的逐文件源码审查，项目整体处于高密度功能迭代期（已从 <code>VoiceInputBuddy</code> 完成重命名并连续合并多遥控器 ETW、豆包 USB/IP 键盘与 VB-CABLE 一键安装）。最值得立刻落地的动作并非零散修补，而是围绕四处系统性根因集中治理：移除完全未使用的 <code>WPF-UI 4.0.3</code> 以同步消除 GPL-3.0 字体许可冲突与包体膨胀；统一“先停线程、再释非托管内存”范式消除两处 UAF 崩溃；收口提权命令与命名管道 PID 校验；以及修正 <code>RemoteVoiceKeyGuard</code> 漏放行注入事件与废弃 <code>SettingsVm</code> 导致的托盘开关失效。</p>
+    <figure class="viz-block">
+  <div class="fig-title">五路审查共检出 43 项 P0/P1 高危问题，Core 协议层与 WPF 应用层密度最高</div>
+  <svg viewBox="0 0 720 385" width="100%" role="img" aria-label="各子系统分级缺陷分布堆叠条形图">
+    <g class="legend" transform="translate(186, 18)">
+      <rect x="0" y="-11" width="12" height="12" fill="#991B1B"/><text x="18" y="0" font-family="IBM Plex Sans, Noto Sans SC, sans-serif" font-size="13" fill="#111827">P0 严重 (11)</text>
+      <rect x="116" y="-11" width="12" height="12" fill="#1D4ED8"/><text x="134" y="0" font-family="IBM Plex Sans, Noto Sans SC, sans-serif" font-size="13" fill="#111827">P1 高危 (32)</text>
+      <rect x="232" y="-11" width="12" height="12" fill="#64748B"/><text x="250" y="0" font-family="IBM Plex Sans, Noto Sans SC, sans-serif" font-size="13" fill="#111827">P2 中等 (20)</text>
+      <rect x="348" y="-11" width="12" height="12" fill="#CBD5E1"/><text x="366" y="0" font-family="IBM Plex Sans, Noto Sans SC, sans-serif" font-size="13" fill="#111827">P3 优化 (6)</text>
+    </g>
+    <line x1="186.0" y1="36" x2="186.0" y2="322" stroke="#D1D5DB" stroke-width="1"/><text x="186.0" y="344" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" fill="#4B5563">0</text><line x1="316.0" y1="36" x2="316.0" y2="322" stroke="#D1D5DB" stroke-width="1"/><text x="316.0" y="344" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" fill="#4B5563">5</text><line x1="446.0" y1="36" x2="446.0" y2="322" stroke="#D1D5DB" stroke-width="1"/><text x="446.0" y="344" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" fill="#4B5563">10</text><line x1="576.0" y1="36" x2="576.0" y2="322" stroke="#D1D5DB" stroke-width="1"/><text x="576.0" y="344" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" fill="#4B5563">15</text>
+    <text x="172" y="70" text-anchor="end" font-family="IBM Plex Sans, Noto Sans SC, sans-serif" font-size="14" font-weight="500" fill="#111827">Core & 协议 DSP</text><rect x="186.0" y="52" width="52.0" height="26" fill="#991B1B"/><text x="212.0" y="70" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" fill="#FFFFFF">2</text><rect x="238.0" y="52" width="208.0" height="26" fill="#1D4ED8"/><text x="342.0" y="70" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" fill="#FFFFFF">8</text><rect x="446.0" y="52" width="78.0" height="26" fill="#64748B"/><text x="485.0" y="70" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" fill="#FFFFFF">3</text><text x="534.0" y="70" text-anchor="start" font-family="IBM Plex Mono, monospace" font-size="13" fill="#111827">13 项 (高危 10)</text><text x="172" y="124" text-anchor="end" font-family="IBM Plex Sans, Noto Sans SC, sans-serif" font-size="14" font-weight="500" fill="#111827">蓝牙、音频与服务</text><rect x="186.0" y="106" width="52.0" height="26" fill="#991B1B"/><text x="212.0" y="124" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" fill="#FFFFFF">2</text><rect x="238.0" y="106" width="130.0" height="26" fill="#1D4ED8"/><text x="303.0" y="124" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" fill="#FFFFFF">5</text><rect x="368.0" y="106" width="104.0" height="26" fill="#64748B"/><text x="420.0" y="124" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" fill="#FFFFFF">4</text><rect x="472.0" y="106" width="104.0" height="26" fill="#CBD5E1"/><text x="524.0" y="124" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" fill="#111827">4</text><text x="586.0" y="124" text-anchor="start" font-family="IBM Plex Mono, monospace" font-size="13" fill="#111827">15 项 (高危 7)</text><text x="172" y="178" text-anchor="end" font-family="IBM Plex Sans, Noto Sans SC, sans-serif" font-size="14" font-weight="500" fill="#111827">Windows 输入与安全</text><rect x="186.0" y="160" width="52.0" height="26" fill="#991B1B"/><text x="212.0" y="178" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" fill="#FFFFFF">2</text><rect x="238.0" y="160" width="156.0" height="26" fill="#1D4ED8"/><text x="316.0" y="178" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" fill="#FFFFFF">6</text><rect x="394.0" y="160" width="130.0" height="26" fill="#64748B"/><text x="459.0" y="178" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" fill="#FFFFFF">5</text><rect x="524.0" y="160" width="52.0" height="26" fill="#CBD5E1"/><text x="550.0" y="178" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" fill="#111827">2</text><text x="586.0" y="178" text-anchor="start" font-family="IBM Plex Mono, monospace" font-size="13" fill="#111827">15 项 (高危 8)</text><text x="172" y="232" text-anchor="end" font-family="IBM Plex Sans, Noto Sans SC, sans-serif" font-size="14" font-weight="500" fill="#111827">WPF 应用与 UX</text><rect x="186.0" y="214" width="52.0" height="26" fill="#991B1B"/><text x="212.0" y="232" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" fill="#FFFFFF">2</text><rect x="238.0" y="214" width="208.0" height="26" fill="#1D4ED8"/><text x="342.0" y="232" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" fill="#FFFFFF">8</text><rect x="446.0" y="214" width="104.0" height="26" fill="#64748B"/><text x="498.0" y="232" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" fill="#FFFFFF">4</text><text x="560.0" y="232" text-anchor="start" font-family="IBM Plex Mono, monospace" font-size="13" fill="#111827">14 项 (高危 10)</text><text x="172" y="286" text-anchor="end" font-family="IBM Plex Sans, Noto Sans SC, sans-serif" font-size="14" font-weight="500" fill="#111827">测试、CI 与文档</text><rect x="186.0" y="268" width="78.0" height="26" fill="#991B1B"/><text x="225.0" y="286" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" fill="#FFFFFF">3</text><rect x="264.0" y="268" width="130.0" height="26" fill="#1D4ED8"/><text x="329.0" y="286" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" fill="#FFFFFF">5</text><rect x="394.0" y="268" width="104.0" height="26" fill="#64748B"/><text x="446.0" y="286" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="13" font-weight="600" fill="#FFFFFF">4</text><text x="508.0" y="286" text-anchor="start" font-family="IBM Plex Mono, monospace" font-size="13" fill="#111827">12 项 (高危 8)</text>
+    <text x="381" y="372" text-anchor="middle" font-family="IBM Plex Sans, Noto Sans SC, sans-serif" font-size="13" fill="#4B5563">检出问题数量（按严重级别堆叠，单位：项）</text>
+  </svg>
+  <figcaption>数据来源：基于 zfdang/remote-buddy-windows main 分支 116 次提交（commit 8d5e82f）全仓源码审查统计，合计 69 项。</figcaption>
+</figure>
+  </section>
+
+  <section class="sec">
+    <h2>11 项 P0 严重缺陷总览：安全、崩溃、功能失效与合规四线并存</h2>
+    <p class="measure">以下 11 项问题均在真实源码中确认存在确定性触发路径，建议在下一版本发布前作为 Sprint 1 阻断项清零。</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>编号</th>
+            <th>所属模块</th>
+            <th>核心缺陷与源码定位</th>
+            <th>触发影响</th>
+            <th>优先修复动作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="mono-col p0-id">P0-1</td>
+            <td>Core 协议</td>
+            <td><a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Protocols/G9N9NProtocol.cs" target="_blank" rel="noopener noreferrer">G9N9NProtocol.cs</a> 误剥离 2 字节无 Report ID 的 Power 键（<code>0x01</code>）</td>
+            <td>G9N9N 电源键按下被静默吞掉并误判松开</td>
+            <td>显式传入 <code>hasReportId</code>，启发式仅剥离 ≥3 字节</td>
+          </tr>
+          <tr>
+            <td class="mono-col p0-id">P0-2</td>
+            <td>Core 协议</td>
+            <td><a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Protocols/T1RemoteProtocol.cs" target="_blank" rel="noopener noreferrer">T1RemoteProtocol.cs</a> 对 <code>"t1"</code> 子串宽松匹配且优先级最高</td>
+            <td>名称含 <code>t1</code> 的蓝牙设备全部误判为 T1 遥控器</td>
+            <td>移除子串匹配，仅保留精确 <code>"t1"</code> 或 <code>"t1 remote"</code></td>
+          </tr>
+          <tr>
+            <td class="mono-col p0-id">P0-3</td>
+            <td>蓝牙服务</td>
+            <td><a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Bluetooth/BluetoothAdapterHelper.cs" target="_blank" rel="noopener noreferrer">BluetoothAdapterHelper.cs</a> 提权 PowerShell 拼接注入与管道死锁</td>
+            <td>管理员权限命令注入风险；输出超 4KB 永久挂起</td>
+            <td>实例 ID 正则白名单 + <code>-EncodedCommand</code>；异步读流</td>
+          </tr>
+          <tr>
+            <td class="mono-col p0-id">P0-4</td>
+            <td>蓝牙音频</td>
+            <td><a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Bluetooth/WinRtBluetoothManager.cs" target="_blank" rel="noopener noreferrer">WinRtBluetoothManager.cs</a> <code>Dispose()</code> 超时 250ms 后无锁销毁 <code>_audioPlayer</code></td>
+            <td><code>DrainAsync</code> 期间并发 Use-After-Dispose 崩溃</td>
+            <td>引入 <code>_disposeCts</code> 取消并加 <code>_audioLock</code> 串行释放</td>
+          </tr>
+          <tr>
+            <td class="mono-col p0-id">P0-5</td>
+            <td>输入钩子</td>
+            <td><a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/RemoteVoiceKeyGuard.cs" target="_blank" rel="noopener noreferrer">RemoteVoiceKeyGuard.cs</a> 漏判 <code>LLKHF_INJECTED</code> 直接放行</td>
+            <td>吞掉自身注入的清理 <code>F5</code> 与微信 <code>Ctrl+F5</code> 快捷键</td>
+            <td>命中 <code>(flags &amp; 0x10) != 0</code> 立即 <code>CallNextHookEx</code></td>
+          </tr>
+          <tr>
+            <td class="mono-col p0-id">P0-6</td>
+            <td>ETW 采集</td>
+            <td><a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/ChromecastEtwReceiver.cs" target="_blank" rel="noopener noreferrer">ChromecastEtwReceiver.cs</a> <code>Stop()</code> 在消费线程退出前释放非托管缓冲</td>
+            <td>原生 <code>ProcessTrace</code> 回调访问已释放堆内存（UAF 崩溃）</td>
+            <td>先在锁外 <code>Join(3000)</code> 确认线程退出后再 <code>CleanupUnmanaged</code></td>
+          </tr>
+          <tr>
+            <td class="mono-col p0-id">P0-7</td>
+            <td>WPF 应用</td>
+            <td><a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/Views/MainWindow.xaml.cs" target="_blank" rel="noopener noreferrer">MainWindow.xaml.cs</a> 关闭事件读取已废弃 <code>SettingsVm</code></td>
+            <td>“关闭时最小化到托盘”开关当次运行完全失效</td>
+            <td>删除 <code>SettingsVm</code>，改读 <code>GeneralVm</code> 或配置源</td>
+          </tr>
+          <tr>
+            <td class="mono-col p0-id">P0-8</td>
+            <td>WPF 应用</td>
+            <td><a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/App.xaml.cs" target="_blank" rel="noopener noreferrer">App.xaml.cs</a> 单实例仅靠 Mutex 静默退出，无 IPC 唤起</td>
+            <td>最小化到托盘后双击桌面图标无任何反应</td>
+            <td>主实例监听命名 <code>EventWaitHandle</code> 唤起已有窗口</td>
+          </tr>
+          <tr>
+            <td class="mono-col p0-id">P0-9</td>
+            <td>开源合规</td>
+            <td><a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Audio/VbCableInstaller.cs" target="_blank" rel="noopener noreferrer">VbCableInstaller.cs</a> 优先从自有域名镜像下载 VB-CABLE 专有包</td>
+            <td>与 <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener noreferrer">THIRD_PARTY_NOTICES.md</a> 声明冲突并存再分发风险</td>
+            <td>移除自建镜像源，改直连 VB-Audio 官方或引导官网下载</td>
+          </tr>
+          <tr>
+            <td class="mono-col p0-id">P0-10</td>
+            <td>开源合规</td>
+            <td><a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/RemoteBuddy.App.csproj" target="_blank" rel="noopener noreferrer">RemoteBuddy.App.csproj</a> 引入未使用的 <code>WPF-UI 4.0.3</code>（内嵌禁止再分发字体）</td>
+            <td>与 <code>GPL-3.0-only</code> 自包含发布冲突且徒增包体</td>
+            <td>直接卸载未使用的 <code>WPF-UI</code> NuGet 包并清理声明</td>
+          </tr>
+          <tr>
+            <td class="mono-col p0-id">P0-11</td>
+            <td>构建脚本</td>
+            <td><a href="https://github.com/zfdang/remote-buddy-windows/blob/main/scripts/convert-icon.ps1" target="_blank" rel="noopener noreferrer">convert-icon.ps1</a> 硬编码开发者本机 <code>d:\works\</code> 与旧项目名</td>
+            <td>在其他机器完全不可用且缺错误处理与句柄释放</td>
+            <td>参数化路径（默认基于 <code>$PSScriptRoot</code>）并补 <code>try/finally</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="sec">
+    <h2>四类跨模块系统性根因：跳出单点修补的高杠杆视角</h2>
+    <p class="measure">将 5 个独立子代理的发现横向对齐后，多处表面分散的缺陷指向同一底层架构债务，集中治理收益最高。</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>系统性根因</th>
+            <th>涉及模块</th>
+            <th>连锁影响</th>
+            <th>高杠杆解法</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>死依赖兼 GPLv3 冲突</strong></td>
+            <td>WPF App + 许可合规</td>
+            <td><code>WPF-UI 4.0.3</code> 在 XAML 零引用，却把禁止再分发的 Segoe 字体带入 GPLv3 单文件发布</td>
+            <td>一行移除 <code>WPF-UI</code> 引用，同时解决 P0 法律冲突并显著缩小发布体积</td>
+          </tr>
+          <tr>
+            <td><strong>跨线程非托管资源释放序</strong></td>
+            <td>BLE / ETW / HID / App</td>
+            <td><code>WinRtBluetoothManager</code>、<code>ChromecastEtwReceiver</code>、<code>HidDeviceReader</code> 均存在先释资源后等线程的 UAF/竞态；崩溃路径跳过钩子与子进程清理</td>
+            <td>确立统一模式：取消令牌 → 等待工作线程退出 → 释放非托管/COM 资源，并抽取幂等 <code>EmergencyCleanup()</code></td>
+          </tr>
+          <tr>
+            <td><strong>提权边界与 IPC 防御缺口</strong></td>
+            <td>Bluetooth / Input / Audio</td>
+            <td>PowerShell 提权拼接注入、命名管道 UAC 窗口期缺客户端 PID 校验、<code>%TEMP%</code> 提权安装缺签名复验</td>
+            <td>收口提权辅助层：强制参数白名单、<code>GetNamedPipeClientProcessId</code> 强校验、<code>WinVerifyTrust</code> 签名验证</td>
+          </tr>
+          <tr>
+            <td><strong>重构遗留与静态全局状态</strong></td>
+            <td>Core / WPF / Tests / Docs</td>
+            <td>废弃 <code>SettingsVm</code> 致托盘开关失效；<code>AppLogger</code> 等静态状态迫使测试全局串行化；4 处核心文档与代码脱节</td>
+            <td>彻底清退旧代码与 <code>AppLogger</code> 全局静态耦合，恢复测试并行并建立文档同步清单</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <blockquote class="pull-quote">
+      直接删除零引用的 <code>WPF-UI 4.0.3</code> 依赖，是全仓性价比最高的单步操作——它同时清零了一项 GPL-3.0 法律冲突并直接为单文件发布瘦身。
+    </blockquote>
+  </section>
+
+  <section class="sec">
+    <h2>核心协议与音频 DSP：热路径零分配扎实，但 HID 头部剥离与并发竞态构成硬伤</h2>
+<p class="scope-note measure">覆盖范围：<code>src/RemoteBuddy.Core/</code> 全部 15 个文件（协议层 4 文件、音频 DSP 层 3 文件、接口/模型/配置/日志 8 文件），全部已逐行源码审查。</p>
+<h3>模块整体评价与亮点</h3>
+<ul class="plain-list">
+<li><strong>音频热路径零分配设计</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Audio/ImaAdpcmDecoder.cs" target="_blank" rel="noopener noreferrer"><code>ImaAdpcmDecoder.cs</code></a>、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Audio/PcmPostprocessor.cs" target="_blank" rel="noopener noreferrer"><code>PcmPostprocessor.cs</code></a> 与 <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Audio/AudioLevelMeter.cs" target="_blank" rel="noopener noreferrer"><code>AudioLevelMeter.cs</code></a> 全面采用 <code>Span&lt;short&gt;</code> / <code>ReadOnlySpan&lt;byte&gt;</code> 原地处理，IMA ADPCM 89 项 <code>StepTable</code>、<code>IndexTable</code>、高低半字节顺序切换与 <code>-32768..32767</code> / <code>0..88</code> 边界 Clamp 均符合规范。</li>
+<li><strong>ATVV 实机兼容性周到</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Protocols/ATVVProtocol.cs" target="_blank" rel="noopener noreferrer"><code>ATVVProtocol.cs</code></a> 兼顾 ATVV v1.0 与 v0.4 遗留布局，<code>ATVVFrameAccumulator</code> 引入 16 位有符号差值的过期 <code>AUDIO_SYNC</code> 丢弃机制。</li>
+<li><strong>配置容灾意识良好</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Config/ConfigService.cs" target="_blank" rel="noopener noreferrer"><code>ConfigService.cs</code></a> 具备临时文件 + <code>File.Replace</code>、<code>.bak</code> 自动回退、<code>.corrupt.*</code> 损坏隔离及旧路径 <code>VoiceInputBuddy</code> 自动迁移。</li>
+<li><strong>可测试的手势抽象</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Models/RemoteButtonGestures.cs" target="_blank" rel="noopener noreferrer"><code>RemoteButtonGestures.cs</code></a> 通过注入 <code>Func&lt;int, Action, Action&gt;</code> 解耦真实定时器，便于确定性单测。</li>
+</ul>
+<h3>详细审查发现</h3>
+<h4 class="sev-head sev-p0">P0 — 严重缺陷</h4>
+<ol class="finding-list">
+<li><strong>[P0-1] <code>G9N9NProtocol</code> 误将无 Report ID 的 Power 键报文（<code>0x01</code>）当作 Report ID 1 剥离</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Protocols/G9N9NProtocol.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Core/Protocols/G9N9NProtocol.cs</code></a>（<code>TryParseReport</code> / <code>TryParseReport1</code>，L35–54、L63–101、L159–163）</li>
+<li><strong>根因与影响</strong>：<code>IndexedConsumerUsages</code> 中索引 <code>1</code>（<code>0x01</code>）对应 <code>RemoteButton.Power</code>，但 <code>TryParseReport1</code> 在 <code>slice.Length == 2 &amp;&amp; slice[0] == 1</code> 时无条件执行 <code>slice = slice[1..]</code>。WinRT BLE GATT HID Input Report 通知默认不携带前导 Report ID，按下 Power 键收到 <code>[0x01, 0x00]</code> 时首字节被剥离，返回空按键列表——<strong>电源键按下被静默吞掉并误判为松开</strong>；组合键 Power + Up（<code>[0x01, 0x03]</code>）误解析为仅 Up。</li>
+<li><strong>修复方案</strong>：增加显式 <code>bool? hasReportId = null</code> 参数由传输层传入；启发式模式下仅当 <code>slice.Length &gt;= 3 &amp;&amp; slice[0] == 1</code> 时剥离 Report ID 1。</li>
+</ul></li>
+<li><strong>[P0-2] <code>T1RemoteProtocol.IsCandidate</code> 对 <code>"t1"</code> 执行宽松子串匹配且优先级最高，导致大量蓝牙设备误识别为 <code>T1Remote</code></strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Protocols/T1RemoteProtocol.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Core/Protocols/T1RemoteProtocol.cs</code></a>（L25–46）、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Protocols/G9N9NProtocol.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Core/Protocols/G9N9NProtocol.cs</code></a>（<code>XiaomiProtocol.DetectModelType</code>，L297–309）</li>
+<li><strong>根因与影响</strong>：L37 虽检查了精确匹配 <code>clean == "t1" || clean.Contains("t1 remote")</code>，但 L41–44 紧接着遍历含 <code>"t1"</code> 的 <code>CandidateNames</code> 执行 <code>name.Contains(...)</code>，彻底击穿保护。任何名称含 <code>"t1"</code> 的设备（如 <code>"BT100"</code>、<code>"Headset1"</code>、<code>"Mi Remote BT1"</code>）都会被最高优先级误识别为 <code>RemoteModelType.T1Remote</code>，加载错误映射与解码器。</li>
+<li><strong>修复方案</strong>：移除 <code>CandidateNames</code> 中的 <code>"t1"</code> 子串匹配，仅保留精确相等 <code>"t1"</code> 或完整词组 <code>"t1 remote"</code>。</li>
+</ul></li>
+</ol>
+<h4 class="sev-head sev-p1">P1 — 高危隐患</h4>
+<ol class="finding-list">
+<li><strong>[P1-1] <code>ATVVFrameAccumulator</code> 缺乏线程同步，BLE 音频与控制通道并发回调存在竞态</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Protocols/ATVVProtocol.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Core/Protocols/ATVVProtocol.cs</code></a>（<code>ATVVFrameAccumulator</code>，L159–304）</li>
+<li><strong>根因与影响</strong>：WinRT BLE 的 <code>AudioUuid</code>（<code>AB5E0003</code>）与 <code>ControlUuid</code>（<code>AB5E0004</code>）<code>ValueChanged</code> 回调可并发运行在不同线程池线程上，对 <code>_buffer</code>、<code>_pendingSync</code>、<code>_framesBeforeSync</code> 无锁访问会导致 <code>_pendingSync</code> 撕裂读、ADPCM 预测器错帧重置（爆音/啸叫）或 <code>IndexOutOfRangeException</code>。</li>
+<li><strong>修复方案</strong>：引入锁保护并原子递交帧与同步状态（避免持锁执行外部长耗时回调）。</li>
+</ul></li>
+<li><strong>[P1-2] <code>T1RemoteProtocol.DecodeReport</code> 无 Report ID 头部剥离未结合长度校验，带修饰键的键盘报文解析错乱</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Protocols/T1RemoteProtocol.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Core/Protocols/T1RemoteProtocol.cs</code></a>（<code>DecodeReport</code>，L65–95）</li>
+<li><strong>根因与影响</strong>：仅凭 <code>data[0]</code> 属于 <code>{1, 2, 3, 4, 0x5A}</code> 就剥离首字节。8 字节无 Report ID 标准键盘报文按住 Left Ctrl (<code>0x01</code>)、Left Shift (<code>0x02</code>)、Ctrl+Shift (<code>0x03</code>) 或 Left Alt (<code>0x04</code>) 时会被分别判为无效、误入 Consumer/SystemControl 分支或被 Mouse 分支静默忽略。</li>
+<li><strong>修复方案</strong>：支持显式 <code>byte? reportId</code>，启发式模式必须同时校验 <code>(data[0], data.Length)</code> 组合（如 9 字节键盘、3 字节 Consumer、2 字节 SystemControl）。</li>
+</ul></li>
+<li><strong>[P1-3] <code>G9N9NProtocol.TryParseReport2</code> 未校验 Report ID 2 的奇数长度，偶数字节无 Report ID 报文错位</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Protocols/G9N9NProtocol.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Core/Protocols/G9N9NProtocol.cs</code></a>（<code>TryParseReport</code> / <code>TryParseReport2</code>，L103–132、L165–169）</li>
+<li><strong>根因与影响</strong>：Report 2 为 16 位 Consumer Usage，带 1 字节 Report ID <code>0x02</code> 时总长必为奇数。未校验 <code>Length % 2 == 1</code> 会导致 4 字节无 Report ID 报文首字节为 <code>0x02</code> 时被误剥离并整体错位 1 字节。</li>
+<li><strong>修复方案</strong>：收紧条件为 <code>slice.Length &gt;= 3 &amp;&amp; slice.Length % 2 == 1 &amp;&amp; slice[0] == 2</code> 并支持显式 <code>hasReportId</code>。</li>
+</ul></li>
+<li><strong>[P1-4] <code>G9N9NSmartToggleSession</code> 存在非法状态跃迁、TOCTOU 竞态与非单调时钟回退风险</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Protocols/G9N9NSmartToggleSession.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Core/Protocols/G9N9NSmartToggleSession.cs</code></a>（L70–108）</li>
+<li><strong>根因与影响</strong>：<code>EnterAwaitingReopen()</code> 无前置状态校验，可从 <code>Idle</code>/<code>Closing</code>/<code>HandsFreeActive</code> 强行跃迁；<code>ShouldReopenOnPhysicalStop</code> 与 <code>EnterAwaitingReopen</code> 分两次加锁存在 TOCTOU；时间差仅判 <code>&lt; HoldThresholdMs</code>，若发生时钟回拨（差值为负）会误判长按为短按进入免提模式。</li>
+<li><strong>修复方案</strong>：合并为原子方法 <code>TryEnterAwaitingReopen</code>，在锁内校验 <code>PhysicalPressed</code>、代际号及 <code>elapsed &gt;= 0 &amp;&amp; elapsed &lt; HoldThresholdMs</code>。</li>
+</ul></li>
+<li><strong>[P1-5] <code>RemoteButtonGestures</code> 缺少定时器取消防重入守卫，迟发回调可引发 60 秒幽灵连发</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Models/RemoteButtonGestures.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Core/Models/RemoteButtonGestures.cs</code></a>（<code>Schedule</code>/<code>Repeat</code>/<code>HandleDown</code>，L41–45、L62–69、L81–125）</li>
+<li><strong>根因与影响</strong>：<code>Schedule</code> 闭包无 <code>cancelled</code> 标志，<code>Repeat()</code> 未校验 <code>press.IsDown</code> 与当前实例身份；已入队回调在按键松开后仍会执行并自我重调度，持续触发至 <code>MaximumRepeatMilliseconds</code>（60 秒）；<code>HandleDown</code> 先 <code>Fire()</code> 后置位 <code>FiredOnPress</code>，异常时 <code>HandleUp</code> 会二次触发。</li>
+<li><strong>修复方案</strong>：在 <code>Schedule</code> 闭包内加 <code>bool cancelled</code> 守卫，<code>Repeat</code> 校验 <code>press.IsDown</code> 与实例匹配，<code>HandleDown</code> 先置位 <code>FiredOnPress = true</code> 再执行动作。</li>
+</ul></li>
+<li><strong>[P1-6] <code>ConfigService.Current</code> 暴露无锁可变对象图，且 <code>SaveLocked</code> 缺刷盘保证并静默吞错</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Config/ConfigService.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Core/Config/ConfigService.cs</code></a>（L24、L294–403）</li>
+<li><strong>根因与影响</strong>：<code>Current</code> 暴露可变集合，跨线程修改与 <code>CreateSnapshot</code> 并发可抛 <code>InvalidOperationException</code>；<code>File.WriteAllText</code> 未 <code>Flush(flushToDisk: true)</code>，异常断电可写落空文件；<code>SaveLocked</code> 捕获异常后不返回状态，调用方无法感知保存失败。</li>
+<li><strong>修复方案</strong>：使用 <code>FileStream</code> + <code>FileOptions.WriteThrough</code> + <code>Flush(true)</code>；返回 <code>bool</code> 持久化结果；对外提供不可变/只读快照并收口写路径到 <code>Update()</code>。</li>
+</ul></li>
+<li><strong>[P1-7] <code>AppLogger</code> 全局静态状态争用（测试必须串行的根因）、高频同步 I/O 阻塞及路径参数拼接风险</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Diagnostics/AppLogger.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Core/Diagnostics/AppLogger.cs</code></a>（L22–61、L113–133、L160–209、L262–291）</li>
+<li><strong>根因与影响</strong>：全进程可变静态字段在并发测试下相互覆写；<code>_isInitialized</code>/<code>_isEnabled</code>/<code>MinimumLevel</code>/<code>_logFilePath</code> 在锁外无 <code>volatile</code> 读写；每条日志在锁内开关 OS 文件句柄（<code>File.AppendAllText</code>），在实时杀软扫描下易阻塞音频/BLE 线程；<code>OpenLogFolder()</code> 用字符串引号拼接命令参数存在转义/注入隐患。</li>
+<li><strong>修复方案</strong>：拆分为可实例化 <code>FileLogger</code>（解除测试串行依赖），采用 <code>Channel&lt;string&gt;</code> 后台单消费者 + 持久 <code>StreamWriter</code> 异步落盘，<code>OpenLogFolder</code> 改用 <code>ProcessStartInfo.ArgumentList.Add(dir)</code>。</li>
+</ul></li>
+<li><strong>[P1-8] <code>IBluetoothManager</code> 空实现默认事件 <code>AudioOutputFailed</code> 静默吞订阅，且扫描方法签名重复</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Bluetooth/IBluetoothManager.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Core/Bluetooth/IBluetoothManager.cs</code></a>（L45、L47–51）</li>
+<li><strong>根因与影响</strong>：<code>AudioOutputFailed</code> 的 <code>{ add { } remove { } }</code> 空体导致实现类漏实现时无编译警告，UI 订阅被静默丢弃；<code>StartScanning/StopScanning</code> 与 <code>StartScan/StopScan</code> 并存增加实现歧义。</li>
+<li><strong>修复方案</strong>：移除事件默认空实现，合并冗余扫描方法。</li>
+</ul></li>
+</ol>
+<h4 class="sev-head">P2 — 中等改进</h4>
+<ol class="finding-list">
+<li><strong>[P2-1] <code>ATVVProtocol.BuildGetCapabilities</code> 忽略 <code>version</code> 参数，且 <code>ATVVFrameAccumulator.EnsureCapacity</code> 无上限</strong>（<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Protocols/ATVVProtocol.cs" target="_blank" rel="noopener noreferrer"><code>ATVVProtocol.cs</code></a> L37–40、L263–282）：应写入实际 <code>version</code> 字节并为累积缓冲设置上限（如 64 KB）防异常设备导致 OOM。</li>
+<li><strong>[P2-2] <code>G9N9NSmartToggleSession.ShouldStopOnRemoteAudioStart</code> 在 <code>activeSessionId == null</code> 时误停免提会话</strong>（<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Protocols/G9N9NSmartToggleSession.cs" target="_blank" rel="noopener noreferrer"><code>G9N9NSmartToggleSession.cs</code></a> L134–148）：需增加 <code>activeSessionId.HasValue</code> 判断。</li>
+<li><strong>[P2-3] <code>XiaomiProtocol.TryParseReport</code> 误丢弃带 Ctrl+Shift 的 8 字节键盘报文，且 <code>IsCandidate</code> 存在 <code>"mi "</code> 子串误匹配</strong>（<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Protocols/G9N9NProtocol.cs" target="_blank" rel="noopener noreferrer"><code>G9N9NProtocol.cs</code></a> L282–295、L311–367）：应区分 8 字节无 Report ID 键盘报文，并将 <code>"mi "</code> 改为词边界匹配以避免误命中 <code>"HDMI "</code>/<code>"Origami "</code>。</li>
+</ol>
+  </section>
+
+  <section class="sec">
+    <h2>蓝牙、音频引擎与系统服务：GATT 保活改进显著，需封堵命令注入与释放期竞态</h2>
+<p class="scope-note measure">覆盖范围：<code>WinRtBluetoothManager.cs</code>、<code>MultiRemoteBluetoothManager.cs</code>、<code>BluetoothAdapterHelper.cs</code>、<code>VirtualAudioAuditor.cs</code>（含 <code>WasapiAudioPlayer</code> 与 <code>PreRollWaveProvider</code>）、<code>VbCableInstaller.cs</code>、<code>StartupService.cs</code>、<code>RemoteBuddy.Platform.Windows.csproj</code>。</p>
+<h3>模块整体评价与亮点</h3>
+<ul class="plain-list">
+<li><strong>近期 BLE GATT 保活与降噪修复到位</strong>：在 commit <a href="https://github.com/zfdang/remote-buddy-windows/commit/0d025989bcc0ec6b96ed6f85ac827e3ceb90d0e6" target="_blank" rel="noopener noreferrer"><code>0d02598</code></a> 和 <a href="https://github.com/zfdang/remote-buddy-windows/commit/5a1aac73e22cb150b86bcda19685ae021b1de475" target="_blank" rel="noopener noreferrer"><code>5a1aac7</code></a> 中，<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Bluetooth/WinRtBluetoothManager.cs" target="_blank" rel="noopener noreferrer"><code>WinRtBluetoothManager.cs</code></a> 显式保留 <code>activeAtvvService</code> 并在存在 HID <code>0x1812</code> 时跳过冗余厂商 GATT 扫描，同时对排除句柄成对扩展，有效规避活跃订阅中断与 ETW 震荡。</li>
+<li><strong>并发与防死锁意识清晰</strong>：使用 <code>_connectionGeneration</code>/<code>_sessionGeneration</code>/<code>_audioGeneration</code> 代数拦截过期异步回调，并在 <code>Disconnect()</code> 中将 <code>_audioLock</code> 重置移至 <code>_stateLock</code> 外以防 AB-BA 死锁；<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Audio/VirtualAudioAuditor.cs" target="_blank" rel="noopener noreferrer"><code>VirtualAudioAuditor.cs</code></a> 中的 <code>WasapiAudioPlayer</code> 在 <code>OnPlaybackStopped</code> 通过 <code>Task.Run</code> 异步恢复并避开持锁 <code>await</code>。</li>
+<li><strong>VB-CABLE 一键安装供应链基线扎实</strong>：PR <a href="https://github.com/zfdang/remote-buddy-windows/pull/32" target="_blank" rel="noopener noreferrer"><code>#32</code></a> 新增的 <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Audio/VbCableInstaller.cs" target="_blank" rel="noopener noreferrer"><code>VbCableInstaller.cs</code></a> 实现了双源 HTTPS 回退、禁用重定向（<code>AllowAutoRedirect = false</code>）、2 MiB 体积上限、全包 SHA-256 校验、信号量防重入及 .NET 原生 <code>ZipArchive.ExtractToDirectory</code>（内置 Zip Slip 校验）。</li>
+<li><strong>多遥控器生命周期基本解耦</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Bluetooth/MultiRemoteBluetoothManager.cs" target="_blank" rel="noopener noreferrer"><code>MultiRemoteBluetoothManager.cs</code></a> 通过 <code>VoiceSessionArbiter</code> 协调单一语音所有权，并将 <code>DetachAndDispose</code> 放在 <code>_remotesLock</code> 外执行。</li>
+</ul>
+<h3>详细审查发现</h3>
+<h4 class="sev-head sev-p0">P0 — 严重缺陷</h4>
+<ol class="finding-list">
+<li><strong>[P0-3] 提权外部命令存在 PowerShell 参数注入风险及重定向管道死锁隐患</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Bluetooth/BluetoothAdapterHelper.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Platform.Windows/Bluetooth/BluetoothAdapterHelper.cs</code></a>（<code>TryRestartAdapterPnpAsync</code> L187–209、<code>RunCommandAsync</code> L213–241）</li>
+<li><strong>根因与影响</strong>：</li>
+<li>将注册表/PnP 查询获取的设备实例 <code>id</code> 未经白名单校验或转义，直接拼入双层引号嵌套的 PowerShell 命令并在管理员权限（<code>Verb = "runas"</code>）下执行；<code>pnputil.exe</code> 参数拼接同样无引号校验。若 <code>id</code> 含 <code>'</code>, <code>"</code>, <code>$()</code>, `<code> </code> `` 将触发提权命令注入。</li>
+<li><code>RunCommandAsync</code> 在 <code>isAdmin == true</code> 时开启 <code>RedirectStandardOutput/Error = true</code> 后直接 <code>await proc.WaitForExitAsync()</code>，未并发异步消费管道流，子进程输出超过管道缓冲（4KB）即发生永久死锁。</li>
+<li><strong>修复方案</strong>：对 <code>id</code> 做严格正则白名单校验（<code>^[A-Za-z0-9\\_&amp;-]+$</code>）并改用 PowerShell <code>-EncodedCommand</code>；<code>RunCommandAsync</code> 中在 <code>WaitForExitAsync</code> 前并发 <code>ReadToEndAsync</code> 并加超时（15 秒），或直接关闭流重定向。</li>
+</ul></li>
+<li><strong>[P0-4] <code>WinRtBluetoothManager.Dispose()</code> 超时后无锁销毁 <code>_audioPlayer</code> 引发并发 Use-After-Dispose</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Bluetooth/WinRtBluetoothManager.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Platform.Windows/Bluetooth/WinRtBluetoothManager.cs</code></a>（<code>Dispose</code> / <code>ProcessAudioChannelAsync</code>，L2204–2213）</li>
+<li><strong>根因与影响</strong>：<code>Dispose()</code> 仅等待 <code>_audioWorkerTask.Wait(250)</code>，超时后不持 <code>_audioLock</code> 直接调用 <code>_audioPlayer.Dispose()</code>。而 <code>DrainAsync</code> 最长可达 450ms+45ms，超过 250ms 时会在后台线程仍使用 <code>_audioPlayer</code> 期间销毁对象，触发 <code>ObjectDisposedException</code> 或 WASAPI 竞态异常，并在 UI 线程造成 250ms 同步阻塞。</li>
+<li><strong>修复方案</strong>：引入类级 <code>_disposeCts</code> 立即取消 <code>ProcessAudioChannelAsync</code> 与 <code>DrainAsync</code>，通过 <code>lock (_audioLock)</code> 串行化后再释放 <code>_audioPlayer</code>，并在 <code>WriteSamples</code> 锁内校验 <code>_disposed</code>。</li>
+</ul></li>
+</ol>
+<h4 class="sev-head sev-p1">P1 — 高危隐患</h4>
+<ol class="finding-list">
+<li><strong>[P1-9] <code>ConnectAsync</code> 多处提前返回路径与多服务结果泄漏 WinRT <code>GattDeviceService</code> COM 对象</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Bluetooth/WinRtBluetoothManager.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Platform.Windows/Bluetooth/WinRtBluetoothManager.cs</code></a>（<code>ConnectAsync</code>，L341–418）</li>
+<li><strong>根因与影响</strong>：代数变化提前返回、返回多服务（索引 <code>1..</code>）及特征缺失回退路径上，均仅 <code>Dispose</code> 了 <code>device</code> 而漏掉了 <code>GattDeviceService</code>，导致 Windows 蓝牙栈维持幽灵 GATT 会话，引发后续重连 <code>Unreachable</code> 或长期句柄泄漏。</li>
+<li><strong>修复方案</strong>：用 <code>try/finally</code> 统一管理 <code>servicesResult.Services</code> 所有权，除最终接管的唯一 <code>_gattService</code> 外一律释放。</li>
+</ul></li>
+<li><strong>[P1-10] 意外断连触发两次 <code>ConnectionStatusChanged(..., false, ...)</code> 且设备名不一致</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Bluetooth/WinRtBluetoothManager.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Platform.Windows/Bluetooth/WinRtBluetoothManager.cs</code></a>（<code>OnDeviceConnectionStatusChanged</code> L872–886、<code>Disconnect</code> L2072–2173）</li>
+<li><strong>根因与影响</strong>：意外断连先调 <code>Disconnect()</code> 发射一次空设备名的断连事件，返回后 <code>OnDeviceConnectionStatusChanged</code> 又发射一次带设备名的断连事件，诱发重复 UI/ETW 刷新或重连风暴。</li>
+<li><strong>修复方案</strong>：让 <code>Disconnect()</code> 成为唯一发射点，清空 <code>_connectedDevice</code> 前捕获 <code>Name</code>，移除外层重复触发。</li>
+</ul></li>
+<li><strong>[P1-11] <code>_audioChannel</code> 无界队列配合 <code>ArrayPool</code> 租借缺少背压上限</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Bluetooth/WinRtBluetoothManager.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Platform.Windows/Bluetooth/WinRtBluetoothManager.cs</code></a>（L63–64、L1454–1492）</li>
+<li><strong>根因与影响</strong>：<code>Channel.CreateUnbounded&lt;AudioWorkItem&gt;</code> 叠加 <code>ArrayPool&lt;byte&gt;.Shared.Rent</code>，WASAPI 卡顿期间队列与未归还数组无限增长，恢复后播放陈旧音频。</li>
+<li><strong>修复方案</strong>：改用 <code>Channel.CreateBounded&lt;AudioWorkItem&gt;(256)</code>，普通帧 <code>TryWrite</code> 失败时立即归还 <code>ArrayPool</code> 并计数，控制事件独立高优先级投递。</li>
+</ul></li>
+<li><strong>[P1-12] <code>VirtualAudioAuditor</code> 枚举 Core Audio 端点泄漏大量 <code>MMDevice</code> COM 对象，且通知回调永不注销</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Audio/VirtualAudioAuditor.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Platform.Windows/Audio/VirtualAudioAuditor.cs</code></a>（<code>RunAudit</code> L29–64、<code>GetCableInputDeviceInternal</code> L139–207、<code>EnsureEndpointNotificationRegistered</code> L223–250）</li>
+<li><strong>根因与影响</strong>：<code>cableInput</code>/<code>cableOutput</code>/<code>MMDeviceCollection</code> 及非目标枚举项均未显式 <code>Dispose()</code>；<code>IMMNotificationClient</code> 整个生命周期无注销入口，频繁设备切换时易滞留 COM 句柄干扰驱动热插拔。</li>
+<li><strong>修复方案</strong>：使用 <code>using</code> 释放 <code>MMDeviceCollection</code> 与非目标 <code>MMDevice</code>，增加 <code>Shutdown()</code> 注销回调并释放 <code>_notificationEnumerator</code>。</li>
+</ul></li>
+<li><strong>[P1-13] <code>SetDeviceVoiceSettings</code> 为离线设备急切实例化完整 <code>WinRtBluetoothManager</code></strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Bluetooth/MultiRemoteBluetoothManager.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Platform.Windows/Bluetooth/MultiRemoteBluetoothManager.cs</code></a>（L70–76、L95–125）</li>
+<li><strong>根因与影响</strong>：为离线设备调整配置会立即构造完整 <code>WinRtBluetoothManager</code>（含 <code>BluetoothLEAdvertisementWatcher</code>、常驻音频消费任务和 <code>WasapiAudioPlayer</code>），造成后台任务与资源浪费。</li>
+<li><strong>修复方案</strong>：维护轻量 <code>ConcurrentDictionary&lt;ulong, DeviceVoiceSettings&gt;</code> 缓存，仅在真实 <code>ConnectAsync</code> 创建管理器时回填。</li>
+</ul></li>
+</ol>
+<h4 class="sev-head">P2 — 中等改进</h4>
+<ol class="finding-list">
+<li><strong>[P2-4] <code>ConnectAsync</code> 首次发现 ATVV 服务/特征缺少 <code>BluetoothCacheMode.Uncached</code> 回退</strong>（<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Bluetooth/WinRtBluetoothManager.cs" target="_blank" rel="noopener noreferrer"><code>WinRtBluetoothManager.cs</code></a> L341、L360）：缓存陈旧时应自动以 <code>Uncached</code> 重试一次。</li>
+<li><strong>[P2-5] <code>VbCableInstaller</code> 提权前缺 Authenticode 签名/二次哈希校验，且 ARM64 错误映射至 x64 内核驱动安装程序</strong>（<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Audio/VbCableInstaller.cs" target="_blank" rel="noopener noreferrer"><code>VbCableInstaller.cs</code></a> L35–68）：在 <code>%TEMP%</code> 提权执行前应调用 <code>WinVerifyTrust</code> 或复算哈希防 TOCTOU，ARM64 需核实驱动兼容性而非硬映射 x64 安装程序，并对比安装前后 <code>DriverReadinessStatus</code> 区分取消安装。</li>
+<li><strong>[P2-6] <code>Disconnect()</code> 持 <code>_stateLock</code> 调用 <code>_audioPlayer.Stop()</code> 易受 WASAPI 卡顿传导阻塞，且 <code>EndpointNotificationClient</code> 忽略属性变更</strong>（<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Bluetooth/WinRtBluetoothManager.cs" target="_blank" rel="noopener noreferrer"><code>WinRtBluetoothManager.cs</code></a> L2083–2172、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Audio/VirtualAudioAuditor.cs" target="_blank" rel="noopener noreferrer"><code>VirtualAudioAuditor.cs</code></a> L34–41、L348–403）：应将 <code>_audioPlayer.Stop()</code> 移出 <code>_stateLock</code>，并在 <code>OnPropertyValueChanged</code> 匹配 <code>_cachedCableInputId</code> 时失效缓存。</li>
+<li><strong>[P2-7] <code>StartupService</code> 无引号路径解析脆弱且缺路径变更后的僵尸注册表项清理</strong>（<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Services/StartupService.cs" target="_blank" rel="noopener noreferrer"><code>StartupService.cs</code></a>）：需区分旧路径僵尸项并自动修复，改用严格引号/可执行路径解析，移除宽泛 <code>val.Contains</code> 回退。</li>
+</ol>
+<h4 class="sev-head">P3 — 建议优化</h4>
+<ol class="finding-list">
+<li><strong>[P3-1]</strong> <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/RemoteBuddy.Platform.Windows.csproj" target="_blank" rel="noopener noreferrer"><code>RemoteBuddy.Platform.Windows.csproj</code></a> 的 <code>GetHidMaestro</code> Target 缺少离线缓存路径属性与并发解压原子保护。</li>
+<li><strong>[P3-2]</strong> <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Bluetooth/BluetoothAdapterHelper.cs" target="_blank" rel="noopener noreferrer"><code>BluetoothAdapterHelper.cs</code></a> <code>RestartAppAsAdministrator</code> 使用 <code>Environment.Exit(0)</code> 跳过优雅退出，应返回 <code>bool</code> 由宿主 <code>Application.Current.Shutdown()</code> 退出。</li>
+<li><strong>[P3-3]</strong> <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Bluetooth/WinRtBluetoothManager.cs" target="_blank" rel="noopener noreferrer"><code>WinRtBluetoothManager.cs</code></a> 单文件 2214 行职责过重，建议拆分为 <code>ChromecastGattInspector</code>、<code>AtvvAudioPipeline</code> 与 <code>WinRtBluetoothManager</code>。</li>
+<li><strong>[P3-4]</strong> <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Bluetooth/MultiRemoteBluetoothManager.cs" target="_blank" rel="noopener noreferrer"><code>MultiRemoteBluetoothManager.cs</code></a>（L65–66）<code>CurrentGain</code>/<code>VoiceButtonMode</code> 在无就绪设备时静默丢弃赋值。</li>
+</ol>
+  </section>
+
+  <section class="sec">
+    <h2>Windows 输入子系统与安全：架构隔离清晰，钩子放行与 ETW 停止顺序存致命缺陷</h2>
+<p class="scope-note measure">覆盖范围：<code>src/RemoteBuddy.Platform.Windows/Input/</code> 全部 10 个文件（<code>NativeInputSender.cs</code>、<code>RawInputReceiver.cs</code>、<code>RemoteVoiceKeyGuard.cs</code>、<code>HidDeviceReader.cs</code>、<code>DoubaoUsbKeyboard.cs</code>、<code>BthPortRegistryHelper.cs</code>、<code>ChromecastButtonReceiver.cs</code>、<code>ChromecastEtwReceiver.cs</code>、<code>ChromecastWorkerClient.cs</code>、<code>ChromecastWorkerHost.cs</code>），全部已逐行源码审查。</p>
+<h3>模块整体评价与亮点</h3>
+<ul class="plain-list">
+<li><strong>64 位 <code>INPUT</code> 结构体对齐准确</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/NativeInputSender.cs" target="_blank" rel="noopener noreferrer"><code>NativeInputSender.cs</code></a> 完整声明 <code>MOUSEINPUT</code>/<code>KEYBDINPUT</code>/<code>HARDWAREINPUT</code>，确保 x64 下准确等于 40 字节。</li>
+<li><strong>防 <code>SendInput</code> 回环与多设备状态隔离</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/RawInputReceiver.cs" target="_blank" rel="noopener noreferrer"><code>RawInputReceiver.cs</code></a> 显式丢弃 <code>hDevice == IntPtr.Zero</code> 合成事件，通过 <code>DEVPKEY_Device_ContainerId</code> 归属设备并按 <code>(hDevice, reportId)</code> 维护按键状态。</li>
+<li><strong>提权分离与无阻塞 ETW 转发</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/ChromecastButtonReceiver.cs" target="_blank" rel="noopener noreferrer"><code>ChromecastButtonReceiver.cs</code></a>、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/ChromecastWorkerClient.cs" target="_blank" rel="noopener noreferrer"><code>ChromecastWorkerClient.cs</code></a> 与 <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/ChromecastWorkerHost.cs" target="_blank" rel="noopener noreferrer"><code>ChromecastWorkerHost.cs</code></a> 将 ETW 提权限制在独立子进程，主进程保持 Medium 完整性；<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/ChromecastEtwReceiver.cs" target="_blank" rel="noopener noreferrer"><code>ChromecastEtwReceiver.cs</code></a> 使用确定性会话名 <code>RemoteBuddy_BthEtw_S{SessionId}</code> 并在 <code>ERROR_ALREADY_EXISTS (183)</code> 时自动回收旧会话。</li>
+</ul>
+<h3>详细审查发现</h3>
+<h4 class="sev-head sev-p0">P0 — 严重缺陷</h4>
+<ol class="finding-list">
+<li><strong>[P0-5] 低级键盘钩子漏判 <code>LLKHF_INJECTED</code>，导致软件自身注入的 <code>F5</code> 事件被静默吞掉并提前解除防护</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/RemoteVoiceKeyGuard.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Platform.Windows/Input/RemoteVoiceKeyGuard.cs</code></a>（<code>OnKeyboard</code>、<code>Arm</code>）</li>
+<li><strong>根因与影响</strong>：当事件为注入事件（<code>(flags &amp; 0x10) != 0</code>）时，仅跳过了 <code>_ownsF5</code> 分支而未立即放行，直接落入后方 <code>if (sessionActive || _armed)</code> 分支并返回 <code>(IntPtr)1</code> 吞掉事件。导致 <code>Arm()</code> 补发的清理 <code>F5</code> KeyUp 被自己拦截且立即清除 <code>_armed</code>；语音激活期间注入含 <code>F5</code> 的目标快捷键（如微信 <code>Ctrl+F5</code>）也会被自身钩子吞掉。</li>
+<li><strong>修复方案</strong>：检测到 <code>(flags &amp; 0x10) != 0</code> 后立即 <code>return CallNextHookEx(_hook, code, message, data);</code>（可结合 <code>dwExtraInfo == NativeInputSender.SyntheticEventMarker</code> 进一步精确放行）。</li>
+</ul></li>
+<li><strong>[P0-6] <code>ChromecastEtwReceiver.Stop()</code> 在消费线程退出前释放非托管缓冲区与委托，存在 Use-After-Free 崩溃风险</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/ChromecastEtwReceiver.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Platform.Windows/Input/ChromecastEtwReceiver.cs</code></a>（<code>Stop</code> L1008–1044、<code>CleanupUnmanaged</code> L1046–1063）</li>
+<li><strong>根因与影响</strong>：<code>Stop()</code> 在 <code>lock (_lock)</code> 内调用 <code>CloseTrace</code>/<code>ControlTraceW</code> 后立刻执行 <code>CleanupUnmanaged()</code> 释放 <code>LoggerName</code>/<code>_logfileBuffer</code>/<code>_propertiesBuffer</code> 并置空 <code>_callbackHolder</code>，随后才在锁外 <code>_processThread.Join(500)</code>。若 <code>ProcessTrace</code> 正在排空残留缓冲或回调 <code>ProcessEventRecord</code>，将触发原生堆 UAF（<code>AccessViolationException</code>）。</li>
+<li><strong>修复方案</strong>：先在锁内停止会话并取出 <code>_processThread</code>，在锁外 <code>Join(3000)</code> 确认线程完全退出后，再执行 <code>CleanupUnmanaged()</code>。</li>
+</ul></li>
+</ol>
+<h4 class="sev-head sev-p1">P1 — 高危隐患</h4>
+<ol class="finding-list">
+<li><strong>[P1-14] 命名管道缺少客户端 PID 校验且命令行明文暴露管道名，UAC 窗口期存在本地抢连与伪造按键注入风险</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/ChromecastWorkerClient.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Platform.Windows/Input/ChromecastWorkerClient.cs</code></a>（<code>StartAsync</code>，L72–141）</li>
+<li><strong>根因与影响</strong>：管道名经命令行明文传参（<code>--chromecast-worker {pipeName}</code>），ACL 同时赋予当前用户（为空时甚至退化为 <code>BuiltinUsersSid</code>）与管理员 <code>ReadWrite</code>，且连接建立后未校验对端 PID 是否等于 <code>workerProcess.Id</code>。同用户低权限恶意进程可在 UAC 弹窗数秒内抢先连入管道并伪造 <code>MsgTypeButtonEvent</code> 触发快捷键或语音录制。</li>
+<li><strong>修复方案</strong>：连接后立即调用 <code>GetNamedPipeClientProcessId</code> 校验 <code>clientPid == (uint)workerProcess.Id</code>；移除 <code>BuiltinUsersSid</code> 兜底。</li>
+</ul></li>
+<li><strong>[P1-15] <code>NativeInputSender</code> 存在单键卡键漏追踪、Unicode 部分发送无法回滚及 UIPI 静默失败无感知</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/NativeInputSender.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Platform.Windows/Input/NativeInputSender.cs</code></a>（<code>SendKey</code>、<code>SendShortcutDown</code>、<code>BuildUnclosedReleaseInputs</code>、<code>SendUnicodeText</code>）</li>
+<li><strong>根因与影响</strong>：<code>SendKey</code> 未对称维护 <code>_heldSyntheticKeys</code>，异常断连时无法自动释放；<code>BuildUnclosedReleaseInputs</code> 跳过 <code>vk == 0</code> 导致 <code>KEYEVENTF_UNICODE</code> 半途失败无法补发 KeyUp；<code>SendShortcutDown</code> 部分失败时调用 <code>ReleaseAllHeldSyntheticKeys()</code> 会误清其他无关持键；从未在 <code>sent &lt; inputs.Length</code> 时读取 <code>Marshal.GetLastWin32Error()</code>，导致前台为管理员窗口时 UIPI 拦截（<code>ERROR_ACCESS_DENIED = 5</code>）完全无诊断提示。</li>
+<li><strong>修复方案</strong>：<code>SendKey</code> 对称追踪持键；Unicode 按 <code>wScan</code> 配对回滚；部分失败仅释放本次已发子集；记录 Win32 错误码并在 UIPI 拦截时向上层告警。</li>
+</ul></li>
+<li><strong>[P1-16] <code>DoubaoUsbKeyboard</code> 完全无线程同步、<code>finally</code> 未保护删除掩盖异常且缺乏驱动检查与回环绑定验证</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/DoubaoUsbKeyboard.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Platform.Windows/Input/DoubaoUsbKeyboard.cs</code></a>（L16–100、L142–162）</li>
+<li><strong>根因与影响</strong>：<code>_context</code>/<code>_keyboard</code>/<code>_keysHeld</code> 无锁保护且无 <code>_disposed</code> 位，并发 <code>SendClick</code>（含 <code>Thread.Sleep(45)</code>）与 <code>Dispose()</code> 可重建泄漏句柄或导致卡键；<code>EnsureKeyboard()</code> 的 <code>finally</code> 直接执行非递归 <code>Directory.Delete</code> 且无 <code>try/catch</code>，会覆盖真实异常；未检查 USB/IP 驱动状态与失败熔断，也未在代码层验证 <code>HMBackend.Usbip</code> 仅绑定 <code>127.0.0.1</code>。</li>
+<li><strong>修复方案</strong>：增加 <code>_sync</code> 锁与 <code>_disposed</code> 标志；<code>finally</code> 清理独立 <code>try/catch</code> + 递归删除；增加驱动前置检查/失败冷却，并审计 <code>HIDMaestro</code> 的 USB/IP 绑定地址。</li>
+</ul></li>
+<li><strong>[P1-17] <code>HidDeviceReader.Stop()</code> 与断连退出未释放已按下按键，且存在 <code>SafeFileHandle</code> 并发释放竞态</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/HidDeviceReader.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Platform.Windows/Input/HidDeviceReader.cs</code></a>（<code>Start</code> L233–269、<code>ReadLoopAsync</code> L283–326、<code>Stop</code> L360–374）</li>
+<li><strong>根因与影响</strong>：<code>Stop()</code> 与断连退出仅清空 <code>_pressedButtons</code> 而不派发 <code>ButtonEvent(btn, false)</code>，导致下游组合键卡死；<code>Start</code>/<code>Stop</code> 无互斥锁且直接 <code>Dispose()</code> <code>_handle</code> 与 <code>ReadLoopAsync</code> 竞争。</li>
+<li><strong>修复方案</strong>：取出快照后在锁外逐一派发 KeyUp；同步化启停生命周期，先取消 <code>CancellationToken</code> 并短暂等待 <code>_readTask</code> 结束后再释放 <code>_handle</code>。</li>
+</ul></li>
+<li><strong>[P1-18] 提权 Worker 300ms 强杀超时与缺少进程退出钩子，易致系统全局 ETW Session 泄漏</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/ChromecastWorkerClient.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Platform.Windows/Input/ChromecastWorkerClient.cs</code></a>（<code>DisposeResources</code> L302–327）、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/ChromecastWorkerHost.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Platform.Windows/Input/ChromecastWorkerHost.cs</code></a>（<code>RunWorkerAsync</code> L154–162）</li>
+<li><strong>根因与影响</strong>：Client 仅等 300ms 即 <code>Kill(entireProcessTree: true)</code>，而 Host 优雅停止需最长 ~1000ms；Host 未注册 <code>ProcessExit</code> / <code>SetConsoleCtrlHandler</code>。Windows 全局 ETW 会话上限约 64 个，强杀会遗留内核会话常驻至重启。</li>
+<li><strong>修复方案</strong>：将等待超时提高至 ≥2000ms；在 Host 注册退出钩子尽力调用 <code>receiver.Stop()</code>。</li>
+</ul></li>
+<li><strong>[P1-19] <code>RawInputReceiver</code> 在锁内逐包分配 <code>RIDI_PREPARSEDDATA</code> 拖慢 UI 线程，且静态 <code>_containerIdCache</code> 负缓存可破坏多设备隔离</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/RawInputReceiver.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Platform.Windows/Input/RawInputReceiver.cs</code></a>（L125–138、L214–249、L441–468）</li>
+<li><strong>根因与影响</strong>：UI 线程 <code>WndProc</code> 持锁期间每帧执行两次 <code>GetRawInputDeviceInfo</code> + 非托管堆分配，增加 <code>WH_KEYBOARD_LL</code> 触碰 <code>LowLevelHooksTimeout</code> 被系统摘除的风险；<code>GetDeviceContainerId</code> 永久缓存 <code>null</code> 导致退化到仅按大厂 VID（<code>VID_18D1</code>/<code>VID_2717</code>）匹配的 <code>IsKnownRemoteDevice</code>，可能误接管同厂商蓝牙键盘/鼠标。</li>
+<li><strong>修复方案</strong>：按 <code>hDevice</code> 缓存 PreparsedData 并将 P/Invoke 移出锁；不永久缓存 <code>null</code> ContainerId（设 3–5 秒 TTL）；大厂 VID 强制同时校验遥控器 PID（<code>9450</code>/<code>32B8</code>）。</li>
+</ul></li>
+</ol>
+<h4 class="sev-head">P2 — 中等改进</h4>
+<ol class="finding-list">
+<li><strong>[P2-8] <code>RemoteVoiceKeyGuard</code> 跨线程标量缺少 <code>volatile</code>/<code>Interlocked</code>，终结器在 GC 线程写日志并调 Win32 API</strong>（<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/RemoteVoiceKeyGuard.cs" target="_blank" rel="noopener noreferrer"><code>RemoteVoiceKeyGuard.cs</code></a> L12–34、L74–132）。</li>
+<li><strong>[P2-9] <code>BthPortRegistryHelper</code> 全局开启 <code>EtwLogSensitiveData = 1</code> 扩大系统蓝牙隐私面且无回滚，可能降级已有 <code>MaxEtwBytes</code></strong>（<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/BthPortRegistryHelper.cs" target="_blank" rel="noopener noreferrer"><code>BthPortRegistryHelper.cs</code></a> L22–74）：仅在 <code>&lt; 1024</code> 时写入并增加 <code>TryRevert()</code>。</li>
+<li><strong>[P2-10] IPC 通道无界 <code>Channel</code>、未知 <code>msgType</code> 未断开且父进程监控存在 PID 复用竞态</strong>（<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/ChromecastWorkerHost.cs" target="_blank" rel="noopener noreferrer"><code>ChromecastWorkerHost.cs</code></a> L51、L127–152、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/ChromecastWorkerClient.cs" target="_blank" rel="noopener noreferrer"><code>ChromecastWorkerClient.cs</code></a> L199–231）。</li>
+<li>**[P2-11] <code>RawInputReceiver</code> 存在 <code>dwSizeHid * dwCount</code> 溢出未检查、<code>requireExactIdentity</code> 被 MAC 子串旁路及 <code>PtrToStringUni</code> 未限长**（<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/RawInputReceiver.cs" target="_blank" rel="noopener noreferrer"><code>RawInputReceiver.cs</code></a> L250–266、L292–307、L413–416、L589–594）。</li>
+<li><strong>[P2-12] <code>DoubaoUsbKeyboard.SendClick</code> 同步阻塞调用线程 45ms</strong>（<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/DoubaoUsbKeyboard.cs" target="_blank" rel="noopener noreferrer"><code>DoubaoUsbKeyboard.cs</code></a> L57–62）：应提供异步发送或独立后台发送队列。</li>
+</ol>
+<h4 class="sev-head">P3 — 建议优化</h4>
+<ol class="finding-list">
+<li><strong>[P3-5]</strong> <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/NativeInputSender.cs" target="_blank" rel="noopener noreferrer"><code>NativeInputSender.cs</code></a> 补全 <code>IsExtendedKey</code>（<code>VK_DIVIDE</code>/<code>VK_NUMLOCK</code>/<code>VK_SNAPSHOT</code>）并对重复修饰键去重。</li>
+<li><strong>[P3-6]</strong> <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/ChromecastButtonReceiver.cs" target="_blank" rel="noopener noreferrer"><code>ChromecastButtonReceiver.cs</code></a> 增加 <code>_disposed</code> 标志防释放后重入；<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/HidDeviceReader.cs" target="_blank" rel="noopener noreferrer"><code>HidDeviceReader.cs</code></a> 加强枚举长度防御。</li>
+</ol>
+  </section>
+
+  <section class="sec">
+    <h2>WPF 应用层与交互体验：硬件去重细致，重构遗留导致托盘开关与集成页脱节</h2>
+<p class="scope-note measure">覆盖范围：<code>src/RemoteBuddy.App/</code> 全部 29 个文件（入口与清单、Converters、4 个 ViewModels、<code>MainWindow</code>/<code>OnboardingWindow</code> 及 8 个 Pages），全部已逐行源码审查。</p>
+<h3>模块整体评价与亮点</h3>
+<ul class="plain-list">
+<li><strong>多源输入去重与防冲突机制</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/ViewModels/MainViewModel.cs" target="_blank" rel="noopener noreferrer"><code>MainViewModel.cs</code></a> 实现了跨通道（RawInput / HidReader / ETW）150ms 跨源去重、同源 60ms 去重，以及原生键盘遥控器（小米 / T1）方向键与确认键的“恒等快捷键跳过（<code>IsIdentityKeyboardShortcut</code>）”防双击设计。</li>
+<li><strong>严谨的闭环向导门禁</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/ViewModels/OnboardingViewModel.cs" target="_blank" rel="noopener noreferrer"><code>OnboardingViewModel.cs</code></a> 支持 <code>Full</code> / <code>DeviceOnly</code> / <code>Integration</code> 三种模式，在驱动检测、按键响应、拾音电平与真实转写验收上均设强校验，<code>DeviceOnly</code> 中途退出可自动回滚未验证设备。</li>
+<li><strong>防抖落盘与就地集合同步</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/ViewModels/SubViewModels.cs" target="_blank" rel="noopener noreferrer"><code>SubViewModels.cs</code></a> 对增益滑块做 300ms 防抖并在 <code>Dispose()</code> 强制 <code>FlushPendingGainSave()</code>；<code>MappingViewModel.SyncDevicesCollection()</code> 就地更新集合，避免 WPF <code>ComboBox</code> 选区丢失。</li>
+<li><strong>Explorer 重启与关机兼容</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/Views/MainWindow.xaml.cs" target="_blank" rel="noopener noreferrer"><code>MainWindow.xaml.cs</code></a> 监听 <code>TaskbarCreated</code> 重建托盘图标，并处理 <code>WM_QUERYENDSESSION</code> / <code>WM_ENDSESSION</code> 防止托盘驻留阻塞关机。</li>
+</ul>
+<h3>详细审查发现</h3>
+<h4 class="sev-head sev-p0">P0 — 严重缺陷</h4>
+<ol class="finding-list">
+<li><strong>[P0-7] <code>GeneralPage</code> 中“关闭时最小化到托盘”开关当次运行完全失效（读取了已废弃的 <code>SettingsVm</code>）</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/Views/MainWindow.xaml.cs" target="_blank" rel="noopener noreferrer"><code>MainWindow.xaml.cs</code></a>、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/Views/Pages/GeneralPage.xaml" target="_blank" rel="noopener noreferrer"><code>GeneralPage.xaml</code></a>、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/ViewModels/SubViewModels.cs" target="_blank" rel="noopener noreferrer"><code>SubViewModels.cs</code></a></li>
+<li><strong>根因与影响</strong>：侧边栏已移除 <code>SettingsPage</code>，用户在 <code>GeneralPage</code> 修改的是 <code>GeneralVm.MinimizeToTrayOnClose</code>；但 <code>MainWindow.OnWindowClosing</code> 检查的是启动后不再同步的 <code>vm.SettingsVm.MinimizeToTrayOnClose</code>，导致勾选/取消后当次运行行为完全相反（直到重启才生效）。</li>
+<li><strong>修复方案</strong>：删除废弃的 <code>SettingsPage</code> / <code>SettingsViewModel</code>，将 <code>OnWindowClosing</code> 改为直接读取 <code>vm.GeneralVm.MinimizeToTrayOnClose</code>（或 <code>_configService.Current.MinimizeToTrayOnClose</code>）。</li>
+</ul></li>
+<li><strong>[P0-8] 单实例启动仅靠 Mutex 静默退出，缺少 IPC 唤起已有窗口机制</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/App.xaml.cs" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.App/App.xaml.cs</code></a>（<code>App.OnStartup</code>）</li>
+<li><strong>根因与影响</strong>：检测到 <code>Local\RemoteBuddy.Windows.Main</code> 已被占用后仅记录日志并 <code>Shutdown(0)</code>。当应用已最小化到托盘或 <code>--minimized</code> 开机自启时，用户双击桌面图标无任何反应，极易误判为程序打不开或闪退。</li>
+<li><strong>修复方案</strong>：主实例创建命名 <code>EventWaitHandle</code>（如 <code>Local\RemoteBuddy.Windows.ShowMainWindow</code>）或命名管道监听，次实例触发激活信号后由主实例调用 <code>mainWindow.RestoreWindow()</code>。</li>
+</ul></li>
+</ol>
+<h4 class="sev-head sev-p1">P1 — 高危隐患</h4>
+<ol class="finding-list">
+<li><strong>[P1-20] <code>AppIntegrationPage</code> 仅为配置壳，未接入语音触发焦点定位逻辑</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/Views/Pages/AppIntegrationPage.xaml" target="_blank" rel="noopener noreferrer"><code>AppIntegrationPage.xaml</code></a>、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/ViewModels/SubViewModels.cs" target="_blank" rel="noopener noreferrer"><code>SubViewModels.cs</code></a>、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/ViewModels/MainViewModel.cs" target="_blank" rel="noopener noreferrer"><code>MainViewModel.cs</code></a></li>
+<li><strong>根因与影响</strong>：UI 承诺语音开始时自动定位到微信/Antigravity/ChatGPT/Claude/DeepSeek/WorkBuddy 输入区域，但 <code>MainViewModel.OnVoiceSessionStarted</code> 完全未读取 <code>_configService.Current.AppIntegrations</code> 或执行焦点定位，功能与文案严重不符。</li>
+<li><strong>修复方案</strong>：接入 Windows UI Automation 输入框聚焦服务，或在能力落地前暂时隐藏该页/标注“即将支持”。</li>
+</ul></li>
+<li><strong>[P1-21] 全局未处理异常崩溃时跳过清理，遗留键盘钩子、卡键、托盘幽灵图标与子进程</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/App.xaml.cs" target="_blank" rel="noopener noreferrer"><code>App.xaml.cs</code></a>、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/Views/MainWindow.xaml.cs" target="_blank" rel="noopener noreferrer"><code>MainWindow.xaml.cs</code></a></li>
+<li><strong>根因与影响</strong>：<code>UnhandledException</code> / <code>DispatcherUnhandledException</code> 仅写日志未执行清理，进程崩溃跳过 <code>OnExit</code>/<code>OnWindowClosed</code>，遗留 <code>WH_KEYBOARD_LL</code> 钩子、按住合成键、托盘图标及 ETW/USB-IP 资源。</li>
+<li><strong>修复方案</strong>：抽取幂等、带 <code>try/catch</code> 保护的 <code>EmergencyCleanup()</code>，在崩溃钩子与 <code>OnExit</code> 统一调用。</li>
+</ul></li>
+<li><strong>[P1-22] <code>MainWindow</code> 隐藏状态下右键托盘菜单无法点击外部关闭</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/Views/MainWindow.xaml.cs" target="_blank" rel="noopener noreferrer"><code>MainWindow.xaml.cs</code></a>（<code>ShowTrayContextMenu</code>）</li>
+<li><strong>根因与影响</strong>：主窗口 <code>Hide()</code> 时 <code>SetForegroundWindow(hwnd)</code> 失效，未挂载可视树的 WPF <code>ContextMenu</code> 无法收到失焦消息，点击桌面空白处菜单悬停不消失。</li>
+<li><strong>修复方案</strong>：改用 Win32 <code>CreatePopupMenu</code> + <code>TrackPopupMenuEx</code> + <code>PostMessage(hwnd, WM_NULL, ...)</code>，或复用 <code>WPF-UI</code> <code>NotifyIcon</code> / 辅助 <code>ToolWindow</code>。</li>
+</ul></li>
+<li><strong>[P1-23] <code>OnboardingWindow</code> 劫持 RawInput 后漏处理 <code>WM_INPUT_DEVICE_CHANGE</code>，且重复安装 <code>RemoteVoiceKeyGuard</code></strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/Views/OnboardingWindow.xaml.cs" target="_blank" rel="noopener noreferrer"><code>OnboardingWindow.xaml.cs</code></a>、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/ViewModels/MainViewModel.cs" target="_blank" rel="noopener noreferrer"><code>MainViewModel.cs</code></a></li>
+<li><strong>根因与影响</strong>：向导切换 RawInput 接收 HWND 后漏转发 <code>0x00FE</code>，刚配对新遥控器的到达/移除缓存无法更新导致按键测试无响应；每次开关向导重复调 <code>_voiceKeyGuard.Install()</code>。</li>
+<li><strong>修复方案</strong>：补齐 <code>WM_INPUT_DEVICE_CHANGE</code> 转发（或保持隐藏主窗 <code>RIDEV_INPUTSINK</code> 持续接收）；将 <code>_voiceKeyGuard.Install()</code> 移出 <code>RegisterRawInput</code> 仅安装一次。</li>
+</ul></li>
+<li><strong>[P1-24] <code>GeneralViewModel</code> 事件订阅未退订（内存泄漏）+ 构造期误触发注册表与磁盘双写</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/ViewModels/SubViewModels.cs" target="_blank" rel="noopener noreferrer"><code>SubViewModels.cs</code></a>（<code>GeneralViewModel</code> / <code>SettingsViewModel</code> 构造函数）</li>
+<li><strong>根因与影响</strong>：匿名 Lambda 订阅 <code>_bt.ConnectionStatusChanged</code> 无 <code>IDisposable</code> 退订；构造函数对属性（而非私有字段）赋值触发 <code>OnXxxChanged</code>，每次启动同步执行 2 次注册表写入 + 2~4 次配置落盘。</li>
+<li><strong>修复方案</strong>：构造期直接赋 backing field；实现 <code>IDisposable</code> 并在 <code>MainViewModel.Dispose()</code> 退订。</li>
+</ul></li>
+<li><strong>[P1-25] <code>MainViewModel</code>（646 行）God Object、<code>_etwSources</code> 跨线程竞态与无保护火发任务</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/ViewModels/MainViewModel.cs" target="_blank" rel="noopener noreferrer"><code>MainViewModel.cs</code></a>（<code>RefreshInputSources</code>、<code>StartProbeRetryLoop</code>、<code>HandleDeviceButton</code>）</li>
+<li><strong>根因与影响</strong>：UI 状态与全部硬件编排耦合，被迫暴露多个 <code>*ForTest</code> 后门；<code>_etwSources</code> 锁外写锁内读存在数据竞争；多处 <code>_ = ...Async(...)</code> 无 <code>try/catch</code> 吞掉即时异常。</li>
+<li><strong>修复方案</strong>：抽离 <code>RemoteOrchestratorService</code> 承担硬件/输入/语音编排；对 <code>_etwSources</code> 统一加锁或用不可变快照；引入 <code>SafeFireAndForget</code> 统一捕获记录异常。</li>
+</ul></li>
+<li><strong>[P1-26] <code>OnboardingViewModel</code> 异步连接竞态、关闭后悬挂回调及缺少异常捕获</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/ViewModels/OnboardingViewModel.cs" target="_blank" rel="noopener noreferrer"><code>OnboardingViewModel.cs</code></a>（<code>ConnectDeviceAsync</code>、<code>InstallCableAsync</code>）、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/ViewModels/SubViewModels.cs" target="_blank" rel="noopener noreferrer"><code>SubViewModels.cs</code></a></li>
+<li><strong>根因与影响</strong>：快速点击不同设备连接缺少并发互斥与 <code>_isDisposed</code>/<code>SelectedDevice</code> 校验，慢返回结果覆盖新状态；4 个 <code>async Task</code> 命令缺少 <code>try/catch</code>，异常时界面永久卡在“正在连接”。</li>
+<li><strong>修复方案</strong>：引入 <code>CancellationTokenSource</code> 与 <code>IsConnecting</code> 互斥状态，<code>await</code> 后校验存活与当前选择，补充 <code>try/catch</code> 展示友好错误。</li>
+</ul></li>
+<li><strong>[P1-27] <code>MappingPage</code> 预览抑制在确认框弹出时失效，且快捷键录制缺少危险键与冲突校验</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/ViewModels/MainViewModel.cs" target="_blank" rel="noopener noreferrer"><code>MainViewModel.cs</code></a>、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/ViewModels/VoiceShortcutRecorder.cs" target="_blank" rel="noopener noreferrer"><code>VoiceShortcutRecorder.cs</code></a>、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/Views/Pages/MappingPage.xaml.cs" target="_blank" rel="noopener noreferrer"><code>MappingPage.xaml.cs</code></a></li>
+<li><strong>根因与影响</strong>：弹出“恢复默认映射”确认框时 <code>MainWindow.IsActive</code> 变 <code>false</code>，抑制瞬间失效，误按遥控器可向弹窗注入 <code>Enter</code> 误确认重置；录制器未拦截 <code>Alt+F4</code>/<code>Win+L</code> 或无修饰单字符键，也未提示与映射冲突。</li>
+<li><strong>修复方案</strong>：扩展抑制条件检测任意所属弹窗活动状态；增加高危系统键黑名单、单字符警告与映射冲突检测。</li>
+</ul></li>
+</ol>
+<h4 class="sev-head">P2 — 中等改进</h4>
+<ol class="finding-list">
+<li><strong>[P2-13] 死代码与重构遗留清理</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/Views/Pages/SettingsPage.xaml" target="_blank" rel="noopener noreferrer"><code>SettingsPage.xaml</code></a> / <code>SettingsViewModel</code>、<code>NullToVisibilityConverter</code>（<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/Converters/ValueConverters.cs" target="_blank" rel="noopener noreferrer"><code>ValueConverters.cs</code></a>）、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/RemoteBuddy.App.csproj" target="_blank" rel="noopener noreferrer"><code>RemoteBuddy.App.csproj</code></a> 中完全未使用的 <code>WPF-UI 4.0.3</code> NuGet 包（徒增单文件体积）及多个未绑定 ViewModel 成员应清理。</li>
+<li><strong>[P2-14] <code>MappingPage</code> 重复实现快捷键录制且键名格式与 <code>VoiceShortcutRecorder</code> 不一致</strong>（<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/Views/Pages/MappingPage.xaml.cs" target="_blank" rel="noopener noreferrer"><code>MappingPage.xaml.cs</code></a>、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/ViewModels/VoiceShortcutRecorder.cs" target="_blank" rel="noopener noreferrer"><code>VoiceShortcutRecorder.cs</code></a>）：遗漏 <code>Return-&gt;Enter</code>/<code>Back-&gt;Backspace</code>/<code>Prior-&gt;PageUp</code>/<code>Next-&gt;PageDown</code> 且未处理 <code>Key.ImeProcessed</code>，应抽取统一 <code>ShortcutRecorder</code>。</li>
+<li><strong>[P2-15] UI 线程同步执行硬件/音频枚举与 Getter 重复审计</strong>（<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/ViewModels/SubViewModels.cs" target="_blank" rel="noopener noreferrer"><code>SubViewModels.cs</code></a>、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/ViewModels/MainViewModel.cs" target="_blank" rel="noopener noreferrer"><code>MainViewModel.cs</code></a>）：<code>IntegrationsViewModel</code> 两个属性 Getter 每次渲染同步审计两次驱动，且 UI 线程同步调 <code>HidDeviceReader.FindBestDevice</code>，应缓存状态并异步化 HID 枚举。</li>
+<li><strong>[P2-16] <code>OnboardingViewModel</code> 存在属性通知遗漏、步骤元数据双重触发及高 DPI 裁切风险</strong>（<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/ViewModels/OnboardingViewModel.cs" target="_blank" rel="noopener noreferrer"><code>OnboardingViewModel.cs</code></a>）。</li>
+</ol>
+  </section>
+
+  <section class="sec">
+    <h2>测试、CI/CD、脚本与合规：回归测试扎实，需解除 GPLv3 冲突与补齐平台单测</h2>
+<p class="scope-note measure">覆盖范围：<code>src/RemoteBuddy.Tests/</code> 全部 19 文件、<code>.github/workflows/release.yml</code>、<code>Directory.Build.props</code>、<code>nuget.config</code>、<code>RemoteBuddy.sln</code>、<code>.gitignore</code>、<code>scripts/</code> 全部 7 脚本、<code>README.md</code>、<code>LICENSE</code>、<code>THIRD_PARTY_NOTICES.md</code> 与 <code>docs/</code> 全部 9 篇文档。</p>
+<h3>模块整体评价与亮点</h3>
+<ul class="plain-list">
+<li><strong>协议与回归测试深度扎实</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Tests/ChromecastEtwTests.cs" target="_blank" rel="noopener noreferrer"><code>ChromecastEtwTests.cs</code></a> 对多批次 G9N9N、小米 RC003 补取键、GATT 句柄区间过滤、隐私日志脱敏与多设备隔离覆盖细致；<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Tests/RemoteButtonGesturesTests.cs" target="_blank" rel="noopener noreferrer"><code>RemoteButtonGesturesTests.cs</code></a> 采用虚拟时钟注入；<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Tests/ConfigServiceTests.cs" target="_blank" rel="noopener noreferrer"><code>ConfigServiceTests.cs</code></a> 覆盖损坏隔离与 MAC 去重。</li>
+<li><strong>编译基线与依赖校验严格</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/Directory.Build.props" target="_blank" rel="noopener noreferrer"><code>Directory.Build.props</code></a> 统一开启 <code>Nullable=enable</code> 与 <code>TreatWarningsAsErrors=true</code>；<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/nuget.config" target="_blank" rel="noopener noreferrer"><code>nuget.config</code></a> 用 <code>&lt;clear /&gt;</code> 防依赖混淆；外部下载包均执行硬编码 SHA-256 校验。</li>
+<li><strong>PR 已接入构建与单测门禁</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/.github/workflows/release.yml" target="_blank" rel="noopener noreferrer"><code>.github/workflows/release.yml</code></a> 同时监听 <code>push</code> 与 <code>pull_request</code>（<code>main</code>）。</li>
+<li><strong>排障文档实事求是</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/docs/g9n9n-compatibility.md" target="_blank" rel="noopener noreferrer"><code>docs/g9n9n-compatibility.md</code></a>、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/docs/windows-remote-input.md" target="_blank" rel="noopener noreferrer"><code>docs/windows-remote-input.md</code></a> 与 <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/docs/doubao-voice-hotkeys.md" target="_blank" rel="noopener noreferrer"><code>docs/doubao-voice-hotkeys.md</code></a> 明确区分真机验收与单测通过。</li>
+</ul>
+<h3>详细审查发现</h3>
+<h4 class="sev-head sev-p0">P0 — 严重缺陷</h4>
+<ol class="finding-list">
+<li><strong>[P0-9] VB-CABLE 自建镜像分发与法律声明自相矛盾，存在专有软件再分发合规风险</strong>
+<ul class="sub-list">
+<li><strong>源码/文档</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener noreferrer"><code>THIRD_PARTY_NOTICES.md</code></a>（第 4 节）、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/README.md" target="_blank" rel="noopener noreferrer"><code>README.md</code></a>、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Audio/VbCableInstaller.cs" target="_blank" rel="noopener noreferrer"><code>VbCableInstaller.cs</code></a>、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Tests/VbCableInstallerTests.cs" target="_blank" rel="noopener noreferrer"><code>VbCableInstallerTests.cs</code></a></li>
+<li><strong>根因与影响</strong>：声明明确称“VB-CABLE 不捆绑、不转授权、不再分发，由用户自行从 VB-Audio 官网下载”，但代码实际优先从项目自有域名 <code>remote.zfdang.com</code> 下载专有包 <code>VBCABLE_Driver_Pack46.zip</code>。VB-CABLE 为专有 Donationware，未经官方书面许可镜像分发构成合规风险且与声明直接冲突。</li>
+<li><strong>修复方案</strong>：除非已获 VB-Audio 书面镜像授权并在 <code>THIRD_PARTY_NOTICES.md</code> 明示，否则移除自建镜像源，仅直连 VB-Audio 官方下载或引导浏览器打开官网下载。</li>
+</ul></li>
+<li><strong>[P0-10] <code>GPL-3.0-only</code> 与 <code>WPF-UI 4.0.3</code> 内嵌的 <code>microsoft/segoe-fluent-icons-font</code> 许可条款存在法律冲突</strong>
+<ul class="sub-list">
+<li><strong>源码/文档</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener noreferrer"><code>THIRD_PARTY_NOTICES.md</code></a>（第 2 节）、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/RemoteBuddy.App.csproj" target="_blank" rel="noopener noreferrer"><code>RemoteBuddy.App.csproj</code></a>、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/LICENSE" target="_blank" rel="noopener noreferrer"><code>LICENSE</code></a></li>
+<li><strong>根因与影响</strong>：<code>WPF-UI</code> 附带的微软字体条款禁止任何形式的再分发，与 <code>GPL-3.0-only</code> 自包含单文件二进制的自由再分发要求直接冲突。<strong>（结合第五章审查：<code>RemoteBuddy.App</code> 全部 XAML 实际零引用 <code>WPF-UI</code>，直接移除该死依赖即可一举消除合规冲突并缩小包体积！）</strong></li>
+<li><strong>修复方案</strong>：直接从 <code>RemoteBuddy.App.csproj</code> 移除未使用的 <code>WPF-UI 4.0.3</code> 引用，并同步清理 <code>THIRD_PARTY_NOTICES.md</code> 对应条款。</li>
+</ul></li>
+<li><strong>[P0-11] <code>scripts/convert-icon.ps1</code> 硬编码个人本机绝对路径与旧项目名 <code>voice-input-buddy-windows</code></strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/scripts/convert-icon.ps1" target="_blank" rel="noopener noreferrer"><code>scripts/convert-icon.ps1</code></a>（L1–2 及全文）</li>
+<li><strong>根因与影响</strong>：硬编码 <code>d:\works\remote-buddy\assets</code> 与 <code>d:\works\voice-input-buddy-windows\...</code>，缺 <code>$ErrorActionPreference = "Stop"</code>、路径校验及非托管图像句柄释放，在其他机器完全不可用。</li>
+<li><strong>修复方案</strong>：改为脚本参数并基于 <code>$PSScriptRoot</code> 推导默认目标路径，补充错误处理与 <code>try/finally</code> 释放。</li>
+</ul></li>
+</ol>
+<h4 class="sev-head sev-p1">P1 — 高危隐患</h4>
+<ol class="finding-list">
+<li><strong>[P1-28] 核心平台模块存在大面积测试覆盖盲区</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/tree/main/src/RemoteBuddy.Tests" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Tests/</code></a> 对照 <a href="https://github.com/zfdang/remote-buddy-windows/tree/main/src/RemoteBuddy.Platform.Windows" target="_blank" rel="noopener noreferrer"><code>src/RemoteBuddy.Platform.Windows/</code></a></li>
+<li><strong>根因与影响</strong>：<code>WinRtBluetoothManager</code>（GATT 发现/重连/保活）、<code>MultiRemoteBluetoothManager</code>（多设备路由）、<code>WasapiAudioPlayer</code>（设备切换与异常恢复）、<code>DoubaoUsbKeyboard</code>（USB/IP 挂载与降级）以及 <code>ChromecastWorkerHost</code>/<code>Client</code>、<code>BthPortRegistryHelper</code>、<code>StartupService</code>、<code>HidDeviceReader</code> 均接近零实质测试覆盖。</li>
+<li><strong>修复方案</strong>：优先为 Named Pipe 帧协议、<code>MultiRemoteBluetoothManager</code> 编排与接口抽象后的 <code>DoubaoUsbKeyboard</code> 补齐纯内存单测，并接入 <code>coverlet.collector</code> 输出覆盖率基线。</li>
+</ul></li>
+<li><strong>[P1-29] 全局禁用测试并行化且存在静态全局状态泄漏</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Tests/AssemblyInfo.cs" target="_blank" rel="noopener noreferrer"><code>AssemblyInfo.cs</code></a>、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Tests/ConvertersAndViewModelTests.cs" target="_blank" rel="noopener noreferrer"><code>ConvertersAndViewModelTests.cs</code></a>、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Tests/ChromecastEtwTests.cs" target="_blank" rel="noopener noreferrer"><code>ChromecastEtwTests.cs</code></a></li>
+<li><strong>根因与影响</strong>：<code>DisableTestParallelization = true</code> 掩盖并发共享状态缺陷；<code>DevicesViewModel.ConfirmDeviceRemovalHandler</code> 未在 <code>try/finally</code> 复位；<code>ChromecastEtwTests</code> 修改了 <code>AppLogger</code> 和 <code>BluetoothAdapterHelper.CustomRestartHandler</code> 却未加入 <code>[Collection("AppLogger")]</code>。</li>
+<li><strong>修复方案</strong>：所有静态钩子均用 <code>try/finally</code> 复位，归入单一 <code>[Collection("GlobalState")]</code> 后移除全局串行开关（配合第二章重构 <code>AppLogger</code> 为可实例化）。</li>
+</ul></li>
+<li><strong>[P1-30] CI/CD 供应链安全与发布制品完整性缺失</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/.github/workflows/release.yml" target="_blank" rel="noopener noreferrer"><code>.github/workflows/release.yml</code></a>（L24、L29、L68、L83、L88–99）</li>
+<li><strong>根因与影响</strong>：Actions 使用可变主版本标签（<code>@v4</code>）未 SHA-pin；发布包缺少 <code>SHA256SUMS.txt</code>、<code>actions/attest-build-provenance</code> 与 Authenticode 代码签名；每次 push <code>main</code> 以 <code>--clobber</code> 覆盖正式 Release。</li>
+<li><strong>修复方案</strong>：全量 SHA-pin Actions、随 Release 生成并上传 <code>SHA256SUMS.txt</code> 与构建溯源证明，将正式发布改为 <code>v*</code> Tag 触发或 <code>main</code> 标记 <code>--prerelease</code>。</li>
+</ul></li>
+<li><strong>[P1-31] <code>scripts/release-metadata.sh</code> 存在 Windows <code>tzdata</code> 缺失静默回退、1000 次提交回绕与 SemVer 前导零隐患</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/scripts/release-metadata.sh" target="_blank" rel="noopener noreferrer"><code>scripts/release-metadata.sh</code></a>（L12–28）</li>
+<li><strong>根因与影响</strong>：<code>ZoneInfo('Asia/Singapore')</code> 在缺少 <code>tzdata</code> 的 Windows Python 环境中静默回退为当前 UTC 时间，破坏确定性版本号；<code>$((count % 1000))</code> 在第 1000 次提交回绕冲突；月/日前导零不符合 SemVer 2.0。</li>
+<li><strong>修复方案</strong>：改用固定 <code>timezone(timedelta(hours=8))</code>、移除 <code>% 1000</code> 取模、去掉月/日前导零。</li>
+</ul></li>
+<li><strong>[P1-32] <code>scripts/build.ps1</code> 自动下载执行远程脚本无校验且 SDK 版本检测有缺陷</strong>
+<ul class="sub-list">
+<li><strong>源码</strong>：<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/scripts/build.ps1" target="_blank" rel="noopener noreferrer"><code>scripts/build.ps1</code></a>（L34–48、L60、L79–87）</li>
+<li><strong>根因与影响</strong>：仅判断 <code>dotnet --list-sdks</code> 非空（装有 .NET 8/9 即误判通过）；无哈希校验即 <code>-ExecutionPolicy Bypass</code> 执行远程 <code>dotnet-install.ps1</code>；全局强杀 <code>testhost*</code>；残留 <code>RemoteBuddy.App.old.&lt;guid&gt;.exe</code> 从不清理。</li>
+<li><strong>修复方案</strong>：精确正则校验 <code>^10\.0\.</code>、移除静默远程脚本执行、清理历史 <code>.old.*.exe</code> 并避免误杀全局 <code>testhost*</code>。</li>
+</ul></li>
+</ol>
+<h4 class="sev-head">P2 — 中等改进</h4>
+<ol class="finding-list">
+<li><strong>[P2-17] CI 未将 PR 检查与发布打包解耦，且自包含单文件未启用压缩与符号剥离</strong>（<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/.github/workflows/release.yml" target="_blank" rel="noopener noreferrer"><code>.github/workflows/release.yml</code></a> L10–13、L48–72）：PR 阶段无需打包上传，应加 <code>-p:EnableCompressionInSingleFile=true -p:DebugType=None -p:DebugSymbols=false</code> 瘦身并剥离 <code>.pdb</code>，<code>dotnet test</code> 增加 <code>--logger trx</code>。</li>
+<li><strong>[P2-18] 部分测试名不副实、过度反射与弱断言</strong>（<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Tests/HidDeviceReaderTests.cs" target="_blank" rel="noopener noreferrer"><code>HidDeviceReaderTests.cs</code></a>、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Tests/RemoteVoiceKeyGuardTests.cs" target="_blank" rel="noopener noreferrer"><code>RemoteVoiceKeyGuardTests.cs</code></a>、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Tests/AudioDecoderAndProtocolTests.cs" target="_blank" rel="noopener noreferrer"><code>AudioDecoderAndProtocolTests.cs</code></a>、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Tests/AudioLevelMeterTests.cs" target="_blank" rel="noopener noreferrer"><code>AudioLevelMeterTests.cs</code></a>）：<code>HidDeviceReaderTests</code> 零行测试 <code>HidDeviceReader</code>；已配 <code>InternalsVisibleTo</code> 仍大量反射私有字段；ADPCM 测试仅断言 <code>output[0] &gt;= 0</code>。</li>
+<li><strong>[P2-19] 跨平台构建脚本行为不一致</strong>（<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/scripts/build.ps1" target="_blank" rel="noopener noreferrer"><code>scripts/build.ps1</code></a>、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/scripts/build.sh" target="_blank" rel="noopener noreferrer"><code>scripts/build.sh</code></a>、<a href="https://github.com/zfdang/remote-buddy-windows/blob/main/scripts/test.ps1" target="_blank" rel="noopener noreferrer"><code>scripts/test.ps1</code></a>）：<code>build.sh</code> 注入版本并跑测试但不 publish，<code>build.ps1</code> 反之，应统一参数与默认行为。</li>
+<li><strong>[P2-20] 多篇文档与最新 116 次提交代码存在明显事实偏差</strong>：
+<ul class="sub-list">
+<li><a href="https://github.com/zfdang/remote-buddy-windows/blob/main/docs/g9n9n-compatibility.md" target="_blank" rel="noopener noreferrer"><code>docs/g9n9n-compatibility.md</code></a> 将 T1-Remote VID/PID 误写为 <code>2B54 / 1600</code>（代码实际为 <code>620A / 0407</code>）；</li>
+<li><a href="https://github.com/zfdang/remote-buddy-windows/blob/main/docs/xiaomi-rc003-buttons.md" target="_blank" rel="noopener noreferrer"><code>docs/xiaomi-rc003-buttons.md</code></a> 误称方向键与确认键启用默认长按连发（代码仅音量/电源）；</li>
+<li><a href="https://github.com/zfdang/remote-buddy-windows/blob/main/docs/architecture.md" target="_blank" rel="noopener noreferrer"><code>docs/architecture.md</code></a> 与 <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/docs/input-and-hotkeys.md" target="_blank" rel="noopener noreferrer"><code>docs/input-and-hotkeys.md</code></a> 仍写 <code>Inno Setup</code> 且遗漏豆包 <code>HIDMaestro</code> / <code>usbip-win2</code> 路径；</li>
+<li><a href="https://github.com/zfdang/remote-buddy-windows/blob/main/docs/device-protocols.md" target="_blank" rel="noopener noreferrer"><code>docs/device-protocols.md</code></a> 遗漏 <code>T1RemoteProtocol</code>、小米 <code>ARN9</code>、ATVV v0.4 及 <code>AUDIO_SYNC</code> <code>frameNumber</code> 字段。</li>
+</ul></li>
+</ol>
+  </section>
+
+  <section class="sec">
+    <h2>分阶段整改路线图：按止血、加固、演进三步推进</h2>
+    <p class="measure">结合缺陷严重度与改动面，建议分三个短周期迭代推进，确保每次合并均可被自动化测试与真机回归验证。</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>阶段</th>
+            <th>建议周期</th>
+            <th>核心整改包与覆盖编号</th>
+            <th>预期收益</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="mono-col">Sprint 1</td>
+            <td class="mono-col">1–2 天</td>
+            <td>清零全部 11 项 P0：卸载 <code>WPF-UI</code>（P0-10）、处理 VB-CABLE 镜像合规（P0-9）、修复 PowerShell 注入/死锁（P0-3）、修复两处 UAF（P0-4/P0-6）、修复 <code>LLKHF_INJECTED</code> 放行（P0-5）、修复 G9N9N/T1 协议（P0-1/P0-2）、修复托盘开关与单实例唤起（P0-7/P0-8）及 <code>convert-icon.ps1</code>（P0-11）</td>
+            <td>消除崩溃、提权注入、核心按键失灵与开源合规阻断项</td>
+          </tr>
+          <tr>
+            <td class="mono-col">Sprint 2</td>
+            <td class="mono-col">3–5 天</td>
+            <td>加固高危 P1：命名管道 PID 校验（P1-14）、<code>NativeInputSender</code> 回滚与 UIPI 告警（P1-15）、<code>DoubaoUsbKeyboard</code> 加锁（P1-16）、<code>HidDeviceReader</code> 断连释键（P1-17）、Worker 退出超时防 ETW 泄漏（P1-18）、<code>RawInputReceiver</code> 缓存与 PID 限定（P1-19）、<code>ATVVFrameAccumulator</code>/手势取消守卫/COM 释放（P1-1/P1-4/P1-5/P1-9~12）、崩溃清理与 <code>AppIntegrationPage</code> 状态明确化（P1-20/P1-21）</td>
+            <td>消除长时运行内存/句柄泄漏、卡键与多设备误触发</td>
+          </tr>
+          <tr>
+            <td class="mono-col">Sprint 3</td>
+            <td class="mono-col">1–2 周</td>
+            <td>架构解耦与工程化升级：<code>AppLogger</code> 实例/异步化并恢复测试并行（P1-7/P1-29）、拆分 <code>WinRtBluetoothManager</code>（2214 行）与 <code>MainViewModel</code>（646 行）（P1-6/P3-3）、CI SHA-pin + <code>SHA256SUMS.txt</code> + 单文件压缩剥离 PDB（P1-30/P2-17）、修复 <code>release-metadata.sh</code> 与 <code>build.ps1</code>（P1-31/P1-32）、补齐平台单测与修正 <code>docs/</code> 偏差（P1-28/P2-20）</td>
+            <td>降低维护复杂度，提升发布供应链安全与文档可信度</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="sec">
+    <h2>Sources</h2>
+    <ol class="sources-list">
+      <li><a href="https://github.com/zfdang/remote-buddy-windows" target="_blank" rel="noopener noreferrer">zfdang/remote-buddy-windows 仓库主页（main 分支 116 次提交）</a></li>
+      <li><a href="https://github.com/zfdang/remote-buddy-windows/blob/main/RemoteBuddy.sln" target="_blank" rel="noopener noreferrer">RemoteBuddy.sln</a> 与 <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/Directory.Build.props" target="_blank" rel="noopener noreferrer">Directory.Build.props</a></li>
+      <li><a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Protocols/G9N9NProtocol.cs" target="_blank" rel="noopener noreferrer">G9N9NProtocol.cs</a> / <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Protocols/T1RemoteProtocol.cs" target="_blank" rel="noopener noreferrer">T1RemoteProtocol.cs</a> / <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Protocols/ATVVProtocol.cs" target="_blank" rel="noopener noreferrer">ATVVProtocol.cs</a></li>
+      <li><a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Models/RemoteButtonGestures.cs" target="_blank" rel="noopener noreferrer">RemoteButtonGestures.cs</a> / <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Config/ConfigService.cs" target="_blank" rel="noopener noreferrer">ConfigService.cs</a> / <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Core/Diagnostics/AppLogger.cs" target="_blank" rel="noopener noreferrer">AppLogger.cs</a></li>
+      <li><a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Bluetooth/WinRtBluetoothManager.cs" target="_blank" rel="noopener noreferrer">WinRtBluetoothManager.cs</a> / <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Bluetooth/MultiRemoteBluetoothManager.cs" target="_blank" rel="noopener noreferrer">MultiRemoteBluetoothManager.cs</a></li>
+      <li><a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Bluetooth/BluetoothAdapterHelper.cs" target="_blank" rel="noopener noreferrer">BluetoothAdapterHelper.cs</a> / <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Audio/VirtualAudioAuditor.cs" target="_blank" rel="noopener noreferrer">VirtualAudioAuditor.cs</a> / <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Audio/VbCableInstaller.cs" target="_blank" rel="noopener noreferrer">VbCableInstaller.cs</a></li>
+      <li><a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/RemoteVoiceKeyGuard.cs" target="_blank" rel="noopener noreferrer">RemoteVoiceKeyGuard.cs</a> / <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/ChromecastEtwReceiver.cs" target="_blank" rel="noopener noreferrer">ChromecastEtwReceiver.cs</a> / <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/ChromecastWorkerClient.cs" target="_blank" rel="noopener noreferrer">ChromecastWorkerClient.cs</a></li>
+      <li><a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/NativeInputSender.cs" target="_blank" rel="noopener noreferrer">NativeInputSender.cs</a> / <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/RawInputReceiver.cs" target="_blank" rel="noopener noreferrer">RawInputReceiver.cs</a> / <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.Platform.Windows/Input/DoubaoUsbKeyboard.cs" target="_blank" rel="noopener noreferrer">DoubaoUsbKeyboard.cs</a></li>
+      <li><a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/App.xaml.cs" target="_blank" rel="noopener noreferrer">App.xaml.cs</a> / <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/Views/MainWindow.xaml.cs" target="_blank" rel="noopener noreferrer">MainWindow.xaml.cs</a> / <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/src/RemoteBuddy.App/ViewModels/MainViewModel.cs" target="_blank" rel="noopener noreferrer">MainViewModel.cs</a></li>
+      <li><a href="https://github.com/zfdang/remote-buddy-windows/blob/main/.github/workflows/release.yml" target="_blank" rel="noopener noreferrer">.github/workflows/release.yml</a> / <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener noreferrer">THIRD_PARTY_NOTICES.md</a> / <a href="https://github.com/zfdang/remote-buddy-windows/blob/main/scripts/convert-icon.ps1" target="_blank" rel="noopener noreferrer">scripts/convert-icon.ps1</a></li>
+    </ol>
+  </section>
+</main>
+</body>
+</html>
