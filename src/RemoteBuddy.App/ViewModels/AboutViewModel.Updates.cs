@@ -102,7 +102,7 @@ public partial class AboutViewModel
 
             var installed = WindowsRelease.ParseVersion(AppVersion);
             bool hasDifferentVersion = latest.Version != installed;
-            HasUpdateBadge = ReceiveUpdateNotifications && hasDifferentVersion;
+            HasUpdateBadge = hasDifferentVersion;
             if (hasDifferentVersion)
             {
                 AvailableRelease = latest;

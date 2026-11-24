@@ -70,7 +70,7 @@ public class AboutUpdateTests
             Assert.Equal(2, checks.Count);
             Assert.Equal(Published, vm.AvailableRelease);
             Assert.Contains(Published.Tag, vm.AvailableVersionText);
-            Assert.False(vm.HasUpdateBadge);
+            Assert.True(vm.HasUpdateBadge);
         }
         finally
         {
@@ -140,7 +140,7 @@ public class AboutUpdateTests
     }
 
     [Fact]
-    public async Task DisablingRemindersImmediatelyClearsAnExistingSidebarBadge()
+    public async Task ManualCheckRestoresTheSidebarBadgeAfterTurningOffAutomaticReminders()
     {
         var vm = new AboutViewModel(null, _ => Task.FromResult(Published)) { AppVersion = "v26.11.24.116" };
 
@@ -151,7 +151,9 @@ public class AboutUpdateTests
         Assert.False(vm.HasUpdateBadge);
         await vm.CheckForUpdatesCommand.ExecuteAsync(null);
         Assert.True(vm.HasAvailableRelease);
-        Assert.False(vm.HasUpdateBadge);
+        Assert.True(vm.HasUpdateBadge);
+        await vm.SetUpdatePageActiveAsync(false);
+        Assert.True(vm.HasUpdateBadge);
     }
 
     [Theory]
