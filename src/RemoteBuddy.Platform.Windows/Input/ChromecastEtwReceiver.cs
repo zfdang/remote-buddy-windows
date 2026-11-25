@@ -74,6 +74,17 @@ public sealed class ChromecastEtwReceiver : IDisposable
         UnlistedAttribute
     }
 
+    private enum AttPacketRejection
+    {
+        None,
+        ShortHeader,
+        UnsupportedAclHeader,
+        InconsistentLengths,
+        NonAttChannel,
+        UnsupportedTruncation,
+        EmptyAtt
+    }
+
     private sealed class SourceState(EtwButtonSource source, byte[] request)
     {
         public EtwButtonSource Source { get; } = source;
@@ -85,6 +96,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
             ? new HashSet<ushort>(excluded)
             : [];
         public ushort? PendingHandle { get; set; }
+        public bool LoggedUnmatchedMarker { get; set; }
         public ushort? BoundHandle { get; set; }
         public ushort? LockedG9N9NHandle { get; set; }
         public RemoteButton Held { get; set; }
@@ -109,6 +121,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
     private readonly object _stateLock = new();
     private SourceState[] _sources = [];
     private volatile bool _sawPacketEvent;
+    private readonly HashSet<string> _loggedProbeStages = [];
 
     internal void SetSources(IEnumerable<EtwButtonSource> sources)
     {
@@ -125,6 +138,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
         {
             _sources = next;
             _sawPacketEvent = false;
+            _loggedProbeStages.Clear();
         }
     }
 
@@ -154,10 +168,8 @@ public sealed class ChromecastEtwReceiver : IDisposable
             SetSources(sources);
 
             // Ensure BthPort registry parameters are configured
-            if (!BthPortRegistryHelper.IsConfigured())
-            {
-                BthPortRegistryHelper.TryConfigure();
-            }
+            bool registryConfigured = BthPortRegistryHelper.TryConfigure();
+            AppLogger.Info($"BthPort ETW registry check: configured={registryConfigured}, writtenInThisProcess={BthPortRegistryHelper.JustConfigured}, systemUptimeSeconds={Environment.TickCount64 / 1000}", "ChromecastEtwReceiver");
 
             // A trace can outlive its process. Reuse the name so the next instance can reclaim it.
             using var process = Process.GetCurrentProcess();
@@ -300,26 +312,40 @@ public sealed class ChromecastEtwReceiver : IDisposable
 
     private async Task CheckSourceBindingAsync(CancellationToken cancellationToken)
     {
-        try
+        foreach (int seconds in new[] { 4, 8 })
         {
-            await Task.Delay(TimeSpan.FromSeconds(4), cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            return;
-        }
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(seconds), cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
 
-        if (cancellationToken.IsCancellationRequested) return;
-        bool allBound;
+            if (cancellationToken.IsCancellationRequested) return;
+            string[] unboundSources;
+            lock (_stateLock)
+            {
+                unboundSources = _sources.Where(s => !s.BoundHandle.HasValue).Select(s =>
+                    $"0x{s.Source.Address:X12}/{s.Source.Protocol}=" +
+                    (s.PendingHandle is ushort handle ? $"awaiting ATT response on ACL 0x{handle:X4}" : "no matching ATT request"))
+                    .ToArray();
+            }
+            if (cancellationToken.IsCancellationRequested) return;
+            if (unboundSources.Length == 0) continue;
+            AppLogger.Warn($"ETW GATT probe unbound at the {(seconds == 4 ? 4 : 12)}s check: event402Seen={_sawPacketEvent}; {string.Join(", ", unboundSources)}",
+                "ChromecastEtwReceiver");
+        }
+    }
+
+    private bool ShouldLogProbeStage(string stage)
+    {
         lock (_stateLock)
         {
-            allBound = _sources.All(s => s.BoundHandle.HasValue);
+            return !_loggedProbeStages.Contains(stage) && _sources.Any(source => !source.BoundHandle.HasValue) &&
+                _loggedProbeStages.Add(stage);
         }
-        if (allBound) return;
-        AppLogger.Warn(_sawPacketEvent
-            ? "BthPort Event 402 arrived, but the selected remote's GATT probe was not matched."
-            : "ETW started, but no BthPort Event 402 arrived for button capture.",
-            "ChromecastEtwReceiver");
     }
 
     private void ProcessTraceThread()
@@ -361,7 +387,12 @@ public sealed class ChromecastEtwReceiver : IDisposable
             var kind = GetEventProperty(pEventRecord, "BIP_Type");
             if (kind is { Length: 1 })
             {
-                if (!IsPacketEventKind(kind[0])) return;
+                if (!IsPacketEventKind(kind[0]))
+                {
+                    if (ShouldLogProbeStage("EventKind"))
+                        AppLogger.Info($"ETW probe saw unsupported Event 402 packet kind: version={header.EventDescriptor.Version}, kind=0x{kind[0]:X2}", "ChromecastEtwReceiver");
+                    return;
+                }
                 var packet = GetEventProperty(pEventRecord, "BIP_Data");
                 var length = GetEventProperty(pEventRecord, "BIP_DataLen");
                 if (packet != null && length is { Length: 4 } &&
@@ -373,13 +404,22 @@ public sealed class ChromecastEtwReceiver : IDisposable
             }
 
             // The raw fallback applies only to the version 0 layout.
-            if (header.EventDescriptor.Version != 0) return;
             var record = Marshal.PtrToStructure<EVENT_RECORD>(pEventRecord);
+            if (ShouldLogProbeStage("EventProperties"))
+                AppLogger.Info($"ETW probe could not decode Event 402 properties: version={header.EventDescriptor.Version}, typeSize={kind?.Length ?? 0}, eventLen={record.UserDataLength}", "ChromecastEtwReceiver");
+            if (header.EventDescriptor.Version != 0) return;
             if (record.UserDataLength <= 8 || record.UserData == IntPtr.Zero) return;
             byte[] data = new byte[record.UserDataLength];
             Marshal.Copy(record.UserData, data, 0, data.Length);
-            if (BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(4, 4)) == data.Length - 8)
+            uint packetLength = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(4, 4));
+            if (packetLength == data.Length - 8)
+            {
+                if (ShouldLogProbeStage("RawFallback"))
+                    AppLogger.Info($"ETW probe used Event 402 raw layout: kind=0x{data[3]:X2}, len={packetLength}", "ChromecastEtwReceiver");
                 ProcessPacket(data[3], data.AsSpan(8));
+            }
+            else if (ShouldLogProbeStage("InvalidRawLength"))
+                AppLogger.Info($"ETW probe rejected Event 402 raw layout: declaredLen={packetLength}, availableLen={data.Length - 8}", "ChromecastEtwReceiver");
         }
         catch (Exception ex)
         {
@@ -429,11 +469,29 @@ public sealed class ChromecastEtwReceiver : IDisposable
             return;
         }
 
-        if (kind is not (AclSent or AclReceived) ||
-            !TryGetAttPacket(packet, out ushort connection, out var att, out bool incomplete, out int expectedPayloadLength)) return;
+        if (kind is not (AclSent or AclReceived)) return;
+        var rejection = ReadAttPacket(packet, out ushort connection, out var att, out bool incomplete, out int expectedPayloadLength);
+        if (rejection != AttPacketRejection.None)
+        {
+            if (kind == AclSent)
+            {
+                if (ShouldLogProbeStage($"Sent.{rejection}"))
+                    AppLogger.Info($"ETW probe rejected outgoing ACL: reason={rejection}, capturedLen={packet.Length}, acl=0x{connection:X4}", "ChromecastEtwReceiver");
+                LogUnmatchedMarker(packet, rejection.ToString());
+            }
+            return;
+        }
         if (kind == AclSent)
         {
-            if (incomplete) return;
+            if (ShouldLogProbeStage("OutgoingAtt"))
+                AppLogger.Info($"ETW probe saw outgoing ATT: opcode=0x{att[0]:X2}, len={att.Length}, incomplete={incomplete}", "ChromecastEtwReceiver");
+            if (incomplete)
+            {
+                if (att[0] == 0x06 && ShouldLogProbeStage("IncompleteRequest"))
+                    AppLogger.Info($"ETW probe saw incomplete ATT Find By Type Value request: capturedLen={att.Length}, acl=0x{connection:X4}", "ChromecastEtwReceiver");
+                LogUnmatchedMarker(packet, "incomplete ATT request");
+                return;
+            }
             lock (_stateLock)
             {
                 foreach (var source in _sources)
@@ -447,6 +505,15 @@ public sealed class ChromecastEtwReceiver : IDisposable
             if (gattQueryLog != null)
             {
                 AppLogger.Info(gattQueryLog, "ChromecastEtwReceiver");
+            }
+            else
+            {
+                if (att[0] == 0x06 && ShouldLogProbeStage("UnmatchedRequest"))
+                {
+                    bool expectedPrefix = att is [0x06, 0x01, 0x00, 0xFF, 0xFF, 0x00, 0x28, ..];
+                    AppLogger.Info($"ETW probe saw unmatched ATT Find By Type Value request: len={att.Length}, expectedPrefix={expectedPrefix}, acl=0x{connection:X4}", "ChromecastEtwReceiver");
+                }
+                LogUnmatchedMarker(att, "unexpected ATT request layout");
             }
             return;
         }
@@ -464,7 +531,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
                     (att is [0x01, 0x06, _, _, _] || att is [0x07, ..]);
                 if (response)
                 {
-                    BindLocked(sources, source);
+                    BindLocked(sources, source, $"ATT response 0x{att[0]:X2}");
                     break;
                 }
                 if (!pending && source.BoundHandle != connection) continue;
@@ -517,7 +584,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
                         out button, out isDown, out truncated);
                 }
 
-                if (pending && parsed && isDown) BindLocked(sources, source);
+                if (pending && parsed && isDown) BindLocked(sources, source, "button notification");
                 if (source.BoundHandle != connection) continue;
                 if (parsed)
                 {
@@ -556,7 +623,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 break;
             }
 
-            void BindLocked(SourceState[] allSources, SourceState source)
+            void BindLocked(SourceState[] allSources, SourceState source, string evidence)
             {
                 bool rebindingSameHandle = source.BoundHandle == connection;
                 foreach (var other in allSources)
@@ -577,7 +644,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
                     ? $"0x{source.HidHandleStart:X4}..0x{source.HidHandleEnd:X4}"
                     : "none";
                 bindLog =
-                    $"ETW bound 0x{source.Source.Address:X12} to ACL 0x{connection:X4} (protocol={source.Source.Protocol}, hidRange={hidRange}, excluded={source.ExcludedAttributes.Count})";
+                    $"ETW bound 0x{source.Source.Address:X12} to ACL 0x{connection:X4} (via={evidence}, protocol={source.Source.Protocol}, hidRange={hidRange}, excluded={source.ExcludedAttributes.Count})";
             }
 
             void RecordButtonEdgesLocked(SourceState source, RemoteButton btn, bool isDown)
@@ -648,6 +715,25 @@ public sealed class ChromecastEtwReceiver : IDisposable
         }
     }
 
+    private void LogUnmatchedMarker(ReadOnlySpan<byte> packet, string reason)
+    {
+        if (packet.Length < 16) return;
+        string? message = null;
+        lock (_stateLock)
+        {
+            foreach (var source in _sources)
+            {
+                if (source.BoundHandle.HasValue || source.LoggedUnmatchedMarker) continue;
+                int offset = packet.IndexOf(source.Request.AsSpan(7));
+                if (offset < 0) continue;
+                source.LoggedUnmatchedMarker = true;
+                message = $"ETW probe marker seen in rejected packet: addr=0x{source.Source.Address:X12}, reason={reason}, markerOffset={offset}, capturedLen={packet.Length}";
+                break;
+            }
+        }
+        if (message != null) AppLogger.Info(message, "ChromecastEtwReceiver");
+    }
+
     private static G9N9NAttributeDecision EvaluateG9N9NAttribute(SourceState source, ushort attribute)
     {
         if (source.ExcludedAttributes.Contains(attribute))
@@ -700,29 +786,31 @@ public sealed class ChromecastEtwReceiver : IDisposable
     private static string FormatHex(ReadOnlySpan<byte> data) =>
         data.IsEmpty ? "-" : Convert.ToHexString(data);
 
-    private static bool TryGetAttPacket(ReadOnlySpan<byte> packet, out ushort connection, out ReadOnlySpan<byte> att, out bool incomplete, out int expectedPayloadLength)
+    private static AttPacketRejection ReadAttPacket(ReadOnlySpan<byte> packet, out ushort connection, out ReadOnlySpan<byte> att, out bool incomplete, out int expectedPayloadLength)
     {
         connection = 0;
         att = default;
         incomplete = false;
         expectedPayloadLength = 0;
-        if (packet.Length < 8) return false;
+        if (packet.Length < 8) return AttPacketRejection.ShortHeader;
 
         ushort header = BinaryPrimitives.ReadUInt16LittleEndian(packet);
         connection = (ushort)(header & 0x0FFF);
-        if (connection > 0x0EFF || (header & 0xD000) != 0) return false;
+        if (connection > 0x0EFF || (header & 0xD000) != 0) return AttPacketRejection.UnsupportedAclHeader;
 
         int aclLength = BinaryPrimitives.ReadUInt16LittleEndian(packet[2..]);
         int l2capLength = BinaryPrimitives.ReadUInt16LittleEndian(packet[4..]);
-        if (aclLength != l2capLength + 4 ||
-            BinaryPrimitives.ReadUInt16LittleEndian(packet[6..]) != 4) return false;
+        if (aclLength != l2capLength + 4) return AttPacketRejection.InconsistentLengths;
+        if (BinaryPrimitives.ReadUInt16LittleEndian(packet[6..]) != 4) return AttPacketRejection.NonAttChannel;
 
         int availableAtt = packet.Length - 8;
         incomplete = availableAtt < l2capLength;
         att = incomplete ? packet[8..] : packet.Slice(8, l2capLength);
         expectedPayloadLength = l2capLength >= 3 ? l2capLength - 3 : 0;
         // Observed redactions strip HID notification payloads of 1, 2, 3, or 8 bytes down to the 3-byte ATT header.
-        return incomplete ? l2capLength is 4 or 5 or 6 or 11 && att.Length == 3 : !att.IsEmpty;
+        if (incomplete && !(l2capLength is 4 or 5 or 6 or 11 && att.Length == 3))
+            return AttPacketRejection.UnsupportedTruncation;
+        return att.IsEmpty ? AttPacketRejection.EmptyAtt : AttPacketRejection.None;
     }
 
     public static bool TryParseAclPacket(ReadOnlySpan<byte> packet, out RemoteButton button, out bool isDown, EtwProtocolKind protocolKind = EtwProtocolKind.GoogleG9N9N) =>
@@ -732,7 +820,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
     {
         button = RemoteButton.None;
         isDown = truncated = false;
-        return TryGetAttPacket(packet, out _, out var att, out bool incomplete, out _) &&
+        return ReadAttPacket(packet, out _, out var att, out bool incomplete, out _) == AttPacketRejection.None &&
             TryParseButtonReport(att, incomplete, protocolKind, out button, out isDown, out truncated, verifiedAttributes);
     }
 

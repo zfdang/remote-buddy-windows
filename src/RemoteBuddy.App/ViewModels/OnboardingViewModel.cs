@@ -360,12 +360,14 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
 
     private bool _hasVoiceTranscriptionSessionOccurred = false;
     private bool _hasTranscriptionTextChangedThisRound = false;
+    private bool _loggedVerificationAudio;
     private string? _lastShortcutDispatchError;
 
     internal void RecordVoiceShortcutDispatch(bool succeeded, string? failureReason = null)
     {
         if (CurrentWizardStep != WizardStep.TranscriptionVerify) return;
 
+        AppLogger.Info($"Transcription verification shortcut: addr=0x{SelectedDevice?.BluetoothAddress ?? 0:X12}, dispatched={succeeded}", "OnboardingViewModel");
         if (succeeded)
         {
             _lastShortcutDispatchError = null;
@@ -394,7 +396,10 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     partial void OnTranscriptionTestTextChanged(string value)
     {
         if (CurrentWizardStep != WizardStep.TranscriptionVerify) return;
-        _hasTranscriptionTextChangedThisRound = !string.IsNullOrWhiteSpace(value);
+        bool hasText = !string.IsNullOrWhiteSpace(value);
+        if (_hasTranscriptionTextChangedThisRound != hasText)
+            AppLogger.Info($"Transcription verification field: hasText={hasText}", "OnboardingViewModel");
+        _hasTranscriptionTextChangedThisRound = hasText;
     }
 
     public event Action? RequestClose;
@@ -505,6 +510,11 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
                 {
                     HasAudioTested = true;
                 }
+                if (CurrentWizardStep == WizardStep.TranscriptionVerify && level > 0.05f && !_loggedVerificationAudio)
+                {
+                    _loggedVerificationAudio = true;
+                    AppLogger.Info($"Transcription verification received audio signal: addr=0x{addr:X12}", "OnboardingViewModel");
+                }
             }
 
             if (App.Current?.Dispatcher != null && !App.Current.Dispatcher.CheckAccess())
@@ -523,10 +533,12 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             void Update()
             {
                 LiveAudioLevel = 0f;
+                _loggedVerificationAudio = false;
                 if (CurrentWizardStep == WizardStep.TranscriptionVerify &&
                     string.IsNullOrEmpty(_lastShortcutDispatchError))
                 {
                     _hasVoiceTranscriptionSessionOccurred = true;
+                    AppLogger.Info($"Transcription verification voice session ended: addr=0x{addr:X12}", "OnboardingViewModel");
                 }
             }
 
@@ -739,9 +751,11 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
         }
         if (CurrentWizardStep == WizardStep.TranscriptionVerify)
         {
+            AppLogger.Info($"Transcription verification entered: mode={Mode}, addr=0x{SelectedDevice?.BluetoothAddress ?? 0:X12}, tool={SelectedTool}, trigger={TriggerMode}", "OnboardingViewModel");
             TranscriptionTestText = string.Empty;
             _hasVoiceTranscriptionSessionOccurred = false;
             _hasTranscriptionTextChangedThisRound = false;
+            _loggedVerificationAudio = false;
             _lastShortcutDispatchError = null;
             IsTranscriptionVerified = false;
         }
@@ -855,6 +869,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
                 break;
 
             case WizardStep.TranscriptionVerify:
+                AppLogger.Info($"Transcription verification submitted: shortcutError={_lastShortcutDispatchError != null}, sessionEnded={_hasVoiceTranscriptionSessionOccurred}, hasText={_hasTranscriptionTextChangedThisRound}, confirmed={IsTranscriptionVerified}", "OnboardingViewModel");
                 if (!string.IsNullOrEmpty(_lastShortcutDispatchError))
                 {
                     ValidationError = _lastShortcutDispatchError;

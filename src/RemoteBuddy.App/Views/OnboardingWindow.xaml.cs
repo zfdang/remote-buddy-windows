@@ -7,6 +7,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
 using RemoteBuddy.App.ViewModels;
+using RemoteBuddy.Core.Diagnostics;
 using RemoteBuddy.Core.Models;
 
 namespace RemoteBuddy.App.Views;
@@ -214,6 +215,9 @@ public partial class OnboardingWindow : Window
             UpdatePanels(vm.CurrentWizardStep);
         }
     }
+
+    private void OnTranscriptionFocusChanged(object sender, DependencyPropertyChangedEventArgs e) =>
+        AppLogger.Info($"Transcription verification field focus: focused={e.NewValue}", "OnboardingWindow");
 
     private void UpdatePanels(WizardStep step)
     {
