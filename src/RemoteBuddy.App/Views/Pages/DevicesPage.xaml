@@ -17,12 +17,12 @@
             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                 <Button x:Name="HeaderDeviceGuideLinkButton"
                         Style="{StaticResource HeaderLinkButtonStyle}"
-                        Content="设备对比与选购指南 ↗"
+                        Content="硬件支持与选购推荐 (FAQ) ↗"
                         VerticalAlignment="Center"
                         Margin="0,0,12,0"
                         Command="{Binding OpenDeviceGuideCommand}"
-                        ToolTip="https://remote.zfdang.com/device.html"
-                        AutomationProperties.Name="设备对比与选购指南"/>
+                        ToolTip="https://remote.zfdang.com/faq.html#hardware"
+                        AutomationProperties.Name="硬件支持与选购推荐 (FAQ)"/>
                 <Button Content="➕ 添加新设备" Padding="14,8" Background="#007ACC" VerticalAlignment="Center"
                         Command="{Binding AddDeviceCommand}"/>
             </StackPanel>

@@ -775,7 +775,7 @@ public class ConvertersAndViewModelTests
             Assert.Equal(
                 [
                     "https://remote.zfdang.com/faq.html#input-methods",
-                    "https://remote.zfdang.com/device.html",
+                    "https://remote.zfdang.com/faq.html#hardware",
                     "https://remote.zfdang.com/faq.html#integrations"
                 ],
                 opened);
