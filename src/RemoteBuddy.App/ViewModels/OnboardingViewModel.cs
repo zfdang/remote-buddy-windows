@@ -43,9 +43,9 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
 
     public const string DoubaoVoiceSetup = "在豆包输入法设置的「语音输入」页将「全局唤起语音」设为「持续模式」，让「长按模式」的快捷键与 Remote Buddy 一致，并将麦克风选为 CABLE Output (VB-Audio Virtual Cable)。以管理员身份运行 Remote Buddy，并选择「按住说话」。首次使用时会准备已签名的 USB/IP 虚拟键盘驱动。";
 
-    public const string ChatterflyVoiceSetup = "安装并启动腾讯 Chatterfly，在「设置 → 语音设置」中将语音输入快捷键设为与 Remote Buddy 一致并开启「快捷键全局可用」，在「音频设置 → 麦克风」中选择 CABLE Output (VB-Audio Virtual Cable)。在 Remote Buddy 中选择「按住说话」。";
+    public const string ChatterflyVoiceSetup = "安装并启动腾讯 Chatterfly，在「设置 → 语音设置」中将语音输入快捷键设为与 Remote Buddy 一致并开启「快捷键全局可用」，在「音频设置 → 麦克风」中选择 CABLE Output (VB-Audio Virtual Cable)。以管理员身份运行 Remote Buddy，并选择「按住说话」。首次使用时会通过已签名的 USB/IP 虚拟键盘发送快捷键。";
 
-    public const string CustomVoiceSetup = "不限定具体语音输入工具：先在上方设定触发方式（按住说话 / 单击切换）与全局快捷键，并确保目标工具的麦克风已设为 CABLE Output (VB-Audio Virtual Cable)，下一步将实测该快捷键能否唤起工具并将语音转写文字写入检测框。";
+    public const string CustomVoiceSetup = "不限定具体语音输入工具：先在上方设定触发方式（按住说话 / 单击切换）与全局快捷键，确认目标工具的麦克风已设为 CABLE Output (VB-Audio Virtual Cable)，并以管理员身份运行 Remote Buddy；下一步将通过 USB/IP 虚拟键盘实测唤起工具并将语音转写文字写入检测框。";
 
     public static IReadOnlyList<VoiceShortcutOption> VoiceShortcutOptions { get; } =
     [

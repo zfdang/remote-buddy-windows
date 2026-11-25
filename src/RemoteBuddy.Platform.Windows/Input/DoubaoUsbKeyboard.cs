@@ -6,8 +6,15 @@ using RemoteBuddy.Core.Diagnostics;
 
 namespace RemoteBuddy.Platform.Windows.Input;
 
+public interface IUsbKeyboardSender : IDisposable
+{
+    bool SendDown(string shortcut);
+    bool Release();
+    bool SendClick(string shortcut);
+}
+
 /// <summary>Submits whole keyboard states through the signed USB/IP controller.</summary>
-public sealed class DoubaoUsbKeyboard : IDisposable
+public sealed class DoubaoUsbKeyboard : IUsbKeyboardSender, IDisposable
 {
     private readonly object _sync = new();
     private HMContext? _context;
