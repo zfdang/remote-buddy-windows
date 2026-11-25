@@ -274,7 +274,7 @@ public sealed class RawInputReceiver : IDisposable
         }
     }
 
-    internal static RemoteModelType InferModelTypeFromDevice(IntPtr hDevice, string devicePath)
+    public static RemoteModelType InferModelTypeFromDevice(IntPtr hDevice, string devicePath)
     {
         if (GetHidDeviceInfo(hDevice, out uint vid, out _))
         {
