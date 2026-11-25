@@ -133,9 +133,33 @@ public partial class MainViewModel : ObservableObject, IDisposable
         get => _activeOnboardingVm;
         set
         {
+            if (ReferenceEquals(_activeOnboardingVm, value)) return;
+            if (_activeOnboardingVm != null)
+            {
+                _activeOnboardingVm.PropertyChanged -= OnOnboardingPropertyChanged;
+            }
             _activeOnboardingVm = value;
+            if (_activeOnboardingVm != null)
+            {
+                _activeOnboardingVm.PropertyChanged += OnOnboardingPropertyChanged;
+            }
             ResetGestures();
             RefreshInputSources();
+            UpdateVoiceKeyGuard();
+        }
+    }
+
+    private InputToolConfig GetEffectiveInputToolConfig() =>
+        ActiveOnboardingVm?.ActiveVerificationInputTool ?? _configService.Current.InputTool;
+
+    private void OnOnboardingPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
+    {
+        if (args.PropertyName is nameof(OnboardingViewModel.CurrentStep)
+            or nameof(OnboardingViewModel.ShortcutText)
+            or nameof(OnboardingViewModel.SelectedTool)
+            or nameof(OnboardingViewModel.TriggerMode))
+        {
+            UpdateVoiceKeyGuard();
         }
     }
 
@@ -728,7 +752,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // the IME chord is injected.
             _voiceKeyGuardOwnerAddress = owner;
             _voiceKeyGuard.Arm();
-            var currentConfig = _configService.Current.InputTool;
+            var currentConfig = GetEffectiveInputToolConfig();
             var session = new ActiveVoiceSession(owner, token, currentConfig.TriggerMode, currentConfig.Shortcut, currentConfig.Tool);
             _activeVoiceSession = session;
             AppLogger.Info($"Voice session started: Device=0x{owner:X12}, Tool={session.Tool}, Mode={session.TriggerMode}, Shortcut='{session.Shortcut}'", "MainViewModel");
@@ -874,7 +898,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public void UpdateVoiceKeyGuard()
     {
-        string shortcut = _configService.Current.InputTool.Shortcut ?? string.Empty;
+        string shortcut = GetEffectiveInputToolConfig().Shortcut ?? string.Empty;
         bool usesF5 = NativeInputSender.TryParseShortcut(shortcut, out _, out var key) && key == 0x74;
         _voiceKeyGuard.IsSuppressionEnabled = !usesF5;
         AppLogger.Debug($"VoiceKeyGuard updated: SuppressionEnabled={_voiceKeyGuard.IsSuppressionEnabled} (Shortcut='{shortcut}')", "MainViewModel");
@@ -982,7 +1006,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             ulong owner = _bluetoothManager.VoiceDeviceAddress;
             if (owner != 0 && owner != address) return;
-            if (_configService.Current.InputTool.TriggerMode == VoiceTriggerMode.HoldToTalk)
+            if (GetEffectiveInputToolConfig().TriggerMode == VoiceTriggerMode.HoldToTalk)
             {
                 if (isDown) _ = _bluetoothManager.StartVoiceSessionAsync(address);
                 else _ = _bluetoothManager.StopVoiceSessionAsync(address);
@@ -1337,6 +1361,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SettingsVm.PreferencesChanged -= OnSettingsPreferencesChanged;
         AboutVm.ResetUpdateCheck();
         AboutVm.PreferencesChanged -= OnAboutPreferencesChanged;
+        if (_activeOnboardingVm != null)
+        {
+            _activeOnboardingVm.PropertyChanged -= OnOnboardingPropertyChanged;
+            _activeOnboardingVm = null;
+        }
         GeneralVm.Dispose();
         MappingVm.PropertyChanged -= OnMappingSettingsChanged;
         DevicesVm.DevicesChanged -= OnDevicesChanged;

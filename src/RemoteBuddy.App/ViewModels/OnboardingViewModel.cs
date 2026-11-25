@@ -359,6 +359,23 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     private string _validationError = string.Empty;
 
     private bool _hasVoiceTranscriptionSessionOccurred = false;
+    private bool _hasTranscriptionTextChangedThisRound = false;
+
+    internal InputToolConfig? ActiveVerificationInputTool =>
+        CurrentWizardStep == WizardStep.TranscriptionVerify
+            ? new InputToolConfig
+            {
+                Tool = SelectedTool,
+                TriggerMode = TriggerMode,
+                Shortcut = ShortcutText
+            }
+            : null;
+
+    partial void OnTranscriptionTestTextChanged(string value)
+    {
+        if (CurrentWizardStep != WizardStep.TranscriptionVerify) return;
+        _hasTranscriptionTextChangedThisRound = !string.IsNullOrWhiteSpace(value);
+    }
 
     public event Action? RequestClose;
 
@@ -701,7 +718,9 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
         }
         if (CurrentWizardStep == WizardStep.TranscriptionVerify)
         {
+            TranscriptionTestText = string.Empty;
             _hasVoiceTranscriptionSessionOccurred = false;
+            _hasTranscriptionTextChangedThisRound = false;
             IsTranscriptionVerified = false;
         }
         UpdateStepMetadata();
@@ -731,7 +750,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
         }
     }
 
-    public bool SaveToolConfig()
+    public bool ValidateToolConfig()
     {
         if (!NativeInputSender.TryParseShortcut(ShortcutText, out _, out _))
         {
@@ -739,6 +758,12 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             return false;
         }
         ValidationError = string.Empty;
+        return true;
+    }
+
+    public bool SaveToolConfig()
+    {
+        if (!ValidateToolConfig()) return false;
         _config.Update(cfg =>
         {
             cfg.InputTool.Tool = SelectedTool;
@@ -804,7 +829,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
                 break;
 
             case WizardStep.ImeConfig:
-                if (!SaveToolConfig()) return;
+                if (!ValidateToolConfig()) return;
                 break;
 
             case WizardStep.TranscriptionVerify:
@@ -813,7 +838,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
                     ValidationError = "请使用遥控器语音键在下方输入框中完成一次实际语音转写。";
                     return;
                 }
-                if (string.IsNullOrWhiteSpace(TranscriptionTestText))
+                if (string.IsNullOrWhiteSpace(TranscriptionTestText) || !_hasTranscriptionTextChangedThisRound)
                 {
                     ValidationError = "转写文本框内容不能为空，请先通过遥控器转写文字。";
                     return;

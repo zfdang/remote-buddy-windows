@@ -234,7 +234,7 @@
                             <TextBlock Text="✓ 正在生效" Foreground="#00CC66" FontSize="12" VerticalAlignment="Center" Margin="10,0,0,0"
                                        Visibility="{Binding SelectedTool, Converter={StaticResource EqualValueToVisibilityConverter}, ConverterParameter=Custom}"/>
                         </StackPanel>
-                        <TextBlock Text="{x:Static vm:OnboardingViewModel.CustomVoiceSetup}"
+                        <TextBlock Text="适用于任意支持全局快捷键的第三方语音输入工具。点击上方「通过向导修改语音键与输入工具」即可自定义快捷键、触发方式并实测转写效果，并将该工具的麦克风设为 CABLE Output (VB-Audio Virtual Cable)。"
                                    FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,14"/>
                     </DockPanel>
                 </Border>

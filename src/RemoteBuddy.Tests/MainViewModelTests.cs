@@ -1312,4 +1312,55 @@ public class MainViewModelTests
     {
         Assert.Equal(expectedPath, RemoteBuddy.Platform.Windows.Services.StartupService.ExtractExecutablePath(regValue));
     }
+
+    [Fact]
+    public void MainViewModel_UsesOnboardingVerificationTriggerMode_WithoutOverwritingSavedConfig()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-onb-temp-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            config.Update(cfg =>
+            {
+                cfg.InputTool.Tool = TargetInputTool.WeChatInput;
+                cfg.InputTool.TriggerMode = VoiceTriggerMode.HoldToTalk;
+                cfg.InputTool.Shortcut = "Ctrl+F5";
+                cfg.Devices.Add(new RemoteDevice { Id = "dev1", BluetoothAddress = 0x112233445566, Name = "Xiaomi Remote" });
+                cfg.SelectedDeviceId = "dev1";
+            });
+
+            var bt = new TestBluetoothManager
+            {
+                IsConnected = true,
+                IsReady = true,
+                ConnectedDeviceAddress = 0x112233445566
+            };
+
+            using var vm = new MainViewModel(config, bt);
+            var dev = config.Current.Devices[0];
+            using var onboarding = new OnboardingViewModel(config, bt, WizardMode.Integration)
+            {
+                SelectedDevice = dev
+            };
+            onboarding.ApplyPreset("WindowsDictation"); // ClickToToggle + Win+H
+            onboarding.NextStep();
+            Assert.Equal(WizardStep.TranscriptionVerify, onboarding.CurrentWizardStep);
+
+            vm.ActiveOnboardingVm = onboarding;
+
+            // Raw voice release must NOT stop voice session when staged verification mode is ClickToToggle
+            vm.HandleRawButtonEvent(IntPtr.Zero, RemoteButton.Voice, true);
+            vm.HandleRawButtonEvent(IntPtr.Zero, RemoteButton.Voice, false);
+            Assert.Equal(1, bt.StartVoiceSessionCount);
+            Assert.Equal(0, bt.StopVoiceSessionCount);
+
+            // Saved config remains untouched before completion
+            Assert.Equal(TargetInputTool.WeChatInput, config.Current.InputTool.Tool);
+            Assert.Equal(VoiceTriggerMode.HoldToTalk, config.Current.InputTool.TriggerMode);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
 }

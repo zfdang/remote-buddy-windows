@@ -87,36 +87,45 @@ public class ConvertersAndViewModelTests
     }
 
     [Fact]
-    public void IntegrationWizard_UpdatesTriggerModeAndShortcut_WhenContinuingToVerification()
+    public void IntegrationWizard_StagesVerificationConfigWithoutPersisting_UntilCompleted()
     {
         string path = Path.Combine(Path.GetTempPath(), $"vib-int-{Guid.NewGuid():N}.json");
-        var config = new ConfigService(path);
-        using var wizard = new OnboardingViewModel(config, new DummyBluetoothManager(), WizardMode.Integration);
-        var overview = new IntegrationsViewModel(config);
+        try
+        {
+            var config = new ConfigService(path);
+            config.Update(cfg =>
+            {
+                cfg.InputTool.Tool = TargetInputTool.WeChatInput;
+                cfg.InputTool.TriggerMode = VoiceTriggerMode.HoldToTalk;
+                cfg.InputTool.Shortcut = "Ctrl+F5";
+            });
 
-        wizard.ApplyPreset("WindowsDictation");
-        Assert.Equal("Win+H", wizard.ShortcutText);
-        Assert.True(wizard.IsClickToToggle);
-        Assert.NotEqual(TargetInputTool.WindowsDictation, config.Current.InputTool.Tool);
+            var bt = new DummyBluetoothManager();
+            using var wizard = new OnboardingViewModel(config, bt, WizardMode.Integration);
+            var overview = new IntegrationsViewModel(config);
 
-        wizard.IsHoldToTalk = true;
-        wizard.ShortcutText = "Ctrl+F5";
-        wizard.NextStep();
+            wizard.ApplyPreset("Chatterfly");
+            wizard.NextStep();
 
-        Assert.Equal(WizardStep.TranscriptionVerify, wizard.CurrentWizardStep);
-        Assert.Equal("按住说话", overview.CurrentTriggerModeDisplay);
-        Assert.Equal("Ctrl+F5", overview.CurrentShortcutDisplay);
+            // Entering verification validates and stages temporary config without overwriting saved config
+            Assert.Equal(WizardStep.TranscriptionVerify, wizard.CurrentWizardStep);
+            Assert.Equal(TargetInputTool.Chatterfly, wizard.ActiveVerificationInputTool?.Tool);
+            Assert.Equal("Ctrl+Shift+V", wizard.ActiveVerificationInputTool?.Shortcut);
+            Assert.Equal(TargetInputTool.WeChatInput, config.Current.InputTool.Tool);
+            Assert.Equal("微信输入法", overview.CurrentToolDisplayName);
+            Assert.Equal("Ctrl+F5", overview.CurrentShortcutDisplay);
 
-        wizard.PreviousStep();
-        wizard.IsClickToToggle = true;
-        wizard.NextStep();
-        overview.Reload();
-
-        var saved = new ConfigService(path).Current.InputTool;
-        Assert.Equal(TargetInputTool.WindowsDictation, saved.Tool);
-        Assert.Equal(VoiceTriggerMode.ClickToToggle, saved.TriggerMode);
-        Assert.Equal("Ctrl+F5", saved.Shortcut);
-        Assert.Equal("单击切换", overview.CurrentTriggerModeDisplay);
+            // Simulate user failing/canceling verification before completion -> saved config stays intact
+            wizard.Dispose();
+            var reloadedAfterCancel = new ConfigService(path).Current.InputTool;
+            Assert.Equal(TargetInputTool.WeChatInput, reloadedAfterCancel.Tool);
+            Assert.Equal(VoiceTriggerMode.HoldToTalk, reloadedAfterCancel.TriggerMode);
+            Assert.Equal("Ctrl+F5", reloadedAfterCancel.Shortcut);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
     }
 
     [Fact]
@@ -810,6 +819,22 @@ public class ConvertersAndViewModelTests
             bt.RaiseVoiceSessionEnded();
             vm.NextStep();
             Assert.Equal(WizardStep.Complete, vm.CurrentWizardStep);
+
+            // Re-entering TranscriptionVerify clears stale text and requires fresh text in the new round
+            vm.PreviousStep();
+            Assert.Equal(WizardStep.TranscriptionVerify, vm.CurrentWizardStep);
+            Assert.Equal(string.Empty, vm.TranscriptionTestText);
+            Assert.False(vm.IsTranscriptionVerified);
+            bt.RaiseVoiceSessionEnded();
+            vm.IsTranscriptionVerified = true;
+            vm.NextStep();
+            Assert.Equal(WizardStep.TranscriptionVerify, vm.CurrentWizardStep);
+            Assert.Contains("转写文本框内容不能为空", vm.ValidationError);
+
+            vm.TranscriptionTestText = "第二次新转写";
+            vm.NextStep();
+            Assert.Equal(WizardStep.Complete, vm.CurrentWizardStep);
+
             vm.Complete();
             Assert.True(vm.IsCompleted);
 
