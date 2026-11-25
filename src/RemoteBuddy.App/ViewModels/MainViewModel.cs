@@ -171,7 +171,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         EnvironmentVm = new EnvironmentViewModel();
         EnvironmentVm.RetryEtwCaptureAction = RetryEtwCapture;
         AppIntegrationVm = new AppIntegrationViewModel(_configService);
-        AboutVm = new AboutViewModel(_configService);
+        AboutVm = new AboutViewModel(
+            _configService,
+            Services.WindowsRelease.FetchAsync,
+            BuildDiagnosticSnapshot);
         SettingsVm = new SettingsViewModel(_configService, mode => RequestOpenWizard?.Invoke(mode));
         GeneralVm.PreferencesChanged += OnGeneralPreferencesChanged;
         SettingsVm.PreferencesChanged += OnSettingsPreferencesChanged;
@@ -1182,6 +1185,62 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         AppLogger.Info("System resume notification received; refreshing Bluetooth remote connections", "MainViewModel");
         _bluetoothManager.NotifySystemResume();
+    }
+
+    internal WindowsDiagnosticSnapshot BuildDiagnosticSnapshot()
+    {
+        var connectedAddresses = _bluetoothManager.ConnectedDeviceAddresses;
+        var known = KnownRemotes().DistinctBy(d => d.BluetoothAddress).ToDictionary(d => d.BluetoothAddress);
+        var modelDescriptions = new List<string>();
+
+        foreach (ulong addr in connectedAddresses)
+        {
+            var modelType = known.TryGetValue(addr, out var dev) ? dev.ModelType.ToString() : "Unknown";
+            var hwInfo = _bluetoothManager.GetDeviceInformation(addr);
+            string hwDetail = !string.IsNullOrWhiteSpace(hwInfo?.ModelNumber)
+                ? $"/{hwInfo.ModelNumber}"
+                : string.Empty;
+            string fwDetail = !string.IsNullOrWhiteSpace(hwInfo?.FirmwareRevision)
+                ? $" fw={hwInfo.FirmwareRevision}"
+                : string.Empty;
+            modelDescriptions.Add($"{modelType}{hwDetail}{fwDetail}");
+        }
+
+        if (modelDescriptions.Count == 0 &&
+            _configService.Current.Devices.FirstOrDefault(d => d.Id == _configService.Current.SelectedDeviceId) is { } selected)
+        {
+            modelDescriptions.Add($"{selected.ModelType} (selected)");
+        }
+
+        string remoteModelSummary = modelDescriptions.Count > 0 ? string.Join(", ", modelDescriptions) : "none";
+        string logPath = AppLogger.CurrentLogFilePath;
+        bool logExists = System.IO.File.Exists(logPath);
+        long? logSize = null;
+        if (logExists)
+        {
+            try { logSize = new System.IO.FileInfo(logPath).Length; } catch { }
+        }
+
+        var input = _configService.Current.InputTool;
+        return new WindowsDiagnosticSnapshot(
+            AppVersion: AboutVm.AppVersion,
+            OsVersion: Environment.OSVersion.VersionString,
+            Architecture: AboutVm.Architecture,
+            IsAdministrator: BluetoothAdapterHelper.IsAdministrator(),
+            RemoteConnected: _bluetoothManager.IsConnected,
+            ConnectedRemoteCount: connectedAddresses.Count,
+            RemoteModel: remoteModelSummary,
+            VirtualMicrophoneStatus: EnvironmentVm.DriverStatus.ToString(),
+            CableOutputStatus: EnvironmentVm.CableOutputStatus.ToString(),
+            EtwCaptureStatus: EtwCaptureStatus.ToString(),
+            VoiceTool: input.Tool.ToString(),
+            VoiceTriggerMode: input.TriggerMode.ToString(),
+            VoiceShortcutName: string.IsNullOrWhiteSpace(input.Shortcut) ? "unknown" : input.Shortcut,
+            PreferredAudioInput: string.IsNullOrWhiteSpace(input.PreferredAudioInputDevice) ? "default" : input.PreferredAudioInputDevice,
+            RuntimeLogEnabled: AboutVm.DiagnosticLoggingEnabled,
+            RuntimeLogAvailable: logExists,
+            RuntimeLogPath: logPath,
+            RuntimeLogSizeBytes: logSize);
     }
 
     public void HandleDeviceRemoval(IntPtr hDevice)

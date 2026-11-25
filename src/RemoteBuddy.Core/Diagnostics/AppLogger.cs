@@ -22,6 +22,8 @@ public enum LogLevel
 public static class AppLogger
 {
     private static readonly object _lock = new();
+    public const int DiagnosticLogLineLimit = 300;
+    private static readonly Queue<string> _recentLines = new(DiagnosticLogLineLimit);
     private static string _logDirectory = string.Empty;
     private static string _logFilePath = string.Empty;
     private static long _maxFileSizeBytes = 5 * 1024 * 1024; // 5 MB
@@ -144,6 +146,7 @@ public static class AppLogger
             _maxArchiveCount = 3;
             _lastRotationFailureTime = DateTime.MinValue;
             _isEnabled = true;
+            _recentLines.Clear();
         }
     }
 
@@ -209,6 +212,7 @@ public static class AppLogger
         lock (_lock)
         {
             if (!_isEnabled) return;
+            RecordRecentLinesLocked(logLine);
             try
             {
                 EnsureLogFileReadyLocked();
@@ -292,6 +296,58 @@ public static class AppLogger
     public static void Flush()
     {
         // File.AppendAllText immediately flushes to disk under lock
+    }
+
+    private static void RecordRecentLinesLocked(string entry)
+    {
+        foreach (string rawLine in entry.Split(["\r\n", "\n"], StringSplitOptions.None))
+        {
+            if (_recentLines.Count >= DiagnosticLogLineLimit)
+            {
+                _recentLines.Dequeue();
+            }
+            _recentLines.Enqueue(rawLine);
+        }
+    }
+
+    public static IReadOnlyList<string> GetRecentLogLines(int maxLines = DiagnosticLogLineLimit)
+    {
+        if (maxLines <= 0) return [];
+        EnsureInitialized();
+
+        lock (_lock)
+        {
+            if (_recentLines.Count > 0)
+            {
+                return _recentLines.TakeLast(maxLines).ToArray();
+            }
+
+            if (!_isEnabled || string.IsNullOrEmpty(_logFilePath) || !File.Exists(_logFilePath))
+            {
+                return [];
+            }
+
+            try
+            {
+                using var stream = new FileStream(_logFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var reader = new StreamReader(stream, Encoding.UTF8);
+                var tail = new Queue<string>(maxLines);
+                string? line;
+                while ((line = reader.ReadLine()) != null)
+                {
+                    if (tail.Count >= maxLines)
+                    {
+                        tail.Dequeue();
+                    }
+                    tail.Enqueue(line);
+                }
+                return tail.ToArray();
+            }
+            catch
+            {
+                return [];
+            }
+        }
     }
 
     public static bool OpenLogFolder()
