@@ -31,7 +31,7 @@
 
 在 macOS 上，`BTLEServer`（或系统 HID 驱动）会对所有报告严格校验“实际字节数是否等于描述符声明长度”，长度不符会在送达应用层的 `IOHID` 之前被静默丢弃。
 
-而在 Windows 上，Remote Buddy 通过 **BthPort ETW（Event 402）** 直接拦截进入系统 `hidbthle.sys` 解析器之前的 **原始 HCI ACL / L2CAP / ATT（`0x1B` Notification / `0x1D` Indication）帧**。因此只要 Windows 配对后固件发出了 ATT 通知，无论其是否符合描述符长度，Remote Buddy 都能在驱动层拿到完整载荷并还原按下与松开边沿（支持单击、双击、长按）。
+在 Windows 上，Remote Buddy 通过 **BthPort ETW（Event 402）** 读取蓝牙栈提供的 **HCI ACL / L2CAP / ATT（`0x1B` Notification / `0x1D` Indication）帧**。只要 Windows 提供载荷且应用能确认连接归属，就可以尝试解码实际报文，即使字节数与 HID 描述符不同。Windows 可能省略载荷，连接探测也可能匹配失败。
 
 > 注意：ATVV 语音按键与 16 kHz IMA-ADPCM 音频流走独立的 BLE GATT 服务（`AB5E0001`），与上述 HID 报告格式无关，在所有已知批次上均采用相同协议交互。
 
@@ -98,7 +98,7 @@
 
 ## 五、新变种诊断日志与问题排查 / 反馈方式
 
-如果用户持有的新批次 G9N9N（或兼容遥控器）仍出现“语音能用但部分/全部普通按键无反应”的情况，可直接通过诊断日志定位其真实底层报文格式。
+遇到“语音能用但普通按键无反应”时，先看日志能否把 ETW 通知关联到遥控器，再根据实际收到的按键报文判断编码。相同的型号、固件和 HID 版本也可能使用不同的按键编码。
 
 ### 1. 日志文件位置
 
@@ -116,7 +116,7 @@
 
 1. **硬件与 PnP 版本信息 (`BluetoothManager`)**
    ```text
-   G9N9N hardware details for 0x...: model='A0', firmware='26.7', hardwareRev='...', pnp='18D1 / 9450', hidVersion='0x0110'
+   Bluetooth remote hardware: addr=0x..., model='A0', firmware='26.7', hardwareRev='...', pnp='18D1 / 9450', pnpVersion='0x0110', voiceProtocol='ATVV 1.0'
    ```
    用于确认遥控器的 DIS 型号、固件版本、硬件修订以及 `PnP ID` 中的 `HID ProductVersion`（例如 `0x0110` 或 `0x011B`）。
 
@@ -126,11 +126,12 @@
    ```
    记录本机看到的完整 GATT 服务句柄划分、`0x1812` HID 区间以及排除清单。
 
-3. **首次识别到的报告格式 (`ChromecastEtwReceiver`)**
+3. **报告格式与逐键报文 (`ChromecastEtwReceiver`)**
    ```text
    G9N9N ETW report format observed: addr=0x..., attr=0x0046, format=ConsumerUsage2Byte, len=2, sample=4200, button=Up, down=True
+   ETW button 0x...: Up Down protocol=GoogleG9N9N acl=0x0801 attr=0x0046 opcode=0x1B len=2 format=ConsumerUsage2Byte report=4200
    ```
-   确认该设备实际使用的特性句柄、解码格式及原始样本十六进制。
+   每个已识别的按下或松开事件都带实际报文。若 Windows 省略了载荷，日志记为 `report=redacted`。若 ETW 还未绑定，`ETW unassigned notification` 只记录候选通知的句柄和长度，设备归属仍待确认。
 
 4. **未识别或区间外的按键通知 (`ChromecastEtwReceiver`)**
    ```text
@@ -145,14 +146,16 @@
 
 请按以下步骤提供日志信息以便快速适配：
 
-1. 先配对并连接问题 G9N9N 遥控器，等待 **5 秒**（让 `G9N9N GATT layout` 与 `G9N9N hardware details` 写入日志）。
+1. 先配对并连接问题 G9N9N 遥控器，等待 **5 秒**（让 `G9N9N GATT layout` 与 `Bluetooth remote hardware` 写入日志）。
 2. 打开向导按键测试页（或主界面），对着无反应的按键依次各短按一下（建议按：**上、下、左、右、OK、返回、主页、静音、音量＋、音量－、YouTube、Netflix、电源、输入源**）。
 3. 打开 `%APPDATA%\RemoteBuddy\logs\app.log`（如为隐私考虑可掩码蓝牙 MAC 地址后 6 位），提取包含以下前缀的日志行并在 GitHub Issue 提交：
-   - `G9N9N hardware details`
+   - `Bluetooth remote hardware`
    - `G9N9N GATT layout`
    - `ETW bound`
+   - `ETW GATT probe`、`ETW unassigned notification`
+   - `ETW button`、`HidDeviceReader event`、`Mapped keyboard shortcut`、`Mapped media command`
    - `G9N9N ETW report format observed`
    - `G9N9N ETW unrecognized notification`
    - `Windows omitted a verified button code`
 
-拿到这些行中的 `attr=0x....`、`len=` 和 `hex=` 对照按键顺序后，即可直接为该新变种补充解码支持。
+拿到归属明确的报文后，可用 `attr=`、`len=`、`report=` 或 `hex=` 对照实际按键顺序，判断是否命中已有解码格式。若只有未绑定或截断的记录，需要先排查 Windows 的采集和绑定阶段。
