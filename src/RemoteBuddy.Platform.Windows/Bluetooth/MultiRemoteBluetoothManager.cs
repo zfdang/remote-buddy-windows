@@ -26,6 +26,8 @@ public sealed class MultiRemoteBluetoothManager : IBluetoothManager
     private readonly object _remotesLock = new();
     private readonly VoiceSessionArbiter _voice = new();
     private readonly Action<RemoteDevice> _scannerDiscoveredHandler;
+    private readonly WinRtBluetoothConnectionWatcher _connectionWatcher = new();
+    private readonly BluetoothAutoReconnectCoordinator _autoReconnect;
     private ulong _lastAddress;
     private int _disposed;
 
@@ -33,6 +35,31 @@ public sealed class MultiRemoteBluetoothManager : IBluetoothManager
     {
         _scannerDiscoveredHandler = device => DeviceDiscovered?.Invoke(device);
         _scanner.DeviceDiscovered += _scannerDiscoveredHandler;
+        _autoReconnect = new BluetoothAutoReconnectCoordinator(
+            isDeviceReady: IsDeviceReady,
+            isDeviceOsConnectedAsync: WinRtBluetoothConnectionWatcher.IsDeviceOsConnectedAsync,
+            connectImplAsync: ConnectDirectAsync);
+        _connectionWatcher.DeviceOsConnected += OnWatcherDeviceOsConnected;
+        _connectionWatcher.DeviceOsDisconnected += OnWatcherDeviceOsDisconnected;
+        _connectionWatcher.BluetoothRadioRestored += OnBluetoothRadioRestored;
+    }
+
+    private void OnWatcherDeviceOsConnected(ulong address, string reason)
+    {
+        if (Volatile.Read(ref _disposed) != 0) return;
+        _autoReconnect.OnOsDeviceConnected(address, reason);
+    }
+
+    private void OnWatcherDeviceOsDisconnected(ulong address)
+    {
+        if (Volatile.Read(ref _disposed) != 0) return;
+        _autoReconnect.OnOsDeviceDisconnected(address);
+    }
+
+    private void OnBluetoothRadioRestored()
+    {
+        if (Volatile.Read(ref _disposed) != 0) return;
+        _autoReconnect.NotifySystemResume();
     }
 
     private WinRtBluetoothManager? Current
@@ -117,6 +144,7 @@ public sealed class MultiRemoteBluetoothManager : IBluetoothManager
                     Interlocked.Exchange(ref _lastAddress, effective);
                 else
                     Interlocked.CompareExchange(ref _lastAddress, 0, effective);
+                _autoReconnect.OnConnectionStatusChanged(effective, connected);
                 ConnectionStatusChanged?.Invoke(effective, connected, message);
             };
             Action<ulong> infoHandler = addr => ConnectedDeviceInformationChanged?.Invoke(addr != 0 ? addr : address);
@@ -162,11 +190,53 @@ public sealed class MultiRemoteBluetoothManager : IBluetoothManager
         }
     }
 
-    public Task<bool> ConnectAsync(ulong address) => GetOrCreate(address).ConnectAsync(address);
-    public void DisconnectDevice(ulong address) => _remotes.GetValueOrDefault(address)?.Remote.Disconnect();
+    private Task<bool> ConnectDirectAsync(ulong address)
+    {
+        if (Volatile.Read(ref _disposed) != 0) return Task.FromResult(false);
+        return GetOrCreate(address).ConnectAsync(address);
+    }
+
+    public Task<bool> ConnectAsync(ulong address)
+    {
+        if (Volatile.Read(ref _disposed) != 0) return Task.FromResult(false);
+        return _autoReconnect.ConnectAsync(address);
+    }
+
+    public void DisconnectDevice(ulong address)
+    {
+        _autoReconnect.MarkUserDisconnected(address);
+        _remotes.GetValueOrDefault(address)?.Remote.Disconnect();
+    }
+
+    public void SetAutoReconnectTargets(IEnumerable<ulong> addresses)
+    {
+        if (Volatile.Read(ref _disposed) != 0) return;
+        _autoReconnect.SetTargets(addresses);
+        if (_autoReconnect.HasTargets)
+        {
+            _connectionWatcher.EnsureStarted();
+        }
+    }
+
+    public void NotifySystemResume()
+    {
+        if (Volatile.Read(ref _disposed) != 0) return;
+        if (_autoReconnect.HasTargets)
+        {
+            _connectionWatcher.EnsureStarted();
+        }
+        _autoReconnect.NotifySystemResume();
+    }
+
+    public void NotifyHidDeviceArrival()
+    {
+        if (Volatile.Read(ref _disposed) != 0) return;
+        _autoReconnect.NotifyHidDeviceArrival();
+    }
 
     public void RemoveDevice(ulong address)
     {
+        _autoReconnect.RemoveTarget(address);
         _voiceSettings.TryRemove(address, out _);
         ManagedRemote? removed;
         lock (_remotesLock)
@@ -197,6 +267,12 @@ public sealed class MultiRemoteBluetoothManager : IBluetoothManager
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+
+        _connectionWatcher.DeviceOsConnected -= OnWatcherDeviceOsConnected;
+        _connectionWatcher.DeviceOsDisconnected -= OnWatcherDeviceOsDisconnected;
+        _connectionWatcher.BluetoothRadioRestored -= OnBluetoothRadioRestored;
+        _connectionWatcher.Dispose();
+        _autoReconnect.Dispose();
 
         ManagedRemote[] snapshot;
         lock (_remotesLock)

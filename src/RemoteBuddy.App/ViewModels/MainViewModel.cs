@@ -198,6 +198,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnDevicesChanged()
     {
+        _bluetoothManager.SetAutoReconnectTargets(_configService.Current.Devices.Select(d => d.BluetoothAddress));
         MappingVm.SyncWithDevices();
         RefreshInputSources();
     }
@@ -1129,6 +1130,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _nonTargetRawHandles.Remove(hDevice);
         _rawAddresses.Remove(hDevice);
         _rawInputReceiver.InvalidateDeviceCache(hDevice);
+        _bluetoothManager.NotifyHidDeviceArrival();
+    }
+
+    public void HandleSystemResume()
+    {
+        AppLogger.Info("System resume notification received; refreshing Bluetooth remote connections", "MainViewModel");
+        _bluetoothManager.NotifySystemResume();
     }
 
     public void HandleDeviceRemoval(IntPtr hDevice)

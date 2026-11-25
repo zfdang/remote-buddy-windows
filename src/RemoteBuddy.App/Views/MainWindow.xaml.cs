@@ -87,6 +87,9 @@ public partial class MainWindow : Window
     private const int WM_TRAYICON = WM_USER + 101;
     private const int WM_INPUT = 0x00FF;
     private const int WM_INPUT_DEVICE_CHANGE = 0x00FE;
+    private const int WM_POWERBROADCAST = 0x0218;
+    private const int PBT_APMRESUMESUSPEND = 0x0007;
+    private const int PBT_APMRESUMEAUTOMATIC = 0x0012;
     private const int GIDC_ARRIVAL = 1;
     private const int GIDC_REMOVAL = 2;
     private const int WM_LBUTTONUP = 0x0202;
@@ -220,6 +223,14 @@ public partial class MainWindow : Window
             }
             handled = true;
             return IntPtr.Zero;
+        }
+        else if (msg == WM_POWERBROADCAST && DataContext is MainViewModel vmPower)
+        {
+            int powerEvent = wParam.ToInt32();
+            if (powerEvent == PBT_APMRESUMEAUTOMATIC || powerEvent == PBT_APMRESUMESUSPEND)
+            {
+                vmPower.HandleSystemResume();
+            }
         }
         else if (msg == WM_TRAYICON)
         {

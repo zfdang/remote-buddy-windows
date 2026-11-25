@@ -157,7 +157,12 @@ public partial class App : Application
 
         if (_configService.Current.HasCompletedOnboarding)
         {
-            foreach (var device in _configService.Current.Devices.Where(d => d.BluetoothAddress != 0).DistinctBy(d => d.BluetoothAddress))
+            var savedDevices = _configService.Current.Devices
+                .Where(d => d.BluetoothAddress != 0)
+                .DistinctBy(d => d.BluetoothAddress)
+                .ToArray();
+            _bluetoothManager.SetAutoReconnectTargets(savedDevices.Select(d => d.BluetoothAddress));
+            foreach (var device in savedDevices)
             {
                 _bluetoothManager.SetDeviceVoiceSettings(device);
                 _ = _bluetoothManager.ConnectAsync(device.BluetoothAddress);
@@ -198,6 +203,7 @@ public partial class App : Application
         {
             onboardingVm.Dispose();
             _mainViewModel.ActiveOnboardingVm = null;
+            _bluetoothManager.SetAutoReconnectTargets(_configService.Current.Devices.Select(d => d.BluetoothAddress));
             _mainViewModel.DevicesVm.Reload();
             _mainViewModel.IntegrationsVm.Reload();
             _mainViewModel.MappingVm.LoadMappings();
