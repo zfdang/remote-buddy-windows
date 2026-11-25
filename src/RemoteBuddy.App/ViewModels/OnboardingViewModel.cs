@@ -43,6 +43,10 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
 
     public const string DoubaoVoiceSetup = "在豆包输入法设置的「语音输入」页将「全局唤起语音」设为「持续模式」，让「长按模式」的快捷键与 Remote Buddy 一致，并将麦克风选为 CABLE Output (VB-Audio Virtual Cable)。以管理员身份运行 Remote Buddy，并选择「按住说话」。首次使用时会准备已签名的 USB/IP 虚拟键盘驱动。";
 
+    public const string ChatterflyVoiceSetup = "安装并启动腾讯 Chatterfly，在「设置 → 语音设置」中将语音输入快捷键设为与 Remote Buddy 一致并开启「快捷键全局可用」，在「音频设置 → 麦克风」中选择 CABLE Output (VB-Audio Virtual Cable)。在 Remote Buddy 中选择「按住说话」。";
+
+    public const string CustomVoiceSetup = "不限定具体语音输入工具：先在上方设定触发方式（按住说话 / 单击切换）与全局快捷键，并确保目标工具的麦克风已设为 CABLE Output (VB-Audio Virtual Cable)，下一步将实测该快捷键能否唤起工具并将语音转写文字写入检测框。";
+
     public static IReadOnlyList<VoiceShortcutOption> VoiceShortcutOptions { get; } =
     [
         new("右 Alt (RAlt) — 豆包输入法默认", "RAlt"),
@@ -106,9 +110,11 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     {
         TargetInputTool.WeChatInput => "微信输入法",
         TargetInputTool.DoubaoInput => "豆包输入法 / 客户端",
-        TargetInputTool.WindowsDictation => "Windows 语音听写",
+        TargetInputTool.Chatterfly => "腾讯 Chatterfly",
         TargetInputTool.Typeless => "Typeless 智能转写",
-        _ => "自定义工具"
+        TargetInputTool.WindowsDictation => "Windows 语音听写",
+        TargetInputTool.Custom => "其他语音工具",
+        _ => "其他语音工具"
     };
 
     [ObservableProperty]
@@ -237,13 +243,18 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(InputToolSetupInstructions))]
+    [NotifyPropertyChangedFor(nameof(ShowShortcutEditor))]
+    [NotifyPropertyChangedFor(nameof(TranscriptionInstructions))]
     private TargetInputTool _selectedTool;
 
     public string InputToolSetupInstructions => SelectedTool switch
     {
         TargetInputTool.WeChatInput => WeChatVoiceSetup,
         TargetInputTool.DoubaoInput => DoubaoVoiceSetup,
-        TargetInputTool.WindowsDictation => "请将 CABLE Output 设为 Windows 默认麦克风。",
+        TargetInputTool.Chatterfly => ChatterflyVoiceSetup,
+        TargetInputTool.Typeless => "在 Typeless 中启用全局听写快捷键并保持与 Remote Buddy 一致，麦克风选为 CABLE Output (VB-Audio Virtual Cable)。默认快捷键 Ctrl+Alt+V。",
+        TargetInputTool.WindowsDictation => "请将 CABLE Output 设为 Windows 默认麦克风，并选择「单击切换」配合快捷键 Win+H。",
+        TargetInputTool.Custom => CustomVoiceSetup,
         _ => "请在目标输入工具中将麦克风选为 CABLE Output。"
     };
 
@@ -265,18 +276,36 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
         set { if (value) TriggerMode = VoiceTriggerMode.ClickToToggle; }
     }
 
-    public string TranscriptionInstructions => IsHoldToTalk
-        ? "点击下方输入框，按住语音键说一句话，松开后核对转写结果。"
-        : "点击下方输入框，按一下语音键开始说话，再按一下结束，然后核对转写结果。";
+    public string TranscriptionInstructions
+    {
+        get
+        {
+            if (SelectedTool == TargetInputTool.Custom)
+            {
+                string shortcut = string.IsNullOrWhiteSpace(ShortcutText) ? "已配置的快捷键" : ShortcutText;
+                return IsHoldToTalk
+                    ? $"请先确认第三方语音工具已在后台就绪并监听快捷键（{shortcut}）。点击下方检测输入框，按住遥控器语音键说话，松开后确认识别文本已写入输入框。"
+                    : $"请先确认第三方语音工具已在后台就绪并监听快捷键（{shortcut}）。点击下方检测输入框，按一下遥控器语音键开始说话、再按一下结束，确认识别文本已写入输入框。";
+            }
+
+            return IsHoldToTalk
+                ? "点击下方输入框，按住语音键说一句话，松开后核对转写结果。"
+                : "点击下方输入框，按一下语音键开始说话，再按一下结束，然后核对转写结果。";
+        }
+    }
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(TranscriptionInstructions))]
     private string _shortcutText = string.Empty;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsCustomShortcutSelected))]
+    [NotifyPropertyChangedFor(nameof(ShowShortcutEditor))]
     private VoiceShortcutOption? _selectedShortcutOption;
 
     public bool IsCustomShortcutSelected => SelectedShortcutOption?.IsCustom == true;
+
+    public bool ShowShortcutEditor => IsCustomShortcutSelected || SelectedTool == TargetInputTool.Custom;
 
     private bool _syncingShortcutSelection;
 
@@ -670,6 +699,11 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
         {
             HasAudioTested = false;
         }
+        if (CurrentWizardStep == WizardStep.TranscriptionVerify)
+        {
+            _hasVoiceTranscriptionSessionOccurred = false;
+            IsTranscriptionVerified = false;
+        }
         UpdateStepMetadata();
     }
 
@@ -683,8 +717,10 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             {
                 TargetInputTool.WeChatInput => InputToolConfig.DefaultWeChatShortcut,
                 TargetInputTool.DoubaoInput => "RAlt",
-                TargetInputTool.WindowsDictation => "Win+H",
+                TargetInputTool.Chatterfly => "Ctrl+Shift+V",
                 TargetInputTool.Typeless => "Ctrl+Alt+V",
+                TargetInputTool.WindowsDictation => "Win+H",
+                TargetInputTool.Custom => "Ctrl+Shift+V",
                 _ => "Ctrl+Shift+V"
             };
             SyncShortcutOptionFromText(ShortcutText);

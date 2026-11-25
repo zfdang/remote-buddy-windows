@@ -103,6 +103,8 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="14"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="14"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
                 <!-- Tool 1: WeChat Input -->
@@ -149,24 +151,24 @@
                     </DockPanel>
                 </Border>
 
-                <!-- Tool 3: Windows Dictation -->
+                <!-- Tool 3: Tencent Chatterfly -->
                 <Border Grid.Row="2" Grid.Column="0"
-                        Background="{Binding SelectedTool, Converter={StaticResource ActiveToolBackgroundConverter}, ConverterParameter=WindowsDictation}"
-                        BorderBrush="{Binding SelectedTool, Converter={StaticResource ActiveToolBorderConverter}, ConverterParameter=WindowsDictation}"
+                        Background="{Binding SelectedTool, Converter={StaticResource ActiveToolBackgroundConverter}, ConverterParameter=Chatterfly}"
+                        BorderBrush="{Binding SelectedTool, Converter={StaticResource ActiveToolBorderConverter}, ConverterParameter=Chatterfly}"
                         BorderThickness="1.5" CornerRadius="12" Padding="18">
                     <DockPanel LastChildFill="True">
                         <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
-                            <TextBlock Text="Windows 语音听写" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
+                            <TextBlock Text="腾讯 Chatterfly" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
                             <Border Background="#1C3827" BorderBrush="#2D6A42" BorderThickness="1" CornerRadius="10" Padding="8,2" HorizontalAlignment="Right"
-                                    Visibility="{Binding SelectedTool, Converter={StaticResource EqualValueToVisibilityConverter}, ConverterParameter=WindowsDictation}">
+                                    Visibility="{Binding SelectedTool, Converter={StaticResource EqualValueToVisibilityConverter}, ConverterParameter=Chatterfly}">
                                 <TextBlock Text="当前使用" FontSize="11" Foreground="#44FF88" FontWeight="SemiBold"/>
                             </Border>
                         </DockPanel>
                         <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal">
                             <TextBlock Text="✓ 正在生效" Foreground="#00CC66" FontSize="12" VerticalAlignment="Center" Margin="10,0,0,0"
-                                       Visibility="{Binding SelectedTool, Converter={StaticResource EqualValueToVisibilityConverter}, ConverterParameter=WindowsDictation}"/>
+                                       Visibility="{Binding SelectedTool, Converter={StaticResource EqualValueToVisibilityConverter}, ConverterParameter=Chatterfly}"/>
                         </StackPanel>
-                        <TextBlock Text="Windows 10/11 内置原生语音听写，单击切换开始与停止，无需安装第三方软件。（快捷键 Win+H）"
+                        <TextBlock Text="{x:Static vm:OnboardingViewModel.ChatterflyVoiceSetup}"
                                    FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,14"/>
                     </DockPanel>
                 </Border>
@@ -189,6 +191,50 @@
                                        Visibility="{Binding SelectedTool, Converter={StaticResource EqualValueToVisibilityConverter}, ConverterParameter=Typeless}"/>
                         </StackPanel>
                         <TextBlock Text="支持 Typeless 全局听写客户端，长按语音键录音，松开即刻转写为精准文字。（默认快捷键 Ctrl+Alt+V）"
+                                   FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,14"/>
+                    </DockPanel>
+                </Border>
+
+                <!-- Tool 5: Windows Dictation -->
+                <Border Grid.Row="4" Grid.Column="0"
+                        Background="{Binding SelectedTool, Converter={StaticResource ActiveToolBackgroundConverter}, ConverterParameter=WindowsDictation}"
+                        BorderBrush="{Binding SelectedTool, Converter={StaticResource ActiveToolBorderConverter}, ConverterParameter=WindowsDictation}"
+                        BorderThickness="1.5" CornerRadius="12" Padding="18">
+                    <DockPanel LastChildFill="True">
+                        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+                            <TextBlock Text="Windows 语音听写" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
+                            <Border Background="#1C3827" BorderBrush="#2D6A42" BorderThickness="1" CornerRadius="10" Padding="8,2" HorizontalAlignment="Right"
+                                    Visibility="{Binding SelectedTool, Converter={StaticResource EqualValueToVisibilityConverter}, ConverterParameter=WindowsDictation}">
+                                <TextBlock Text="当前使用" FontSize="11" Foreground="#44FF88" FontWeight="SemiBold"/>
+                            </Border>
+                        </DockPanel>
+                        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal">
+                            <TextBlock Text="✓ 正在生效" Foreground="#00CC66" FontSize="12" VerticalAlignment="Center" Margin="10,0,0,0"
+                                       Visibility="{Binding SelectedTool, Converter={StaticResource EqualValueToVisibilityConverter}, ConverterParameter=WindowsDictation}"/>
+                        </StackPanel>
+                        <TextBlock Text="Windows 10/11 内置原生语音听写，单击切换开始与停止，无需安装第三方软件。（快捷键 Win+H）"
+                                   FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,14"/>
+                    </DockPanel>
+                </Border>
+
+                <!-- Tool 6: Custom / Other Voice Tools -->
+                <Border Grid.Row="4" Grid.Column="2"
+                        Background="{Binding SelectedTool, Converter={StaticResource ActiveToolBackgroundConverter}, ConverterParameter=Custom}"
+                        BorderBrush="{Binding SelectedTool, Converter={StaticResource ActiveToolBorderConverter}, ConverterParameter=Custom}"
+                        BorderThickness="1.5" CornerRadius="12" Padding="18">
+                    <DockPanel LastChildFill="True">
+                        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+                            <TextBlock Text="其他语音工具" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
+                            <Border Background="#1C3827" BorderBrush="#2D6A42" BorderThickness="1" CornerRadius="10" Padding="8,2" HorizontalAlignment="Right"
+                                    Visibility="{Binding SelectedTool, Converter={StaticResource EqualValueToVisibilityConverter}, ConverterParameter=Custom}">
+                                <TextBlock Text="当前使用" FontSize="11" Foreground="#44FF88" FontWeight="SemiBold"/>
+                            </Border>
+                        </DockPanel>
+                        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal">
+                            <TextBlock Text="✓ 正在生效" Foreground="#00CC66" FontSize="12" VerticalAlignment="Center" Margin="10,0,0,0"
+                                       Visibility="{Binding SelectedTool, Converter={StaticResource EqualValueToVisibilityConverter}, ConverterParameter=Custom}"/>
+                        </StackPanel>
+                        <TextBlock Text="{x:Static vm:OnboardingViewModel.CustomVoiceSetup}"
                                    FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,14"/>
                     </DockPanel>
                 </Border>

@@ -210,8 +210,10 @@ public sealed class EnumToDisplayNameConverter : IValueConverter
             MediaCommand.PreviousTrack => "上一首",
             TargetInputTool.WeChatInput => "微信输入法",
             TargetInputTool.DoubaoInput => "豆包输入法 / 客户端",
-            TargetInputTool.WindowsDictation => "Windows 语音听写 (Win+H)",
+            TargetInputTool.Chatterfly => "腾讯 Chatterfly",
             TargetInputTool.Typeless => "Typeless 智能转写",
+            TargetInputTool.WindowsDictation => "Windows 语音听写 (Win+H)",
+            TargetInputTool.Custom => "其他语音工具",
             VoiceTriggerMode.HoldToTalk => "按住说话 (Hold to Talk)",
             VoiceTriggerMode.ClickToToggle => "点按切换 (Click to Toggle)",
             _ => value?.ToString() ?? string.Empty

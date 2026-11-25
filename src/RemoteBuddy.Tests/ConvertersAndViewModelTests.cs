@@ -753,4 +753,83 @@ public class ConvertersAndViewModelTests
             if (File.Exists(path)) File.Delete(path);
         }
     }
+
+    [Fact]
+    public void TargetInputTool_OrderAndDisplayNames_MatchExpectedPresets()
+    {
+        Assert.Equal(
+            [
+                TargetInputTool.WeChatInput,
+                TargetInputTool.DoubaoInput,
+                TargetInputTool.Chatterfly,
+                TargetInputTool.Typeless,
+                TargetInputTool.WindowsDictation,
+                TargetInputTool.Custom
+            ],
+            Enum.GetValues<TargetInputTool>());
+
+        var converter = new EnumToDisplayNameConverter();
+        Assert.Equal("腾讯 Chatterfly", converter.Convert(TargetInputTool.Chatterfly, typeof(string), null, CultureInfo.InvariantCulture));
+        Assert.Equal("其他语音工具", converter.Convert(TargetInputTool.Custom, typeof(string), null, CultureInfo.InvariantCulture));
+    }
+
+    [Fact]
+    public void OnboardingViewModel_ChatterflyAndCustomTool_ConfigureAndVerifyEndToEnd()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-tools-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new DummyBluetoothManager();
+            using var vm = new OnboardingViewModel(config, bt, WizardMode.Integration);
+
+            // 1. Chatterfly preset
+            vm.ApplyPreset("Chatterfly");
+            Assert.Equal(TargetInputTool.Chatterfly, vm.SelectedTool);
+            Assert.Equal("Ctrl+Shift+V", vm.ShortcutText);
+            Assert.Equal(VoiceTriggerMode.HoldToTalk, vm.TriggerMode);
+            Assert.False(vm.ShowShortcutEditor);
+            Assert.Contains("Chatterfly", vm.InputToolSetupInstructions);
+
+            // 2. Other voice tool (Custom) preset exposes shortcut editor immediately & verifies transcription
+            vm.ApplyPreset("Custom");
+            Assert.Equal(TargetInputTool.Custom, vm.SelectedTool);
+            Assert.True(vm.ShowShortcutEditor);
+            vm.ShortcutText = "Ctrl+Alt+F9";
+            vm.NextStep();
+            Assert.Equal(WizardStep.TranscriptionVerify, vm.CurrentWizardStep);
+            Assert.Contains("Ctrl+Alt+F9", vm.TranscriptionInstructions);
+
+            // Must require both voice session and recognized text in the verification box
+            vm.TranscriptionTestText = "你好";
+            vm.IsTranscriptionVerified = true;
+            vm.NextStep();
+            Assert.Equal(WizardStep.TranscriptionVerify, vm.CurrentWizardStep);
+            Assert.Contains("完成一次实际语音转写", vm.ValidationError);
+
+            bt.RaiseVoiceSessionEnded();
+            vm.NextStep();
+            Assert.Equal(WizardStep.Complete, vm.CurrentWizardStep);
+            vm.Complete();
+            Assert.True(vm.IsCompleted);
+
+            var saved = new ConfigService(path).Current.InputTool;
+            Assert.Equal(TargetInputTool.Custom, saved.Tool);
+            Assert.Equal("Ctrl+Alt+F9", saved.Shortcut);
+
+            var intVm = new IntegrationsViewModel(config);
+            Assert.Equal("其他语音工具", intVm.CurrentToolDisplayName);
+            using var genVm = new GeneralViewModel(config, bt, () => { }, _ => { });
+            Assert.Contains("其他语音工具", genVm.IntegrationSummary);
+
+            config.Update(cfg => cfg.InputTool.Tool = TargetInputTool.Chatterfly);
+            intVm.Reload();
+            Assert.Equal("腾讯 Chatterfly", intVm.CurrentToolDisplayName);
+            Assert.Contains("腾讯 Chatterfly", genVm.IntegrationSummary);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
 }

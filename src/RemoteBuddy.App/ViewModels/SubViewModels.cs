@@ -1072,9 +1072,11 @@ public partial class IntegrationsViewModel : ObservableObject
     {
         TargetInputTool.WeChatInput => "微信输入法",
         TargetInputTool.DoubaoInput => "豆包输入法 / 客户端",
-        TargetInputTool.WindowsDictation => "Windows 语音听写 (Win+H)",
+        TargetInputTool.Chatterfly => "腾讯 Chatterfly",
         TargetInputTool.Typeless => "Typeless 智能转写",
-        _ => "自定义快捷键"
+        TargetInputTool.WindowsDictation => "Windows 语音听写 (Win+H)",
+        TargetInputTool.Custom => "其他语音工具",
+        _ => "其他语音工具"
     };
 
     public string CurrentShortcutDisplay => string.IsNullOrWhiteSpace(_config.Current.InputTool.Shortcut) ? "未配置" : _config.Current.InputTool.Shortcut;
@@ -1548,9 +1550,11 @@ public partial class GeneralViewModel : ObservableObject, IDisposable
             {
                 TargetInputTool.WeChatInput => "微信输入法",
                 TargetInputTool.DoubaoInput => "豆包输入法",
-                TargetInputTool.WindowsDictation => "Windows 听写",
+                TargetInputTool.Chatterfly => "腾讯 Chatterfly",
                 TargetInputTool.Typeless => "Typeless",
-                _ => "自定义工具"
+                TargetInputTool.WindowsDictation => "Windows 听写",
+                TargetInputTool.Custom => "其他语音工具",
+                _ => "其他语音工具"
             };
             string mode = tool.TriggerMode == VoiceTriggerMode.HoldToTalk ? "长按说话" : "点按切换";
             return $"{toolName} ({mode} · {tool.Shortcut})";
