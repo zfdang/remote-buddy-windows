@@ -48,6 +48,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
     private const ushort XiaomiKeyboardAttribute = 0x0064;
     private const int MaxDiagnosticEntriesPerConnection = 32;
     private const int MaxDiagnosticHexBytes = 16;
+    private const int MaxUnassignedNotificationShapes = 8;
     public static readonly ushort[] G9N9NVerifiedAttributes = [G9N9NInputAttribute];
     public static readonly ushort[] XiaomiVerifiedAttributes = [0x002B, 0x0056, 0x0058, 0x0059, 0x005B, 0x005E];
     private static readonly HashSet<ushort> _g9n9nAttributesSet = [G9N9NInputAttribute];
@@ -122,6 +123,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
     private SourceState[] _sources = [];
     private volatile bool _sawPacketEvent;
     private readonly HashSet<string> _loggedProbeStages = [];
+    private readonly HashSet<(ushort Connection, ushort Attribute, int Captured, int Expected)> _loggedUnassignedNotifications = [];
 
     internal void SetSources(IEnumerable<EtwButtonSource> sources)
     {
@@ -139,6 +141,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
             _sources = next;
             _sawPacketEvent = false;
             _loggedProbeStages.Clear();
+            _loggedUnassignedNotifications.Clear();
         }
     }
 
@@ -444,6 +447,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
         string? formatLog = null;
         string? redactionLog = null;
         string? diagnosticLog = null;
+        string? buttonReportDetails = null;
 
         if (kind == HciEvent)
         {
@@ -523,6 +527,19 @@ public sealed class ChromecastEtwReceiver : IDisposable
             var sources = _sources;
             var pendingSource = sources.FirstOrDefault(source => source.PendingHandle == connection);
             var boundSource = sources.FirstOrDefault(source => source.BoundHandle == connection);
+            if (pendingSource == null && boundSource == null && att.Length >= 3 && att[0] is 0x1B or 0x1D &&
+                _loggedUnassignedNotifications.Count < MaxUnassignedNotificationShapes)
+            {
+                ushort attribute = BinaryPrimitives.ReadUInt16LittleEndian(att[1..]);
+                int capturedLength = att.Length - 3;
+                if (sources.Any(source => source.Source.Protocol == EtwProtocolKind.GoogleG9N9N &&
+                        !source.BoundHandle.HasValue &&
+                        EvaluateG9N9NAttribute(source, attribute) == G9N9NAttributeDecision.Allowed) &&
+                    _loggedUnassignedNotifications.Add((connection, attribute, capturedLength, expectedPayloadLength)))
+                {
+                    diagnosticLog = $"ETW unassigned notification overlaps G9N9N HID attributes: acl=0x{connection:X4}, attr=0x{attribute:X4}, opcode=0x{att[0]:X2}, capturedLen={capturedLength}, expectedLen={expectedPayloadLength}";
+                }
+            }
             foreach (var source in new[] { pendingSource, boundSource })
             {
                 if (source == null) continue;
@@ -607,6 +624,15 @@ public sealed class ChromecastEtwReceiver : IDisposable
                         break;
                     }
                     RecordButtonEdgesLocked(source, button, isDown);
+                    if (edge1 != RemoteButton.None)
+                    {
+                        ushort reportAttribute = BinaryPrimitives.ReadUInt16LittleEndian(att[1..]);
+                        var report = att[3..];
+                        buttonReportDetails =
+                            $" protocol={source.Source.Protocol} acl=0x{connection:X4} attr=0x{reportAttribute:X4} opcode=0x{att[0]:X2} len={report.Length}";
+                        if (source.Source.Protocol == EtwProtocolKind.GoogleG9N9N && report.Length <= MaxDiagnosticHexBytes)
+                            buttonReportDetails += $" format={format} report={FormatHex(report)}";
+                    }
                 }
                 else if (truncated)
                 {
@@ -618,6 +644,8 @@ public sealed class ChromecastEtwReceiver : IDisposable
                             : "Windows omitted a verified button code";
                     }
                     RecordButtonEdgesLocked(source, RemoteButton.None, false);
+                    if (edge1 != RemoteButton.None)
+                        buttonReportDetails = $" protocol={source.Source.Protocol} acl=0x{connection:X4} attr=0x{attribute:X4} opcode=0x{att[0]:X2} report=redacted expectedLen={expectedPayloadLength}";
                     truncatedAddr = source.Source.Address;
                 }
                 break;
@@ -701,12 +729,12 @@ public sealed class ChromecastEtwReceiver : IDisposable
         }
         if (edge1 != RemoteButton.None)
         {
-            AppLogger.Info($"ETW button 0x{buttonAddr:X12}: {edge1} {(edge1Down ? "Down" : "Up")}", "ChromecastEtwReceiver");
+            AppLogger.Info($"ETW button 0x{buttonAddr:X12}: {edge1} {(edge1Down ? "Down" : "Up")}{buttonReportDetails}", "ChromecastEtwReceiver");
             ButtonEvent?.Invoke(buttonAddr, edge1, edge1Down);
         }
         if (edge2 != RemoteButton.None)
         {
-            AppLogger.Info($"ETW button 0x{buttonAddr:X12}: {edge2} {(edge2Down ? "Down" : "Up")}", "ChromecastEtwReceiver");
+            AppLogger.Info($"ETW button 0x{buttonAddr:X12}: {edge2} {(edge2Down ? "Down" : "Up")}{buttonReportDetails}", "ChromecastEtwReceiver");
             ButtonEvent?.Invoke(buttonAddr, edge2, edge2Down);
         }
         if (truncatedAddr.HasValue)

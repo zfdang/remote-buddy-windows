@@ -1357,19 +1357,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
         switch (assignment.Action)
         {
             case ButtonActionType.KeyboardShortcut when !string.IsNullOrEmpty(assignment.Shortcut):
-                bool sent = NativeInputSender.SendShortcutClick(assignment.Shortcut);
-                string lastDownSource = _dedup.TryGetValue(address, out var deviceDedup) &&
-                    deviceDedup.TryGetValue((button, true), out var lastDown)
-                    ? lastDown.Source.ToString()
-                    : "unknown";
-                AppLogger.Info($"Mapped keyboard shortcut: addr=0x{address:X12}, button={button}, lastDownSource={lastDownSource}, shortcut='{assignment.Shortcut}', sent={sent}", "MainViewModel");
+                LogDispatch("keyboard shortcut", NativeInputSender.SendShortcutClick(assignment.Shortcut), $", shortcut='{assignment.Shortcut}'");
                 break;
             case ButtonActionType.MediaControl when assignment.Media != MediaCommand.None:
-                NativeInputSender.SendMedia(assignment.Media);
+                LogDispatch("media command", NativeInputSender.SendMedia(assignment.Media), $", command={assignment.Media}");
                 break;
             case ButtonActionType.TextSnippet when !string.IsNullOrEmpty(assignment.Text):
-                NativeInputSender.SendUnicodeText(assignment.Text);
+                LogDispatch("text snippet", NativeInputSender.SendUnicodeText(assignment.Text));
                 break;
+        }
+
+        void LogDispatch(string action, bool sent, string details = "")
+        {
+            string lastDownSource = _dedup.TryGetValue(address, out var deviceDedup) &&
+                deviceDedup.TryGetValue((button, true), out var lastDown)
+                ? lastDown.Source.ToString()
+                : "unknown";
+            AppLogger.Info($"Mapped {action}: addr=0x{address:X12}, button={button}, lastDownSource={lastDownSource}{details}, sent={sent}", "MainViewModel");
         }
     }
 

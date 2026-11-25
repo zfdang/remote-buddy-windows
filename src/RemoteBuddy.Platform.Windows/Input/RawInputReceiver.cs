@@ -625,7 +625,7 @@ public sealed class RawInputReceiver : IDisposable
             Marshal.Copy(IntPtr.Add(buffer, dataOffset), rawBytes, 0, totalRawBytes);
 
             int reportSize = (int)dwSizeHid;
-            var hidEvents = new List<(RemoteButton Button, bool IsDown)>();
+            var hidEvents = new List<(RemoteButton Button, bool IsDown, byte ReportId)>();
             bool notifyVoiceHold = false;
 
             var modelType = DeviceModelResolver?.Invoke(hDevice, devicePath) ?? RemoteModelType.Unknown;
@@ -754,7 +754,7 @@ public sealed class RawInputReceiver : IDisposable
                             if (rId == KeyboardReportId) continue;
                             foreach (var btn in btns)
                             {
-                                hidEvents.Add((btn, false));
+                                hidEvents.Add((btn, false, reportId));
                             }
                             btns.Clear();
                         }
@@ -766,8 +766,8 @@ public sealed class RawInputReceiver : IDisposable
                         // G9N9N multi-key chords drop release frames; dispatch as momentary taps
                         foreach (var btn in currentButtons)
                         {
-                            hidEvents.Add((btn, true));
-                            hidEvents.Add((btn, false));
+                            hidEvents.Add((btn, true, reportId));
+                            hidEvents.Add((btn, false, reportId));
                         }
                         continue;
                     }
@@ -793,7 +793,7 @@ public sealed class RawInputReceiver : IDisposable
                     foreach (var btn in released)
                     {
                         pressedButtons.Remove(btn);
-                        hidEvents.Add((btn, false));
+                        hidEvents.Add((btn, false, reportId));
                     }
 
                     // 2. Newly pressed buttons -> KeyDown (true)
@@ -801,7 +801,7 @@ public sealed class RawInputReceiver : IDisposable
                     {
                         if (pressedButtons.Add(btn))
                         {
-                            hidEvents.Add((btn, true));
+                            hidEvents.Add((btn, true, reportId));
                         }
                     }
                 }
@@ -820,9 +820,9 @@ public sealed class RawInputReceiver : IDisposable
                 PhysicalVoiceKeyPressed?.Invoke(hDevice);
             }
 
-            foreach (var (btn, isDown) in hidEvents)
+            foreach (var (btn, isDown, reportId) in hidEvents)
             {
-                AppLogger.Info($"RawInput HID event: {btn} {(isDown ? "Down" : "Up")} (hDevice=0x{hDevice:X})", "RawInputReceiver");
+                AppLogger.Info($"RawInput HID event: {btn} {(isDown ? "Down" : "Up")} (hDevice=0x{hDevice:X}, reportId=0x{reportId:X2}, len={reportSize})", "RawInputReceiver");
                 ButtonEvent?.Invoke(hDevice, btn, isDown);
             }
         }

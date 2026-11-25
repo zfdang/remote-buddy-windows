@@ -824,6 +824,46 @@ public class ChromecastEtwTests
     }
 
     [Fact]
+    public void G9N9N_ButtonEdgesLogTheirOwnReportAndDistinguishRedactedReleases()
+    {
+        string tempLogDir = Path.Combine(Path.GetTempPath(), "RB_ButtonReports_" + Guid.NewGuid().ToString("N"));
+        AppLogger.ResetForTesting();
+        AppLogger.Initialize(tempLogDir);
+        try
+        {
+            using var receiver = new ChromecastEtwReceiver();
+            var source = new EtwButtonSource(0x1234, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N);
+            receiver.SetSources([source]);
+            byte[] up = CreateAclPacket(0x1B, 0x0029, [3, 0, 0, 0, 0, 0, 0, 0]);
+            byte[] down = CreateAclPacket(0x1B, 0x0029, [4, 0, 0, 0, 0, 0, 0, 0]);
+            receiver.ProcessPacket(3, up);
+            receiver.ProcessPacket(3, up);
+            BindSource(receiver, source);
+            receiver.ProcessPacket(3, up);
+            receiver.ProcessPacket(3, up);
+            receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, new byte[8]));
+            receiver.ProcessPacket(3, down);
+            receiver.ProcessPacket(3, down.AsSpan(0, 11));
+
+            string[] lines = File.ReadAllLines(AppLogger.CurrentLogFilePath);
+            string unassigned = Assert.Single(lines, line => line.Contains("ETW unassigned notification"));
+            Assert.Contains("attr=0x0029, opcode=0x1B, capturedLen=8, expectedLen=8", unassigned);
+            Assert.DoesNotContain("0300000000000000", unassigned);
+            string[] events = lines.Where(line => line.Contains("ETW button 0x000000001234:")).ToArray();
+            Assert.Collection(events,
+                line => { Assert.Contains(": Up Down ", line); Assert.Contains("report=0300000000000000", line); },
+                line => { Assert.Contains(": Up Up ", line); Assert.Contains("report=0000000000000000", line); },
+                line => { Assert.Contains(": Down Down ", line); Assert.Contains("report=0400000000000000", line); },
+                line => { Assert.Contains(": Down Up ", line); Assert.Contains("report=redacted expectedLen=8", line); });
+        }
+        finally
+        {
+            AppLogger.ResetForTesting();
+            if (Directory.Exists(tempLogDir)) Directory.Delete(tempLogDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void G9N9N_DiagnosticLogging_LogsObservedFormat_IgnoresExcluded_AndCapsUnknownsAt32()
     {
         string tempLogDir = Path.Combine(Path.GetTempPath(), "RB_G9N9N_Diag_" + Guid.NewGuid().ToString("N"));

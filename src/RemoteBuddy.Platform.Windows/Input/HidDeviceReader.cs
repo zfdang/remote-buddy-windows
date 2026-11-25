@@ -286,7 +286,8 @@ public sealed class HidDeviceReader : IDisposable
             ActivePath = path;
 
             var ct = _cts.Token;
-            _readTask = Task.Run(() => ReadLoopAsync(handle, path, effectiveReportLen, modelType, ct), ct);
+            bool isG9N9NConsumerControl = modelType == RemoteModelType.GoogleG9N9N && info is { UsagePage: 0x000C, Usage: 0x0001 };
+            _readTask = Task.Run(() => ReadLoopAsync(handle, path, effectiveReportLen, modelType, isG9N9NConsumerControl, ct), ct);
             AppLogger.Info($"HidDeviceReader started successfully for: {path} (ReportLen={effectiveReportLen}, Model={modelType})", "HidDeviceReader");
             return true;
         }
@@ -309,7 +310,7 @@ public sealed class HidDeviceReader : IDisposable
         return Start(best.Path, best.InputReportByteLength, modelType);
     }
 
-    private async Task ReadLoopAsync(SafeFileHandle handle, string path, int reportLength, RemoteModelType modelType, CancellationToken cancellationToken)
+    private async Task ReadLoopAsync(SafeFileHandle handle, string path, int reportLength, RemoteModelType modelType, bool isG9N9NConsumerControl, CancellationToken cancellationToken)
     {
         try
         {
@@ -357,11 +358,11 @@ public sealed class HidDeviceReader : IDisposable
                 else if (!parsed && !loggedUnrecognized)
                 {
                     loggedUnrecognized = true;
-                    AppLogger.Info($"HID received unrecognized report: model={modelType}, reportId=0x{buffer[0]:X2}, len={bytesRead}, path={path}", "HidDeviceReader");
+                    AppLogger.Info($"HID received unrecognized report: model={modelType}, reportId=0x{buffer[0]:X2}, len={bytesRead}{FormatConsumerReport(report, isG9N9NConsumerControl)} path={path}", "HidDeviceReader");
                 }
                 if (parsed)
                 {
-                    DispatchButtons(buttons);
+                    DispatchButtons(buttons, path, report, isG9N9NConsumerControl);
                 }
             }
         }
@@ -377,7 +378,10 @@ public sealed class HidDeviceReader : IDisposable
         }
     }
 
-    private void DispatchButtons(List<RemoteButton> currentButtons)
+    private static string FormatConsumerReport(ReadOnlySpan<byte> report, bool isG9N9NConsumerControl) =>
+        isG9N9NConsumerControl && report.Length <= 8 ? $" report={Convert.ToHexString(report)}" : string.Empty;
+
+    private void DispatchButtons(List<RemoteButton> currentButtons, string path, ReadOnlySpan<byte> report, bool isG9N9NConsumerControl)
     {
         var currentSet = new HashSet<RemoteButton>(currentButtons);
         var released = new List<RemoteButton>();
@@ -397,14 +401,16 @@ public sealed class HidDeviceReader : IDisposable
             }
         }
 
+        if (released.Count == 0 && pressed.Count == 0) return;
+        string details = $"reportId=0x{report[0]:X2} len={report.Length}{FormatConsumerReport(report, isG9N9NConsumerControl)} path={path}";
         foreach (var btn in released)
         {
-            AppLogger.Info($"HidDeviceReader event: {btn} Up", "HidDeviceReader");
+            AppLogger.Info($"HidDeviceReader event: {btn} Up {details}", "HidDeviceReader");
             ButtonEvent?.Invoke(btn, false);
         }
         foreach (var btn in pressed)
         {
-            AppLogger.Info($"HidDeviceReader event: {btn} Down", "HidDeviceReader");
+            AppLogger.Info($"HidDeviceReader event: {btn} Down {details}", "HidDeviceReader");
             ButtonEvent?.Invoke(btn, true);
         }
     }
