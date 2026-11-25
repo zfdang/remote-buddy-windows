@@ -1758,6 +1758,8 @@ public partial class AppIntegrationViewModel : ObservableObject
 public partial class AboutViewModel : ObservableObject
 {
     private readonly ConfigService? _config;
+    private readonly Func<WindowsDiagnosticSnapshot>? _diagnosticSnapshotProvider;
+    private readonly Action<string> _clipboardWriter;
 
     private bool _diagnosticLoggingEnabled;
     public bool DiagnosticLoggingEnabled
@@ -1783,18 +1785,34 @@ public partial class AboutViewModel : ObservableObject
     [ObservableProperty]
     private string _logDirectoryPath;
 
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasDiagnosticCopyStatus))]
+    private string _diagnosticCopyStatus = string.Empty;
+
+    [ObservableProperty]
+    private string _diagnosticCopyStatusColor = "#44FF88";
+
+    public bool HasDiagnosticCopyStatus => !string.IsNullOrEmpty(DiagnosticCopyStatus);
+
     public AboutViewModel() : this(null)
     {
     }
 
-    public AboutViewModel(ConfigService? config) : this(config, WindowsRelease.FetchAsync)
+    public AboutViewModel(ConfigService? config)
+        : this(config, WindowsRelease.FetchAsync, null, null)
     {
     }
 
-    internal AboutViewModel(ConfigService? config, Func<CancellationToken, Task<WindowsRelease>> fetchRelease)
+    internal AboutViewModel(
+        ConfigService? config,
+        Func<CancellationToken, Task<WindowsRelease>> fetchRelease,
+        Func<WindowsDiagnosticSnapshot>? diagnosticSnapshotProvider = null,
+        Action<string>? clipboardWriter = null)
     {
         _config = config;
         _fetchRelease = fetchRelease;
+        _diagnosticSnapshotProvider = diagnosticSnapshotProvider;
+        _clipboardWriter = clipboardWriter ?? WriteTextToClipboard;
         _receiveUpdateNotifications = _config?.Current.ReceiveUpdateNotifications ?? true;
         _diagnosticLoggingEnabled = _config?.Current.DiagnosticLoggingEnabled ?? AppLogger.IsEnabled;
         LogDirectoryPath = AppLogger.LogDirectory;
@@ -1829,6 +1847,72 @@ public partial class AboutViewModel : ObservableObject
     public void OpenLogFolder()
     {
         SettingsViewModel.OpenLogFolderWithPrompt();
+    }
+
+    [RelayCommand]
+    public void CopyDiagnosticSummary()
+    {
+        try
+        {
+            var snapshot = _diagnosticSnapshotProvider?.Invoke() ?? CreateFallbackDiagnosticSnapshot();
+            string payload = snapshot.BuildClipboardText();
+            _clipboardWriter(payload);
+            AppLogger.Info(snapshot.BuildAuditLog(), "AboutViewModel");
+            DiagnosticCopyStatusColor = "#44FF88";
+            DiagnosticCopyStatus = "✓ 已复制诊断信息到剪贴板，可直接粘贴发送反馈。";
+        }
+        catch (Exception ex)
+        {
+            AppLogger.Warn($"Failed to copy diagnostic summary to clipboard: {ex.Message}", "AboutViewModel");
+            DiagnosticCopyStatusColor = "#FF6666";
+            DiagnosticCopyStatus = $"复制诊断信息失败：{ex.Message}";
+        }
+    }
+
+    private WindowsDiagnosticSnapshot CreateFallbackDiagnosticSnapshot()
+    {
+        string logPath = AppLogger.CurrentLogFilePath;
+        bool logExists = System.IO.File.Exists(logPath);
+        long? logSize = logExists ? new System.IO.FileInfo(logPath).Length : null;
+        var input = _config?.Current.InputTool;
+        return new WindowsDiagnosticSnapshot(
+            AppVersion: AppVersion,
+            OsVersion: Environment.OSVersion.VersionString,
+            Architecture: Architecture,
+            IsAdministrator: BluetoothAdapterHelper.IsAdministrator(),
+            RemoteConnected: false,
+            ConnectedRemoteCount: 0,
+            RemoteModel: "none",
+            VirtualMicrophoneStatus: "unknown",
+            CableOutputStatus: "unknown",
+            EtwCaptureStatus: "unknown",
+            VoiceTool: input?.Tool.ToString() ?? "unselected",
+            VoiceTriggerMode: input?.TriggerMode.ToString() ?? "unknown",
+            VoiceShortcutName: string.IsNullOrWhiteSpace(input?.Shortcut) ? "unknown" : input.Shortcut,
+            PreferredAudioInput: string.IsNullOrWhiteSpace(input?.PreferredAudioInputDevice) ? "default" : input.PreferredAudioInputDevice,
+            RuntimeLogEnabled: DiagnosticLoggingEnabled,
+            RuntimeLogAvailable: logExists,
+            RuntimeLogPath: logPath,
+            RuntimeLogSizeBytes: logSize);
+    }
+
+    private static void WriteTextToClipboard(string text)
+    {
+        Exception? lastError = null;
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            try
+            {
+                System.Windows.Clipboard.SetDataObject(text, true);
+                return;
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+                Thread.Sleep(20);
+            }
+        }
+        throw lastError ?? new InvalidOperationException("无法访问系统剪贴板");
     }
 
     [RelayCommand]
