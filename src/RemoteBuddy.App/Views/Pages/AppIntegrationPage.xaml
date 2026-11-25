@@ -4,10 +4,26 @@
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="0,0,0,24">
             <!-- Header -->
-            <StackPanel Margin="0,0,0,20">
-                <TextBlock Text="应用集成" FontSize="22" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
-                <TextBlock Text="在特定应用中按语音键时，优先对准当前对话输入框" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,4,0,0"/>
-            </StackPanel>
+            <Grid Margin="0,0,0,20">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Margin="0,0,16,0">
+                    <TextBlock Text="应用集成" FontSize="22" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
+                    <TextBlock Text="在特定应用中按语音键时，优先对准当前对话输入框"
+                               Foreground="{StaticResource SecondaryTextBrush}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+                <Button x:Name="HeaderFaqLinkButton"
+                        Grid.Column="1"
+                        Style="{StaticResource HeaderLinkButtonStyle}"
+                        Content="应用集成与核心作用 (FAQ) ↗"
+                        VerticalAlignment="Top"
+                        Margin="0,4,0,0"
+                        Command="{Binding OpenFaqCommand}"
+                        ToolTip="https://remote.zfdang.com/faq.html#integrations"
+                        AutomationProperties.Name="应用集成与核心作用 (FAQ)"/>
+            </Grid>
 
             <!-- Introduction Card -->
             <Border Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="8" Padding="20" Margin="0,0,0,18">

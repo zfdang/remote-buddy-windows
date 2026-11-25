@@ -26,11 +26,26 @@
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="0,0,0,24">
             <!-- Page Header -->
-            <StackPanel Margin="0,0,0,16">
-                <TextBlock Text="输入法与语音工具集成" FontSize="22" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
-                <TextBlock Text="查看当前生效的语音触发方式与输入工具；如需更换或测试，请通过向导完成。"
-                           Foreground="{StaticResource SecondaryTextBrush}" Margin="0,4,0,0" TextWrapping="Wrap"/>
-            </StackPanel>
+            <Grid Margin="0,0,0,16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Margin="0,0,16,0">
+                    <TextBlock Text="输入法与语音工具集成" FontSize="22" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
+                    <TextBlock Text="查看当前生效的语音触发方式与输入工具；如需更换或测试，请通过向导完成。"
+                               Foreground="{StaticResource SecondaryTextBrush}" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                </StackPanel>
+                <Button x:Name="HeaderFaqLinkButton"
+                        Grid.Column="1"
+                        Style="{StaticResource HeaderLinkButtonStyle}"
+                        Content="输入法生态与模式转换 (FAQ) ↗"
+                        VerticalAlignment="Top"
+                        Margin="0,4,0,0"
+                        Command="{Binding OpenFaqCommand}"
+                        ToolTip="https://remote.zfdang.com/faq.html#input-methods"
+                        AutomationProperties.Name="输入法生态与模式转换 (FAQ)"/>
+            </Grid>
 
             <!-- Top Status Panels -->
             <Grid Margin="0,0,0,16">

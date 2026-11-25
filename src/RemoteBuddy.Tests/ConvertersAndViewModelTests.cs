@@ -753,4 +753,90 @@ public class ConvertersAndViewModelTests
             if (File.Exists(path)) File.Delete(path);
         }
     }
+
+    [Fact]
+    public void HeaderGuideAndFaqLinks_TargetExpectedMacOsMatchingUrls_AndRenderWithoutClipping()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-links-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new DummyBluetoothManager();
+            var opened = new List<string>();
+
+            var intVm = new IntegrationsViewModel(config) { OpenUrlAction = opened.Add };
+            using var devVm = new DevicesViewModel(config, bt) { OpenUrlAction = opened.Add };
+            var appVm = new AppIntegrationViewModel(config) { OpenUrlAction = opened.Add };
+
+            intVm.OpenFaqCommand.Execute(null);
+            devVm.OpenDeviceGuideCommand.Execute(null);
+            appVm.OpenFaqCommand.Execute(null);
+
+            Assert.Equal(
+                [
+                    "https://remote.zfdang.com/faq.html#input-methods",
+                    "https://remote.zfdang.com/device.html",
+                    "https://remote.zfdang.com/faq.html#integrations"
+                ],
+                opened);
+
+            Exception? threadEx = null;
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    var resources = new System.Windows.ResourceDictionary
+                    {
+                        ["PrimaryTextBrush"] = System.Windows.Media.Brushes.White,
+                        ["SecondaryTextBrush"] = System.Windows.Media.Brushes.Gray,
+                        ["CardBackgroundBrush"] = System.Windows.Media.Brushes.Black,
+                        ["BorderColorBrush"] = System.Windows.Media.Brushes.DarkGray,
+                        ["StringToVisibilityConverter"] = new StringToVisibilityConverter(),
+                        ["BoolToVisibilityConverter"] = new BoolToVisibilityConverter(),
+                        ["BoolToBrushConverter"] = new BoolToBrushConverter(),
+                        ["BoolToConnectionTextConverter"] = new BoolToConnectionTextConverter(),
+                        ["EqualValueToVisibilityConverter"] = new EqualValueToVisibilityConverter(),
+                        ["GainToDbTextConverter"] = new GainToDbTextConverter(),
+                        ["BatteryVisibilityConverter"] = new BatteryVisibilityConverter(),
+                        ["HeaderLinkButtonStyle"] = new System.Windows.Style(typeof(System.Windows.Controls.Button))
+                    };
+
+                    const double minContentWidth = 580;
+                    var intPage = new RemoteBuddy.App.Views.Pages.IntegrationsPage(resources) { DataContext = intVm };
+                    var devPage = new RemoteBuddy.App.Views.Pages.DevicesPage(resources) { DataContext = devVm };
+                    var appPage = new RemoteBuddy.App.Views.Pages.AppIntegrationPage(resources) { DataContext = appVm };
+
+                    foreach (var (page, button) in new (System.Windows.FrameworkElement Page, System.Windows.Controls.Button Link)[]
+                             {
+                                 (intPage, intPage.HeaderFaqLinkButton),
+                                 (devPage, devPage.HeaderDeviceGuideLinkButton),
+                                 (appPage, appPage.HeaderFaqLinkButton)
+                             })
+                    {
+                        page.Measure(new System.Windows.Size(minContentWidth, 720));
+                        page.Arrange(new System.Windows.Rect(0, 0, minContentWidth, 720));
+                        page.UpdateLayout();
+
+                        double desiredContentWidth = button.DesiredSize.Width - button.Margin.Left - button.Margin.Right;
+                        Assert.True(button.RenderSize.Width > 80, $"Expected visible header link on {page.GetType().Name}, got width {button.RenderSize.Width}");
+                        Assert.True(button.RenderSize.Width + 0.5 >= desiredContentWidth,
+                            $"{button.Name} on {page.GetType().Name} was clipped below desired width ({button.RenderSize.Width} < {desiredContentWidth}).");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    threadEx = ex;
+                }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            thread.Join();
+
+            if (threadEx != null) throw threadEx;
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
 }
