@@ -9,12 +9,23 @@
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <StackPanel>
+            <StackPanel Grid.Column="0" Margin="0,0,16,0">
                 <TextBlock Text="设备连接" FontSize="22" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
-                <TextBlock Text="管理已添加的蓝牙遥控器。点击右上角「添加新设备」通过向导配对并测试新遥控器：" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,4,0,0"/>
+                <TextBlock Text="管理已添加的蓝牙遥控器"
+                           Foreground="{StaticResource SecondaryTextBrush}" Margin="0,4,0,0" TextWrapping="Wrap"/>
             </StackPanel>
-            <Button Grid.Column="1" Content="➕ 添加新设备" Padding="14,8" Background="#007ACC" VerticalAlignment="Center"
-                    Command="{Binding AddDeviceCommand}"/>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                <Button x:Name="HeaderDeviceGuideLinkButton"
+                        Style="{StaticResource HeaderLinkButtonStyle}"
+                        Content="硬件支持与选购推荐 (FAQ) ↗"
+                        VerticalAlignment="Center"
+                        Margin="0,0,12,0"
+                        Command="{Binding OpenDeviceGuideCommand}"
+                        ToolTip="https://remote.zfdang.com/faq.html#hardware"
+                        AutomationProperties.Name="硬件支持与选购推荐 (FAQ)"/>
+                <Button Content="➕ 添加新设备" Padding="14,8" Background="#007ACC" VerticalAlignment="Center"
+                        Command="{Binding AddDeviceCommand}"/>
+            </StackPanel>
         </Grid>
 
         <!-- Connection Failure Banner -->

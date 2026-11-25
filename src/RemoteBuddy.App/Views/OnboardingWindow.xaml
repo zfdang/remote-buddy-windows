@@ -144,10 +144,14 @@
                             Background="{Binding SelectedTool, Converter={StaticResource EqualValueToBrushConverter}, ConverterParameter=WeChatInput}"/>
                     <Button Content="豆包输入法" Margin="0,0,8,8" Command="{Binding ApplyPresetCommand}" CommandParameter="DoubaoInput"
                             Background="{Binding SelectedTool, Converter={StaticResource EqualValueToBrushConverter}, ConverterParameter=DoubaoInput}"/>
-                    <Button Content="Windows 听写 (Win+H)" Margin="0,0,8,8" Command="{Binding ApplyPresetCommand}" CommandParameter="WindowsDictation"
-                            Background="{Binding SelectedTool, Converter={StaticResource EqualValueToBrushConverter}, ConverterParameter=WindowsDictation}"/>
+                    <Button Content="腾讯 Chatterfly" Margin="0,0,8,8" Command="{Binding ApplyPresetCommand}" CommandParameter="Chatterfly"
+                            Background="{Binding SelectedTool, Converter={StaticResource EqualValueToBrushConverter}, ConverterParameter=Chatterfly}"/>
                     <Button Content="Typeless" Margin="0,0,8,8" Command="{Binding ApplyPresetCommand}" CommandParameter="Typeless"
                             Background="{Binding SelectedTool, Converter={StaticResource EqualValueToBrushConverter}, ConverterParameter=Typeless}"/>
+                    <Button Content="Windows 听写 (Win+H)" Margin="0,0,8,8" Command="{Binding ApplyPresetCommand}" CommandParameter="WindowsDictation"
+                            Background="{Binding SelectedTool, Converter={StaticResource EqualValueToBrushConverter}, ConverterParameter=WindowsDictation}"/>
+                    <Button Content="其他语音工具" Margin="0,0,8,8" Command="{Binding ApplyPresetCommand}" CommandParameter="Custom"
+                            Background="{Binding SelectedTool, Converter={StaticResource EqualValueToBrushConverter}, ConverterParameter=Custom}"/>
                 </WrapPanel>
 
                 <Border Background="{StaticResource CardBackgroundBrush}" Padding="14" CornerRadius="6" Margin="0,0,0,14">
@@ -164,7 +168,7 @@
                                   Width="320" HorizontalAlignment="Left" Margin="0,0,0,10"
                                   AutomationProperties.Name="语音触发快捷键预设"/>
                         <StackPanel Margin="0,0,0,10"
-                                    Visibility="{Binding IsCustomShortcutSelected, Converter={StaticResource BoolToVisibilityConverter}}">
+                                    Visibility="{Binding ShowShortcutEditor, Converter={StaticResource BoolToVisibilityConverter}}">
                             <StackPanel Orientation="Horizontal">
                                 <TextBox Text="{Binding ShortcutText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                          Width="210" Background="#1E1E1E" Foreground="#FFF" Padding="8,5"

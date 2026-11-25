@@ -59,5 +59,32 @@
                 </Trigger>
             </Style.Triggers>
         </Style>
+
+        <!-- Header External Link Style -->
+        <Style x:Key="HeaderLinkButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="4,2"/>
+            <Setter Property="Foreground" Value="#4DA6FF"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
+                            <TextBlock x:Name="LinkText"
+                                       Text="{TemplateBinding Content}"
+                                       Foreground="{TemplateBinding Foreground}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Foreground" Value="#82C4FF"/>
+                                <Setter TargetName="LinkText" Property="TextDecorations" Value="Underline"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Application.Resources>
 </Application>

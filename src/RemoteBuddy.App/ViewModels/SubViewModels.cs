@@ -280,11 +280,16 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
         }
     }
 
+    internal Action<string> OpenUrlAction { get; set; } = AppLinks.OpenExternalUrl;
+
     [RelayCommand]
     public void AddDevice()
     {
         _openWizard?.Invoke(WizardMode.DeviceOnly);
     }
+
+    [RelayCommand]
+    public void OpenDeviceGuide() => OpenUrlAction(AppLinks.DevicesFaqUrl);
 
     [RelayCommand]
     public void DismissConnectionFeedback() => ConnectionFeedbackMessage = string.Empty;
@@ -1072,9 +1077,11 @@ public partial class IntegrationsViewModel : ObservableObject
     {
         TargetInputTool.WeChatInput => "微信输入法",
         TargetInputTool.DoubaoInput => "豆包输入法 / 客户端",
-        TargetInputTool.WindowsDictation => "Windows 语音听写 (Win+H)",
+        TargetInputTool.Chatterfly => "腾讯 Chatterfly",
         TargetInputTool.Typeless => "Typeless 智能转写",
-        _ => "自定义快捷键"
+        TargetInputTool.WindowsDictation => "Windows 语音听写 (Win+H)",
+        TargetInputTool.Custom => "其他语音工具",
+        _ => "其他语音工具"
     };
 
     public string CurrentShortcutDisplay => string.IsNullOrWhiteSpace(_config.Current.InputTool.Shortcut) ? "未配置" : _config.Current.InputTool.Shortcut;
@@ -1104,6 +1111,8 @@ public partial class IntegrationsViewModel : ObservableObject
 
     private readonly Action<WizardMode>? _openWizard;
 
+    internal Action<string> OpenUrlAction { get; set; } = AppLinks.OpenExternalUrl;
+
     public IntegrationsViewModel(ConfigService config, Action<WizardMode>? openWizard = null)
     {
         _config = config;
@@ -1113,6 +1122,9 @@ public partial class IntegrationsViewModel : ObservableObject
 
     [RelayCommand]
     public void RunWizard() => _openWizard?.Invoke(WizardMode.Integration);
+
+    [RelayCommand]
+    public void OpenFaq() => OpenUrlAction(AppLinks.InputMethodsFaqUrl);
 
     public void Reload()
     {
@@ -1548,9 +1560,11 @@ public partial class GeneralViewModel : ObservableObject, IDisposable
             {
                 TargetInputTool.WeChatInput => "微信输入法",
                 TargetInputTool.DoubaoInput => "豆包输入法",
-                TargetInputTool.WindowsDictation => "Windows 听写",
+                TargetInputTool.Chatterfly => "腾讯 Chatterfly",
                 TargetInputTool.Typeless => "Typeless",
-                _ => "自定义工具"
+                TargetInputTool.WindowsDictation => "Windows 听写",
+                TargetInputTool.Custom => "其他语音工具",
+                _ => "其他语音工具"
             };
             string mode = tool.TriggerMode == VoiceTriggerMode.HoldToTalk ? "长按说话" : "点按切换";
             return $"{toolName} ({mode} · {tool.Shortcut})";
@@ -1696,11 +1710,16 @@ public partial class AppIntegrationViewModel : ObservableObject
 
     public ObservableCollection<AppIntegrationItemViewModel> Applications { get; } = new();
 
+    internal Action<string> OpenUrlAction { get; set; } = AppLinks.OpenExternalUrl;
+
     public AppIntegrationViewModel(ConfigService config)
     {
         _config = config;
         LoadIntegrations();
     }
+
+    [RelayCommand]
+    public void OpenFaq() => OpenUrlAction(AppLinks.ApplicationIntegrationFaqUrl);
 
     public void LoadIntegrations()
     {
@@ -1916,33 +1935,11 @@ public partial class AboutViewModel : ObservableObject
     }
 
     [RelayCommand]
-    public void OpenWebsite()
-    {
-        try
-        {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("https://remote.zfdang.com") { UseShellExecute = true });
-        }
-        catch { }
-    }
+    public void OpenWebsite() => AppLinks.OpenExternalUrl(AppLinks.WebsiteUrl);
 
     [RelayCommand]
-    public void OpenGitHub()
-    {
-        try
-        {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("https://github.com/zfdang/remote-buddy-windows") { UseShellExecute = true });
-        }
-        catch { }
-    }
+    public void OpenGitHub() => AppLinks.OpenExternalUrl(AppLinks.GitHubUrl);
 
     [RelayCommand]
-    public void OpenUrl(string? url)
-    {
-        if (string.IsNullOrEmpty(url)) return;
-        try
-        {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
-        }
-        catch { }
-    }
+    public void OpenUrl(string? url) => AppLinks.OpenExternalUrl(url);
 }

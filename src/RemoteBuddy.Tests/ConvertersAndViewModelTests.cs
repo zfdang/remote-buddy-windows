@@ -87,36 +87,45 @@ public class ConvertersAndViewModelTests
     }
 
     [Fact]
-    public void IntegrationWizard_UpdatesTriggerModeAndShortcut_WhenContinuingToVerification()
+    public void IntegrationWizard_StagesVerificationConfigWithoutPersisting_UntilCompleted()
     {
         string path = Path.Combine(Path.GetTempPath(), $"vib-int-{Guid.NewGuid():N}.json");
-        var config = new ConfigService(path);
-        using var wizard = new OnboardingViewModel(config, new DummyBluetoothManager(), WizardMode.Integration);
-        var overview = new IntegrationsViewModel(config);
+        try
+        {
+            var config = new ConfigService(path);
+            config.Update(cfg =>
+            {
+                cfg.InputTool.Tool = TargetInputTool.WeChatInput;
+                cfg.InputTool.TriggerMode = VoiceTriggerMode.HoldToTalk;
+                cfg.InputTool.Shortcut = "Ctrl+F5";
+            });
 
-        wizard.ApplyPreset("WindowsDictation");
-        Assert.Equal("Win+H", wizard.ShortcutText);
-        Assert.True(wizard.IsClickToToggle);
-        Assert.NotEqual(TargetInputTool.WindowsDictation, config.Current.InputTool.Tool);
+            var bt = new DummyBluetoothManager();
+            using var wizard = new OnboardingViewModel(config, bt, WizardMode.Integration);
+            var overview = new IntegrationsViewModel(config);
 
-        wizard.IsHoldToTalk = true;
-        wizard.ShortcutText = "Ctrl+F5";
-        wizard.NextStep();
+            wizard.ApplyPreset("Chatterfly");
+            wizard.NextStep();
 
-        Assert.Equal(WizardStep.TranscriptionVerify, wizard.CurrentWizardStep);
-        Assert.Equal("按住说话", overview.CurrentTriggerModeDisplay);
-        Assert.Equal("Ctrl+F5", overview.CurrentShortcutDisplay);
+            // Entering verification validates and stages temporary config without overwriting saved config
+            Assert.Equal(WizardStep.TranscriptionVerify, wizard.CurrentWizardStep);
+            Assert.Equal(TargetInputTool.Chatterfly, wizard.ActiveVerificationInputTool?.Tool);
+            Assert.Equal("Ctrl+Shift+V", wizard.ActiveVerificationInputTool?.Shortcut);
+            Assert.Equal(TargetInputTool.WeChatInput, config.Current.InputTool.Tool);
+            Assert.Equal("微信输入法", overview.CurrentToolDisplayName);
+            Assert.Equal("Ctrl+F5", overview.CurrentShortcutDisplay);
 
-        wizard.PreviousStep();
-        wizard.IsClickToToggle = true;
-        wizard.NextStep();
-        overview.Reload();
-
-        var saved = new ConfigService(path).Current.InputTool;
-        Assert.Equal(TargetInputTool.WindowsDictation, saved.Tool);
-        Assert.Equal(VoiceTriggerMode.ClickToToggle, saved.TriggerMode);
-        Assert.Equal("Ctrl+F5", saved.Shortcut);
-        Assert.Equal("单击切换", overview.CurrentTriggerModeDisplay);
+            // Simulate user failing/canceling verification before completion -> saved config stays intact
+            wizard.Dispose();
+            var reloadedAfterCancel = new ConfigService(path).Current.InputTool;
+            Assert.Equal(TargetInputTool.WeChatInput, reloadedAfterCancel.Tool);
+            Assert.Equal(VoiceTriggerMode.HoldToTalk, reloadedAfterCancel.TriggerMode);
+            Assert.Equal("Ctrl+F5", reloadedAfterCancel.Shortcut);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
     }
 
     [Fact]
@@ -750,6 +759,187 @@ public class ConvertersAndViewModelTests
         {
             VirtualAudioAuditor.StatusOverride = prevDriverOverride;
             VirtualAudioAuditor.CableOutputOverride = prevOutputOverride;
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void TargetInputTool_OrderAndDisplayNames_MatchExpectedPresets()
+    {
+        Assert.Equal(
+            [
+                TargetInputTool.WeChatInput,
+                TargetInputTool.DoubaoInput,
+                TargetInputTool.Chatterfly,
+                TargetInputTool.Typeless,
+                TargetInputTool.WindowsDictation,
+                TargetInputTool.Custom
+            ],
+            Enum.GetValues<TargetInputTool>());
+
+        var converter = new EnumToDisplayNameConverter();
+        Assert.Equal("腾讯 Chatterfly", converter.Convert(TargetInputTool.Chatterfly, typeof(string), null, CultureInfo.InvariantCulture));
+        Assert.Equal("其他语音工具", converter.Convert(TargetInputTool.Custom, typeof(string), null, CultureInfo.InvariantCulture));
+    }
+
+    [Fact]
+    public void OnboardingViewModel_ChatterflyAndCustomTool_ConfigureAndVerifyEndToEnd()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-tools-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new DummyBluetoothManager();
+            using var vm = new OnboardingViewModel(config, bt, WizardMode.Integration);
+
+            // 1. Chatterfly preset
+            vm.ApplyPreset("Chatterfly");
+            Assert.Equal(TargetInputTool.Chatterfly, vm.SelectedTool);
+            Assert.Equal("Ctrl+Shift+V", vm.ShortcutText);
+            Assert.Equal(VoiceTriggerMode.HoldToTalk, vm.TriggerMode);
+            Assert.False(vm.ShowShortcutEditor);
+            Assert.Contains("Chatterfly", vm.InputToolSetupInstructions);
+
+            // 2. Other voice tool (Custom) preset exposes shortcut editor immediately & verifies transcription
+            vm.ApplyPreset("Custom");
+            Assert.Equal(TargetInputTool.Custom, vm.SelectedTool);
+            Assert.True(vm.ShowShortcutEditor);
+            vm.ShortcutText = "Ctrl+Alt+F9";
+            vm.NextStep();
+            Assert.Equal(WizardStep.TranscriptionVerify, vm.CurrentWizardStep);
+            Assert.Contains("Ctrl+Alt+F9", vm.TranscriptionInstructions);
+
+            // Must require both voice session and recognized text in the verification box
+            vm.TranscriptionTestText = "你好";
+            vm.IsTranscriptionVerified = true;
+            vm.NextStep();
+            Assert.Equal(WizardStep.TranscriptionVerify, vm.CurrentWizardStep);
+            Assert.Contains("完成一次实际语音转写", vm.ValidationError);
+
+            bt.RaiseVoiceSessionEnded();
+            vm.NextStep();
+            Assert.Equal(WizardStep.Complete, vm.CurrentWizardStep);
+
+            // Re-entering TranscriptionVerify clears stale text and requires fresh text in the new round
+            vm.PreviousStep();
+            Assert.Equal(WizardStep.TranscriptionVerify, vm.CurrentWizardStep);
+            Assert.Equal(string.Empty, vm.TranscriptionTestText);
+            Assert.False(vm.IsTranscriptionVerified);
+            bt.RaiseVoiceSessionEnded();
+            vm.IsTranscriptionVerified = true;
+            vm.NextStep();
+            Assert.Equal(WizardStep.TranscriptionVerify, vm.CurrentWizardStep);
+            Assert.Contains("转写文本框内容不能为空", vm.ValidationError);
+
+            vm.TranscriptionTestText = "第二次新转写";
+            vm.NextStep();
+            Assert.Equal(WizardStep.Complete, vm.CurrentWizardStep);
+
+            vm.Complete();
+            Assert.True(vm.IsCompleted);
+
+            var saved = new ConfigService(path).Current.InputTool;
+            Assert.Equal(TargetInputTool.Custom, saved.Tool);
+            Assert.Equal("Ctrl+Alt+F9", saved.Shortcut);
+
+            var intVm = new IntegrationsViewModel(config);
+            Assert.Equal("其他语音工具", intVm.CurrentToolDisplayName);
+            using var genVm = new GeneralViewModel(config, bt, () => { }, _ => { });
+            Assert.Contains("其他语音工具", genVm.IntegrationSummary);
+
+            config.Update(cfg => cfg.InputTool.Tool = TargetInputTool.Chatterfly);
+            intVm.Reload();
+            Assert.Equal("腾讯 Chatterfly", intVm.CurrentToolDisplayName);
+            Assert.Contains("腾讯 Chatterfly", genVm.IntegrationSummary);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void HeaderGuideAndFaqLinks_TargetExpectedMacOsMatchingUrls_AndRenderWithoutClipping()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-links-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new DummyBluetoothManager();
+            var opened = new List<string>();
+
+            var intVm = new IntegrationsViewModel(config) { OpenUrlAction = opened.Add };
+            using var devVm = new DevicesViewModel(config, bt) { OpenUrlAction = opened.Add };
+            var appVm = new AppIntegrationViewModel(config) { OpenUrlAction = opened.Add };
+
+            intVm.OpenFaqCommand.Execute(null);
+            devVm.OpenDeviceGuideCommand.Execute(null);
+            appVm.OpenFaqCommand.Execute(null);
+
+            Assert.Equal(
+                [
+                    "https://remote.zfdang.com/faq.html#input-methods",
+                    "https://remote.zfdang.com/faq.html#hardware",
+                    "https://remote.zfdang.com/faq.html#integrations"
+                ],
+                opened);
+
+            Exception? threadEx = null;
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    var resources = new System.Windows.ResourceDictionary
+                    {
+                        ["PrimaryTextBrush"] = System.Windows.Media.Brushes.White,
+                        ["SecondaryTextBrush"] = System.Windows.Media.Brushes.Gray,
+                        ["CardBackgroundBrush"] = System.Windows.Media.Brushes.Black,
+                        ["BorderColorBrush"] = System.Windows.Media.Brushes.DarkGray,
+                        ["StringToVisibilityConverter"] = new StringToVisibilityConverter(),
+                        ["BoolToVisibilityConverter"] = new BoolToVisibilityConverter(),
+                        ["BoolToBrushConverter"] = new BoolToBrushConverter(),
+                        ["BoolToConnectionTextConverter"] = new BoolToConnectionTextConverter(),
+                        ["EqualValueToVisibilityConverter"] = new EqualValueToVisibilityConverter(),
+                        ["GainToDbTextConverter"] = new GainToDbTextConverter(),
+                        ["BatteryVisibilityConverter"] = new BatteryVisibilityConverter(),
+                        ["HeaderLinkButtonStyle"] = new System.Windows.Style(typeof(System.Windows.Controls.Button))
+                    };
+
+                    const double minContentWidth = 580;
+                    var intPage = new RemoteBuddy.App.Views.Pages.IntegrationsPage(resources) { DataContext = intVm };
+                    var devPage = new RemoteBuddy.App.Views.Pages.DevicesPage(resources) { DataContext = devVm };
+                    var appPage = new RemoteBuddy.App.Views.Pages.AppIntegrationPage(resources) { DataContext = appVm };
+
+                    foreach (var (page, button) in new (System.Windows.FrameworkElement Page, System.Windows.Controls.Button Link)[]
+                             {
+                                 (intPage, intPage.HeaderFaqLinkButton),
+                                 (devPage, devPage.HeaderDeviceGuideLinkButton),
+                                 (appPage, appPage.HeaderFaqLinkButton)
+                             })
+                    {
+                        page.Measure(new System.Windows.Size(minContentWidth, 720));
+                        page.Arrange(new System.Windows.Rect(0, 0, minContentWidth, 720));
+                        page.UpdateLayout();
+
+                        double desiredContentWidth = button.DesiredSize.Width - button.Margin.Left - button.Margin.Right;
+                        Assert.True(button.RenderSize.Width > 80, $"Expected visible header link on {page.GetType().Name}, got width {button.RenderSize.Width}");
+                        Assert.True(button.RenderSize.Width + 0.5 >= desiredContentWidth,
+                            $"{button.Name} on {page.GetType().Name} was clipped below desired width ({button.RenderSize.Width} < {desiredContentWidth}).");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    threadEx = ex;
+                }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            thread.Join();
+
+            if (threadEx != null) throw threadEx;
+        }
+        finally
+        {
             if (File.Exists(path)) File.Delete(path);
         }
     }

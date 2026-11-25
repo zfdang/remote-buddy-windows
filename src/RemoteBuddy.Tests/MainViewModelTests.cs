@@ -12,6 +12,34 @@ namespace RemoteBuddy.Tests;
 
 public class MainViewModelTests
 {
+    private sealed class FakeUsbKeyboardSender : IUsbKeyboardSender
+    {
+        public List<string> DownCalls { get; } = [];
+        public List<string> ClickCalls { get; } = [];
+        public int ReleaseCalls { get; private set; }
+        public bool NextResult { get; set; } = true;
+
+        public bool SendDown(string shortcut)
+        {
+            DownCalls.Add(shortcut);
+            return NextResult;
+        }
+
+        public bool Release()
+        {
+            ReleaseCalls++;
+            return NextResult;
+        }
+
+        public bool SendClick(string shortcut)
+        {
+            ClickCalls.Add(shortcut);
+            return NextResult;
+        }
+
+        public void Dispose() { }
+    }
+
     private sealed class TestBluetoothManager : IBluetoothManager
     {
         public bool IsScanning { get; private set; }
@@ -102,7 +130,11 @@ public class MainViewModelTests
         {
             var config = new ConfigService(path);
             var bt = new TestBluetoothManager();
-            using var vm = new MainViewModel(config, bt);
+            using var vm = new MainViewModel(config, bt)
+            {
+                IsAdministratorForTest = () => true,
+                UsbKeyboardForTest = new FakeUsbKeyboardSender()
+            };
 
             Assert.Equal("General", vm.ActivePageName);
             Assert.False(vm.IsConnected);
@@ -132,7 +164,11 @@ public class MainViewModelTests
         {
             var config = new ConfigService(path);
             var bt = new TestBluetoothManager();
-            using var vm = new MainViewModel(config, bt);
+            using var vm = new MainViewModel(config, bt)
+            {
+                IsAdministratorForTest = () => true,
+                UsbKeyboardForTest = new FakeUsbKeyboardSender()
+            };
 
             vm.Navigate("General");
             Assert.Equal("General", vm.ActivePageName);
@@ -182,7 +218,11 @@ public class MainViewModelTests
             bt.IsReady = true;
             bt.ConnectedDeviceAddress = addr;
             bt.ReadyAddresses.Add(addr);
-            using var vm = new MainViewModel(config, bt);
+            using var vm = new MainViewModel(config, bt)
+            {
+                IsAdministratorForTest = () => true,
+                UsbKeyboardForTest = new FakeUsbKeyboardSender()
+            };
 
             vm.HandleDeviceRemoval(new IntPtr(0x1234));
             Assert.Equal("General", vm.ActivePageName);
@@ -216,7 +256,11 @@ public class MainViewModelTests
                 VoiceButtonMode = G9N9NVoiceButtonMode.SmartToggle
             };
 
-            using var vm = new MainViewModel(config, bt);
+            using var vm = new MainViewModel(config, bt)
+            {
+                IsAdministratorForTest = () => true,
+                UsbKeyboardForTest = new FakeUsbKeyboardSender()
+            };
             bt.RaiseConnectionStatusChanged(true, "Chromecast Remote");
 
             Assert.Equal(G9N9NVoiceButtonMode.HoldToTalk, bt.VoiceButtonMode);
@@ -251,7 +295,11 @@ public class MainViewModelTests
                 ConnectedDeviceAddress = 0x4754514C6FCC
             };
 
-            using var vm = new MainViewModel(config, bt);
+            using var vm = new MainViewModel(config, bt)
+            {
+                IsAdministratorForTest = () => true,
+                UsbKeyboardForTest = new FakeUsbKeyboardSender()
+            };
 
             // Press voice button from active remote (ETW / direct stream)
             vm.HandleRawButtonEvent(IntPtr.Zero, RemoteButton.Voice, true);
@@ -295,7 +343,11 @@ public class MainViewModelTests
                 ConnectedDeviceAddress = 0x4754514C6FCC
             };
 
-            using var vm = new MainViewModel(config, bt);
+            using var vm = new MainViewModel(config, bt)
+            {
+                IsAdministratorForTest = () => true,
+                UsbKeyboardForTest = new FakeUsbKeyboardSender()
+            };
             vm.Navigate("Mapping");
             vm.MappingVm.SelectedDevice = xiaomi; // Viewing Xiaomi in UI
 
@@ -351,7 +403,11 @@ public class MainViewModelTests
                 ConnectedDeviceAddress = 0x4754514C6FCC
             };
 
-            using var vm = new MainViewModel(config, bt);
+            using var vm = new MainViewModel(config, bt)
+            {
+                IsAdministratorForTest = () => true,
+                UsbKeyboardForTest = new FakeUsbKeyboardSender()
+            };
 
             // Start onboarding for Xiaomi
             var onboardingVm = new OnboardingViewModel(config, bt, WizardMode.DeviceOnly);
@@ -403,7 +459,11 @@ public class MainViewModelTests
                 ConnectedDeviceName = xiaomi.Name
             };
 
-            using var vm = new MainViewModel(config, bt);
+            using var vm = new MainViewModel(config, bt)
+            {
+                IsAdministratorForTest = () => true,
+                UsbKeyboardForTest = new FakeUsbKeyboardSender()
+            };
 
             // Initially Xiaomi is selected
             Assert.Equal(xiaomi.Id, config.Current.SelectedDeviceId);
@@ -630,7 +690,11 @@ public class MainViewModelTests
             config.Current.Devices.Add(new RemoteDevice { Id = "A", BluetoothAddress = remoteA, Name = "Remote A" });
             config.Current.Devices.Add(new RemoteDevice { Id = "B", BluetoothAddress = remoteB, Name = "Remote B" });
 
-            using var vm = new MainViewModel(config, bt);
+            using var vm = new MainViewModel(config, bt)
+            {
+                IsAdministratorForTest = () => true,
+                UsbKeyboardForTest = new FakeUsbKeyboardSender()
+            };
 
             bt.RaiseVoiceSessionStarted(remoteB);
             Assert.True(vm.IsVoiceActive);
@@ -670,7 +734,11 @@ public class MainViewModelTests
             config.Current.Devices.Add(new RemoteDevice { Id = "A", BluetoothAddress = remoteA, Name = "Remote A" });
             config.Current.Devices.Add(new RemoteDevice { Id = "B", BluetoothAddress = remoteB, Name = "Remote B" });
 
-            using var vm = new MainViewModel(config, bt);
+            using var vm = new MainViewModel(config, bt)
+            {
+                IsAdministratorForTest = () => true,
+                UsbKeyboardForTest = new FakeUsbKeyboardSender()
+            };
             bt.RaiseVoiceSessionStarted(remoteB);
             Assert.True(vm.IsVoiceActive);
 
@@ -698,7 +766,11 @@ public class MainViewModelTests
             var devB = new RemoteDevice { Id = "B", BluetoothAddress = remoteB, Name = "Remote B" };
             config.Current.Devices.Add(devB);
 
-            using var vm = new MainViewModel(config, bt);
+            using var vm = new MainViewModel(config, bt)
+            {
+                IsAdministratorForTest = () => true,
+                UsbKeyboardForTest = new FakeUsbKeyboardSender()
+            };
             using var onboarding = new OnboardingViewModel(config, bt, WizardMode.DeviceOnly)
             {
                 SelectedDevice = devB,
@@ -1001,7 +1073,11 @@ public class MainViewModelTests
             var config = new ConfigService(path);
             var bt = new TestBluetoothManager { IsConnected = true, IsReady = true, ConnectedDeviceAddress = 0x112233445566 };
             bt.ReadyAddresses.Add(bt.ConnectedDeviceAddress);
-            using var vm = new MainViewModel(config, bt);
+            using var vm = new MainViewModel(config, bt)
+            {
+                IsAdministratorForTest = () => true,
+                UsbKeyboardForTest = new FakeUsbKeyboardSender()
+            };
 
             Assert.False(vm.HasWarningBanner);
             bt.RaiseAudioOutputFailed(bt.ConnectedDeviceAddress, "CABLE Input unavailable");
@@ -1028,7 +1104,11 @@ public class MainViewModelTests
         {
             var config = new ConfigService(path);
             var bt = new TestBluetoothManager();
-            using var vm = new MainViewModel(config, bt);
+            using var vm = new MainViewModel(config, bt)
+            {
+                IsAdministratorForTest = () => true,
+                UsbKeyboardForTest = new FakeUsbKeyboardSender()
+            };
 
             Assert.False(vm.HasWarningBanner);
             Assert.Equal(EtwCaptureStatus.Idle, vm.EtwCaptureStatus);
@@ -1071,7 +1151,11 @@ public class MainViewModelTests
             config.Current.SelectedDeviceId = dev1.Id;
 
             var bt = new TestBluetoothManager();
-            using var vm = new MainViewModel(config, bt);
+            using var vm = new MainViewModel(config, bt)
+            {
+                IsAdministratorForTest = () => true,
+                UsbKeyboardForTest = new FakeUsbKeyboardSender()
+            };
             Assert.Equal(2, vm.MappingVm.Devices.Count);
             Assert.Equal("dev1", vm.MappingVm.SelectedDevice?.Id);
 
@@ -1236,7 +1320,11 @@ public class MainViewModelTests
             ushort[] excluded = [0x0038, 0x0039, 0x003A, 0x003B, 0x003C, 0x003D, 0x003E, 0x003F, 0x0040];
             bt.EtwFilters[g9n9n.BluetoothAddress] = new EtwAttributeFilter(0x001F, 0x002B, excluded);
 
-            using var vm = new MainViewModel(config, bt);
+            using var vm = new MainViewModel(config, bt)
+            {
+                IsAdministratorForTest = () => true,
+                UsbKeyboardForTest = new FakeUsbKeyboardSender()
+            };
             vm.RefreshInputSources();
             var initialSources = vm.EtwSourcesForTest;
             var initialG9 = Assert.Single(initialSources, s => s.Address == g9n9n.BluetoothAddress);
@@ -1272,7 +1360,11 @@ public class MainViewModelTests
         {
             var config = new ConfigService(path);
             var bt = new TestBluetoothManager();
-            using var vm = new MainViewModel(config, bt);
+            using var vm = new MainViewModel(config, bt)
+            {
+                IsAdministratorForTest = () => true,
+                UsbKeyboardForTest = new FakeUsbKeyboardSender()
+            };
 
             Assert.False(File.Exists(path));
             bool initialTray = vm.GeneralVm.MinimizeToTrayOnClose;
@@ -1311,5 +1403,217 @@ public class MainViewModelTests
     public void StartupService_ExtractExecutablePath_ParsesQuotedAndUnquotedPaths(string regValue, string? expectedPath)
     {
         Assert.Equal(expectedPath, RemoteBuddy.Platform.Windows.Services.StartupService.ExtractExecutablePath(regValue));
+    }
+
+    [Fact]
+    public void MainViewModel_UsesOnboardingVerificationTriggerMode_WithoutOverwritingSavedConfig()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-onb-temp-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            config.Update(cfg =>
+            {
+                cfg.InputTool.Tool = TargetInputTool.WeChatInput;
+                cfg.InputTool.TriggerMode = VoiceTriggerMode.HoldToTalk;
+                cfg.InputTool.Shortcut = "Ctrl+F5";
+                cfg.Devices.Add(new RemoteDevice { Id = "dev1", BluetoothAddress = 0x112233445566, Name = "Xiaomi Remote" });
+                cfg.SelectedDeviceId = "dev1";
+            });
+
+            var bt = new TestBluetoothManager
+            {
+                IsConnected = true,
+                IsReady = true,
+                ConnectedDeviceAddress = 0x112233445566
+            };
+
+            using var vm = new MainViewModel(config, bt)
+            {
+                IsAdministratorForTest = () => true,
+                UsbKeyboardForTest = new FakeUsbKeyboardSender()
+            };
+            var dev = config.Current.Devices[0];
+            using var onboarding = new OnboardingViewModel(config, bt, WizardMode.Integration)
+            {
+                SelectedDevice = dev
+            };
+            onboarding.ApplyPreset("WindowsDictation"); // ClickToToggle + Win+H
+            onboarding.NextStep();
+            Assert.Equal(WizardStep.TranscriptionVerify, onboarding.CurrentWizardStep);
+
+            vm.ActiveOnboardingVm = onboarding;
+
+            // Raw voice release must NOT stop voice session when staged verification mode is ClickToToggle
+            vm.HandleRawButtonEvent(IntPtr.Zero, RemoteButton.Voice, true);
+            vm.HandleRawButtonEvent(IntPtr.Zero, RemoteButton.Voice, false);
+            Assert.Equal(1, bt.StartVoiceSessionCount);
+            Assert.Equal(0, bt.StopVoiceSessionCount);
+
+            // Saved config remains untouched before completion
+            Assert.Equal(TargetInputTool.WeChatInput, config.Current.InputTool.Tool);
+            Assert.Equal(VoiceTriggerMode.HoldToTalk, config.Current.InputTool.TriggerMode);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData(TargetInputTool.WeChatInput, VoiceTriggerMode.HoldToTalk, "Ctrl+F5")]
+    [InlineData(TargetInputTool.DoubaoInput, VoiceTriggerMode.HoldToTalk, "RAlt")]
+    [InlineData(TargetInputTool.Chatterfly, VoiceTriggerMode.HoldToTalk, "Ctrl+Shift+V")]
+    [InlineData(TargetInputTool.Typeless, VoiceTriggerMode.HoldToTalk, "Ctrl+Alt+V")]
+    [InlineData(TargetInputTool.WindowsDictation, VoiceTriggerMode.ClickToToggle, "Win+H")]
+    [InlineData(TargetInputTool.Custom, VoiceTriggerMode.HoldToTalk, "Ctrl+Alt+F9")]
+    public void VoiceSession_AllInputTools_SendAndReleaseViaUsbIpKeyboard(
+        TargetInputTool tool,
+        VoiceTriggerMode triggerMode,
+        string shortcut)
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-usbip-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            config.Update(cfg =>
+            {
+                cfg.InputTool.Tool = tool;
+                cfg.InputTool.TriggerMode = triggerMode;
+                cfg.InputTool.Shortcut = shortcut;
+            });
+
+            var bt = new TestBluetoothManager
+            {
+                IsConnected = true,
+                IsReady = true,
+                ConnectedDeviceAddress = 0x112233445566
+            };
+            bt.ReadyAddresses.Add(bt.ConnectedDeviceAddress);
+
+            var fakeUsb = new FakeUsbKeyboardSender();
+            using var vm = new MainViewModel(config, bt)
+            {
+                IsAdministratorForTest = () => true,
+                UsbKeyboardForTest = fakeUsb
+            };
+
+            bt.RaiseVoiceSessionStarted(bt.ConnectedDeviceAddress);
+            bt.RaiseVoiceSessionEnded(bt.ConnectedDeviceAddress);
+
+            if (triggerMode == VoiceTriggerMode.HoldToTalk)
+            {
+                Assert.Equal([shortcut], fakeUsb.DownCalls);
+                Assert.Equal(1, fakeUsb.ReleaseCalls);
+                Assert.Empty(fakeUsb.ClickCalls);
+            }
+            else
+            {
+                Assert.Equal([shortcut, shortcut], fakeUsb.ClickCalls);
+                Assert.Empty(fakeUsb.DownCalls);
+                Assert.Equal(0, fakeUsb.ReleaseCalls);
+            }
+            Assert.False(vm.HasWarningBanner);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void VoiceSession_WithoutAdministrator_ShowsUsbIpElevationBanner()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-usbip-noadmin-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            config.Update(cfg =>
+            {
+                cfg.InputTool.Tool = TargetInputTool.Chatterfly;
+                cfg.InputTool.TriggerMode = VoiceTriggerMode.HoldToTalk;
+                cfg.InputTool.Shortcut = "Ctrl+Shift+V";
+            });
+
+            var bt = new TestBluetoothManager
+            {
+                IsConnected = true,
+                IsReady = true,
+                ConnectedDeviceAddress = 0x112233445566
+            };
+            bt.ReadyAddresses.Add(bt.ConnectedDeviceAddress);
+
+            var fakeUsb = new FakeUsbKeyboardSender();
+            using var vm = new MainViewModel(config, bt)
+            {
+                IsAdministratorForTest = () => false,
+                UsbKeyboardForTest = fakeUsb
+            };
+
+            bt.RaiseVoiceSessionStarted(bt.ConnectedDeviceAddress);
+            bt.RaiseVoiceSessionEnded(bt.ConnectedDeviceAddress);
+
+            Assert.Empty(fakeUsb.DownCalls);
+            Assert.Equal(0, fakeUsb.ReleaseCalls);
+            Assert.True(vm.HasWarningBanner);
+            Assert.Contains("管理员权限", vm.WarningBannerMessage);
+            Assert.Equal("以管理员身份重启", vm.WarningBannerActionText);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void OnboardingVerification_WhenUsbIpShortcutFails_BlocksProgressionAndShowsError()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-onb-fail-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var dev = new RemoteDevice { Id = "dev1", BluetoothAddress = 0x112233445566, Name = "Xiaomi Remote" };
+            config.Current.Devices.Add(dev);
+            config.Current.SelectedDeviceId = dev.Id;
+
+            var bt = new TestBluetoothManager
+            {
+                IsConnected = true,
+                IsReady = true,
+                ConnectedDeviceAddress = dev.BluetoothAddress
+            };
+            bt.ReadyAddresses.Add(dev.BluetoothAddress);
+
+            var fakeUsb = new FakeUsbKeyboardSender();
+            using var vm = new MainViewModel(config, bt)
+            {
+                IsAdministratorForTest = () => false,
+                UsbKeyboardForTest = fakeUsb
+            };
+            using var onboarding = new OnboardingViewModel(config, bt, WizardMode.Integration)
+            {
+                SelectedDevice = dev
+            };
+            onboarding.ApplyPreset("Chatterfly");
+            onboarding.NextStep();
+            Assert.Equal(WizardStep.TranscriptionVerify, onboarding.CurrentWizardStep);
+
+            vm.ActiveOnboardingVm = onboarding;
+            bt.RaiseVoiceSessionStarted(dev.BluetoothAddress);
+            bt.RaiseVoiceSessionEnded(dev.BluetoothAddress);
+
+            Assert.Contains("管理员权限", onboarding.ValidationError);
+
+            onboarding.TranscriptionTestText = "手动输入";
+            onboarding.IsTranscriptionVerified = true;
+            onboarding.NextStep();
+
+            Assert.Equal(WizardStep.TranscriptionVerify, onboarding.CurrentWizardStep);
+            Assert.Contains("管理员权限", onboarding.ValidationError);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
     }
 }

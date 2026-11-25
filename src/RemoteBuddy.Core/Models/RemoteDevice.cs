@@ -283,8 +283,9 @@ public enum TargetInputTool
 {
     WeChatInput,
     DoubaoInput,
-    WindowsDictation,
+    Chatterfly,
     Typeless,
+    WindowsDictation,
     Custom
 }
 
