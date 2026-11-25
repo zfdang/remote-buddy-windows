@@ -148,4 +148,41 @@ public class RemoteVoiceKeyGuardTests
         }
         finally { Marshal.FreeHGlobal(packet); }
     }
+
+    [Fact]
+    public void UsbF5Hold_AllowsInitialVirtualCtrlF5_BlocksRemoteF5RepeatsAndRelease_UntilCleared()
+    {
+        bool leftCtrlDown = false;
+        using var guard = new RemoteVoiceKeyGuard(() => true)
+        {
+            IsSuppressionEnabled = false,
+            IsKeyDownForTest = vk => vk == NativeInputSender.VK_LCONTROL && leftCtrlDown
+        };
+        guard.BeginUsbShortcutHold("Ctrl+F5", isHoldToTalk: true);
+
+        var callback = typeof(RemoteVoiceKeyGuard).GetMethod("OnKeyboard", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        IntPtr packet = Marshal.AllocHGlobal(24);
+        try
+        {
+            for (int i = 0; i < 24; i++) Marshal.WriteByte(packet, i, 0);
+            Marshal.WriteInt32(packet, 0, 0x74);
+
+            // Physical RC003 F5 arriving before USB/IP Ctrl goes down must be blocked without consuming the permit
+            Assert.Equal((IntPtr)1, (IntPtr)callback.Invoke(guard, [0, (IntPtr)0x100, packet])!);
+
+            // USB/IP Ctrl+F5 press (LCtrl held) is permitted once
+            leftCtrlDown = true;
+            Assert.NotEqual((IntPtr)1, (IntPtr)callback.Invoke(guard, [0, (IntPtr)0x100, packet])!);
+
+            // Subsequent RC003 F5 repeats and premature RC003 F5 key-up are blocked
+            Assert.Equal((IntPtr)1, (IntPtr)callback.Invoke(guard, [0, (IntPtr)0x100, packet])!);
+            Assert.Equal((IntPtr)1, (IntPtr)callback.Invoke(guard, [0, (IntPtr)0x100, packet])!);
+            Assert.Equal((IntPtr)1, (IntPtr)callback.Invoke(guard, [0, (IntPtr)0x101, packet])!);
+
+            // Clearing guard at session end allows USB/IP F5 release through
+            guard.Clear();
+            Assert.NotEqual((IntPtr)1, (IntPtr)callback.Invoke(guard, [0, (IntPtr)0x101, packet])!);
+        }
+        finally { Marshal.FreeHGlobal(packet); }
+    }
 }

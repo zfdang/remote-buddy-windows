@@ -21,10 +21,38 @@ public sealed class RemoteVoiceKeyGuard(Func<bool> voiceSessionActive) : IDispos
     private int _blockedDowns;
     private int _blockedUps;
     private volatile bool _isSuppressionEnabled = true;
+    private ushort[] _requiredModifierVks = [];
+    private int _allowedUsbF5Downs;
+    private int _allowedUsbF5Ups;
+
+    internal Func<ushort, bool> IsKeyDownForTest { get; set; } = NativeInputSender.IsKeyPhysicallyDown;
 
     public void BeginShortcutHold(string shortcut)
     {
-        _ownsF5 = NativeInputSender.TryParseShortcut(shortcut, out _, out var key) && key == 0x74;
+        BeginShortcutHoldCore(shortcut, allowedUsbDowns: 0, allowedUsbUps: 0);
+    }
+
+    public void BeginUsbShortcutHold(string shortcut, bool isHoldToTalk)
+    {
+        BeginShortcutHoldCore(shortcut, allowedUsbDowns: 1, allowedUsbUps: isHoldToTalk ? 0 : 1);
+    }
+
+    private void BeginShortcutHoldCore(string shortcut, int allowedUsbDowns, int allowedUsbUps)
+    {
+        if (NativeInputSender.TryParseShortcut(shortcut, out var modifiers, out var key) && key == 0x74)
+        {
+            _requiredModifierVks = modifiers.ToArray();
+            Volatile.Write(ref _allowedUsbF5Downs, allowedUsbDowns);
+            Volatile.Write(ref _allowedUsbF5Ups, allowedUsbUps);
+            _ownsF5 = true;
+        }
+        else
+        {
+            _requiredModifierVks = [];
+            Volatile.Write(ref _allowedUsbF5Downs, 0);
+            Volatile.Write(ref _allowedUsbF5Ups, 0);
+            _ownsF5 = false;
+        }
         Volatile.Write(ref _holdStartedAt, Environment.TickCount64);
         Interlocked.Exchange(ref _blockedDowns, 0);
         Interlocked.Exchange(ref _blockedUps, 0);
@@ -35,6 +63,19 @@ public sealed class RemoteVoiceKeyGuard(Func<bool> voiceSessionActive) : IDispos
         if (_ownsF5)
             AppLogger.Info($"F5 hold finished: PhysicalDownsBlocked={Volatile.Read(ref _blockedDowns)}, PhysicalUpsBlocked={Volatile.Read(ref _blockedUps)}", "RemoteVoiceKeyGuard");
         _ownsF5 = false;
+        _requiredModifierVks = [];
+        Volatile.Write(ref _allowedUsbF5Downs, 0);
+        Volatile.Write(ref _allowedUsbF5Ups, 0);
+    }
+
+    private bool AreRequiredModifiersDown()
+    {
+        var modifiers = _requiredModifierVks;
+        for (int i = 0; i < modifiers.Length; i++)
+        {
+            if (!IsKeyDownForTest(modifiers[i])) return false;
+        }
+        return true;
     }
 
     public bool IsSuppressionEnabled
@@ -101,8 +142,26 @@ public sealed class RemoteVoiceKeyGuard(Func<bool> voiceSessionActive) : IDispos
                         }
                         else
                         {
-                            if (message.ToInt64() is 0x101 or 0x105) Interlocked.Increment(ref _blockedUps);
-                            else Interlocked.Increment(ref _blockedDowns);
+                            bool isKeyUp = message.ToInt64() is 0x101 or 0x105;
+                            if (isKeyUp)
+                            {
+                                if (Interlocked.Decrement(ref _allowedUsbF5Ups) >= 0)
+                                {
+                                    return CallNextHookEx(_hook, code, message, data);
+                                }
+                                Interlocked.Increment(ref _allowedUsbF5Ups);
+                                Interlocked.Increment(ref _blockedUps);
+                            }
+                            else
+                            {
+                                if (Volatile.Read(ref _allowedUsbF5Downs) > 0 &&
+                                    AreRequiredModifiersDown() &&
+                                    Interlocked.Decrement(ref _allowedUsbF5Downs) >= 0)
+                                {
+                                    return CallNextHookEx(_hook, code, message, data);
+                                }
+                                Interlocked.Increment(ref _blockedDowns);
+                            }
                             return (IntPtr)1;
                         }
                     }

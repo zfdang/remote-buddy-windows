@@ -360,6 +360,26 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
 
     private bool _hasVoiceTranscriptionSessionOccurred = false;
     private bool _hasTranscriptionTextChangedThisRound = false;
+    private string? _lastShortcutDispatchError;
+
+    internal void RecordVoiceShortcutDispatch(bool succeeded, string? failureReason = null)
+    {
+        if (CurrentWizardStep != WizardStep.TranscriptionVerify) return;
+
+        if (succeeded)
+        {
+            _lastShortcutDispatchError = null;
+            ValidationError = string.Empty;
+        }
+        else
+        {
+            _hasVoiceTranscriptionSessionOccurred = false;
+            _lastShortcutDispatchError = string.IsNullOrWhiteSpace(failureReason)
+                ? "语音快捷键发送失败，请检查管理员权限与 USB/IP 虚拟键盘驱动状态后重试。"
+                : failureReason;
+            ValidationError = _lastShortcutDispatchError;
+        }
+    }
 
     internal InputToolConfig? ActiveVerificationInputTool =>
         CurrentWizardStep == WizardStep.TranscriptionVerify
@@ -503,7 +523,8 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             void Update()
             {
                 LiveAudioLevel = 0f;
-                if (CurrentWizardStep == WizardStep.TranscriptionVerify)
+                if (CurrentWizardStep == WizardStep.TranscriptionVerify &&
+                    string.IsNullOrEmpty(_lastShortcutDispatchError))
                 {
                     _hasVoiceTranscriptionSessionOccurred = true;
                 }
@@ -721,6 +742,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             TranscriptionTestText = string.Empty;
             _hasVoiceTranscriptionSessionOccurred = false;
             _hasTranscriptionTextChangedThisRound = false;
+            _lastShortcutDispatchError = null;
             IsTranscriptionVerified = false;
         }
         UpdateStepMetadata();
@@ -833,6 +855,11 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
                 break;
 
             case WizardStep.TranscriptionVerify:
+                if (!string.IsNullOrEmpty(_lastShortcutDispatchError))
+                {
+                    ValidationError = _lastShortcutDispatchError;
+                    return;
+                }
                 if (!_hasVoiceTranscriptionSessionOccurred)
                 {
                     ValidationError = "请使用遥控器语音键在下方输入框中完成一次实际语音转写。";

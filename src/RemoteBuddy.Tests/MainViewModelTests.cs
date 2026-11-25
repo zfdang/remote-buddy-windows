@@ -1564,4 +1564,56 @@ public class MainViewModelTests
             if (File.Exists(path)) File.Delete(path);
         }
     }
+
+    [Fact]
+    public void OnboardingVerification_WhenUsbIpShortcutFails_BlocksProgressionAndShowsError()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"vib-onb-fail-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var dev = new RemoteDevice { Id = "dev1", BluetoothAddress = 0x112233445566, Name = "Xiaomi Remote" };
+            config.Current.Devices.Add(dev);
+            config.Current.SelectedDeviceId = dev.Id;
+
+            var bt = new TestBluetoothManager
+            {
+                IsConnected = true,
+                IsReady = true,
+                ConnectedDeviceAddress = dev.BluetoothAddress
+            };
+            bt.ReadyAddresses.Add(dev.BluetoothAddress);
+
+            var fakeUsb = new FakeUsbKeyboardSender();
+            using var vm = new MainViewModel(config, bt)
+            {
+                IsAdministratorForTest = () => false,
+                UsbKeyboardForTest = fakeUsb
+            };
+            using var onboarding = new OnboardingViewModel(config, bt, WizardMode.Integration)
+            {
+                SelectedDevice = dev
+            };
+            onboarding.ApplyPreset("Chatterfly");
+            onboarding.NextStep();
+            Assert.Equal(WizardStep.TranscriptionVerify, onboarding.CurrentWizardStep);
+
+            vm.ActiveOnboardingVm = onboarding;
+            bt.RaiseVoiceSessionStarted(dev.BluetoothAddress);
+            bt.RaiseVoiceSessionEnded(dev.BluetoothAddress);
+
+            Assert.Contains("管理员权限", onboarding.ValidationError);
+
+            onboarding.TranscriptionTestText = "手动输入";
+            onboarding.IsTranscriptionVerified = true;
+            onboarding.NextStep();
+
+            Assert.Equal(WizardStep.TranscriptionVerify, onboarding.CurrentWizardStep);
+            Assert.Contains("管理员权限", onboarding.ValidationError);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
 }

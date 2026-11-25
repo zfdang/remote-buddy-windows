@@ -769,8 +769,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _activeVoiceSession = session;
             AppLogger.Info($"Voice session started: Device=0x{owner:X12}, Tool={session.Tool}, Mode={session.TriggerMode}, Shortcut='{session.Shortcut}'", "MainViewModel");
             // Submit all voice tool shortcuts via the USB/IP virtual keyboard so
-            // software hooks/apps that ignore LLKHF_INJECTED still respond cleanly.
-            _activeVoiceSession = session with { ShortcutSent = SendVoiceShortcut(session) };
+            // software hooks/apps that ignore LLKHF_INJECTED still respond cleanly,
+            // while still guarding against physical F5 repeats and premature release.
+            _voiceKeyGuard.BeginUsbShortcutHold(session.Shortcut, session.TriggerMode == VoiceTriggerMode.HoldToTalk);
+            var (shortcutSent, failureReason) = SendVoiceShortcut(session);
+            if (!shortcutSent) _voiceKeyGuard.EndShortcutHold();
+            _activeVoiceSession = session with { ShortcutSent = shortcutSent };
+            if (ActiveOnboardingVm is { CurrentWizardStep: WizardStep.TranscriptionVerify } activeOnboarding)
+            {
+                activeOnboarding.RecordVoiceShortcutDispatch(shortcutSent, failureReason);
+            }
         }
 
         if (System.Windows.Application.Current?.Dispatcher != null && !System.Windows.Application.Current.Dispatcher.CheckAccess())
@@ -1092,7 +1100,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         NativeInputSender.ReleaseAllHeldSyntheticKeys();
     }
 
-    private bool SendVoiceShortcut(ActiveVoiceSession session)
+    private (bool Sent, string? FailureReason) SendVoiceShortcut(ActiveVoiceSession session)
     {
         bool administrator = IsAdministratorForTest();
         bool sent = administrator && (session.TriggerMode == VoiceTriggerMode.HoldToTalk
@@ -1101,17 +1109,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
         AppLogger.Info($"USB/IP voice shortcut start: Tool={session.Tool}, Mode={session.TriggerMode}, Shortcut='{session.Shortcut}', Admin={administrator}, Success={sent}", "MainViewModel");
         if (!sent)
         {
-            _activeWarningKind = WarningKind.UsbKeyboard;
-            WarningBannerMessage = administrator
+            string message = administrator
                 ? "USB/IP 虚拟键盘未能发送语音快捷键。请检查驱动状态或快捷键格式，然后重试。"
                 : "发送语音快捷键需要管理员权限来运行 USB/IP 虚拟键盘。";
+            _activeWarningKind = WarningKind.UsbKeyboard;
+            WarningBannerMessage = message;
             WarningBannerActionText = administrator ? string.Empty : "以管理员身份重启";
+            return (false, message);
         }
         else if (_activeWarningKind == WarningKind.UsbKeyboard)
         {
             DismissWarningBanner();
         }
-        return sent;
+        return (true, null);
     }
 
     private void EndVoiceShortcut(ActiveVoiceSession session)
