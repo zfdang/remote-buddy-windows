@@ -1124,13 +1124,58 @@ public partial class MainViewModel : ObservableObject, IDisposable
         AppLogger.Info($"Doubao USB/IP shortcut end: Success={sent}", "MainViewModel");
     }
 
+    internal Func<IntPtr, string?> RawDevicePathResolverForTest { get; set; } = RawInputReceiver.GetDevicePath;
+
     public void HandleDeviceArrival(IntPtr hDevice)
     {
         AppLogger.Info($"Device arrival notification received for hDevice=0x{hDevice:X}", "MainViewModel");
         _nonTargetRawHandles.Remove(hDevice);
         _rawAddresses.Remove(hDevice);
         _rawInputReceiver.InvalidateDeviceCache(hDevice);
-        _bluetoothManager.NotifyHidDeviceArrival();
+        var (shouldNotify, targetAddress) = ClassifyHidArrival(hDevice, RawDevicePathResolverForTest(hDevice));
+        if (shouldNotify)
+        {
+            _bluetoothManager.NotifyHidDeviceArrival(targetAddress);
+        }
+    }
+
+    internal (bool ShouldNotify, ulong? TargetAddress) ClassifyHidArrival(IntPtr hDevice, string? devicePath)
+    {
+        if (hDevice == IntPtr.Zero || string.IsNullOrWhiteSpace(devicePath))
+        {
+            return (false, null);
+        }
+
+        var remotes = KnownRemotes().DistinctBy(d => d.BluetoothAddress).ToArray();
+        if (remotes.Length == 0)
+        {
+            return (false, null);
+        }
+
+        foreach (var remote in remotes)
+        {
+            Guid? containerId = _bluetoothManager.GetDeviceContainerId(remote.BluetoothAddress) ?? remote.ContainerId;
+            if (RawInputReceiver.EvaluateDeviceMatch(containerId, hDevice, devicePath, remote.BluetoothAddress, requireExactIdentity: true))
+            {
+                return (true, remote.BluetoothAddress);
+            }
+        }
+
+        if (RawInputReceiver.IsKnownRemoteDevice(hDevice, devicePath))
+        {
+            var inferredModel = RawInputReceiver.InferModelTypeFromDevice(hDevice, devicePath);
+            if (inferredModel != RemoteModelType.Unknown)
+            {
+                var modelMatches = remotes.Where(r => r.ModelType == inferredModel).ToArray();
+                if (modelMatches.Length == 1)
+                {
+                    return (true, modelMatches[0].BluetoothAddress);
+                }
+            }
+            return (true, null);
+        }
+
+        return (false, null);
     }
 
     public void HandleSystemResume()

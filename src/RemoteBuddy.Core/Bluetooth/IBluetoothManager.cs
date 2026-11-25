@@ -71,7 +71,7 @@ public interface IBluetoothManager : IDisposable
     void RemoveDevice(ulong address) => DisconnectDevice(address);
     void SetAutoReconnectTargets(IEnumerable<ulong> addresses) { }
     void NotifySystemResume() { }
-    void NotifyHidDeviceArrival() { }
+    void NotifyHidDeviceArrival(ulong? address = null) { }
     Task<bool> StartVoiceSessionAsync(ulong address) => address == ConnectedDeviceAddress ? StartVoiceSessionAsync() : Task.FromResult(false);
     Task<bool> StopVoiceSessionAsync(ulong address) => address == ConnectedDeviceAddress ? StopVoiceSessionAsync() : Task.FromResult(false);
     Task ProbeButtonSourceAsync(Guid marker, ulong address) => Task.CompletedTask;

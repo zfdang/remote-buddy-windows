@@ -29,7 +29,7 @@ public class BluetoothAutoReconnectTests
 
         public List<ulong[]> TargetUpdates { get; } = [];
         public int SystemResumeCount { get; private set; }
-        public int HidArrivalCount { get; private set; }
+        public List<ulong?> HidArrivals { get; } = [];
 
         public event Action<RemoteDevice>? DeviceDiscovered { add { } remove { } }
         public event Action<ulong, bool, string>? ConnectionStatusChanged { add { } remove { } }
@@ -53,7 +53,7 @@ public class BluetoothAutoReconnectTests
             TargetUpdates.Add(addresses.ToArray());
 
         public void NotifySystemResume() => SystemResumeCount++;
-        public void NotifyHidDeviceArrival() => HidArrivalCount++;
+        public void NotifyHidDeviceArrival(ulong? address = null) => HidArrivals.Add(address);
         public void Dispose() { }
     }
 
@@ -243,6 +243,51 @@ public class BluetoothAutoReconnectTests
         Assert.Equal(2, Volatile.Read(ref attempts));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task QueuedConnectAfterInvalidatedInFlight_IsCancelledWhenUserLaterDisconnectsOrRemoves(bool removeDevice)
+    {
+        const ulong addr = 0xC05D39F86E0C;
+        int attempts = 0;
+        var firstGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var coordinator = new BluetoothAutoReconnectCoordinator(
+            isDeviceReady: _ => false,
+            isDeviceOsConnectedAsync: _ => Task.FromResult(true),
+            connectImplAsync: _ =>
+            {
+                Interlocked.Increment(ref attempts);
+                return firstGate.Task;
+            });
+
+        coordinator.SetTargets([addr]);
+        var firstTask = coordinator.ConnectAsync(addr);
+        coordinator.MarkUserDisconnected(addr);
+
+        // User queues a new Connect while the invalidated one is still ending, then clicks Disconnect or Remove.
+        var queuedConnectTask = coordinator.ConnectAsync(addr);
+        if (removeDevice)
+        {
+            coordinator.RemoveTarget(addr);
+        }
+        else
+        {
+            coordinator.MarkUserDisconnected(addr);
+        }
+
+        firstGate.SetResult(false);
+        Assert.False(await firstTask);
+        Assert.False(await queuedConnectTask);
+        Assert.Equal(1, Volatile.Read(ref attempts));
+
+        // Even if the OS subsequently reports online, neither removed nor user-disconnected target reconnects.
+        coordinator.OnOsDeviceConnected(addr, "aep_updated");
+        await Task.Delay(50);
+        Assert.Equal(1, Volatile.Read(ref attempts));
+        Assert.Equal(!removeDevice, coordinator.HasTargets);
+    }
+
     [Fact]
     public async Task TransientFailureWhileOsConnected_RetriesBoundedTimes_AndStopsWhenOsDisconnects()
     {
@@ -288,6 +333,99 @@ public class BluetoothAutoReconnectTests
     }
 
     [Fact]
+    public async Task HidArrival_DoesNotBypassPendingRetryBackoff_OrExhaustedRetryCap()
+    {
+        const ulong addr = 0xC05D39F86E0C;
+        int attempts = 0;
+        long clockMs = 5000;
+        var retryWaitGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var coordinator = new BluetoothAutoReconnectCoordinator(
+            isDeviceReady: _ => false,
+            isDeviceOsConnectedAsync: _ => Task.FromResult(true),
+            connectImplAsync: _ =>
+            {
+                Interlocked.Increment(ref attempts);
+                return Task.FromResult(false);
+            },
+            delayAsync: async (ms, ct) =>
+            {
+                if (ms == BluetoothAutoReconnectCoordinator.RetryDelaysMs[0])
+                {
+                    await retryWaitGate.Task.WaitAsync(ct);
+                }
+                else
+                {
+                    await Task.Delay(1, ct);
+                }
+            },
+            nowMs: () => clockMs);
+
+        coordinator.SetTargets([addr]);
+        coordinator.OnOsDeviceConnected(addr, "aep_updated");
+        await WaitUntilAsync(() => Volatile.Read(ref attempts) == 1);
+
+        // First retry backoff (1000ms) is still waiting; flood 6 HID arrival events.
+        for (int i = 0; i < 6; i++)
+        {
+            clockMs += 5000;
+            coordinator.NotifyHidDeviceArrival(addr);
+            await Task.Delay(15);
+        }
+
+        Assert.Equal(1, Volatile.Read(ref attempts));
+
+        // Let the bounded retry sequence finish (1 initial + 3 retries = 4 attempts total).
+        retryWaitGate.SetResult(true);
+        await WaitUntilAsync(() => Volatile.Read(ref attempts) == 4);
+
+        // Retry budget is now exhausted; additional HID arrivals must not trigger extra attempts.
+        for (int i = 0; i < 3; i++)
+        {
+            clockMs += 5000;
+            coordinator.NotifyHidDeviceArrival(addr);
+            await Task.Delay(15);
+        }
+
+        Assert.Equal(4, Volatile.Read(ref attempts));
+    }
+
+    [Fact]
+    public async Task StaleOsConnectedProbe_IsDiscardedIfOfflineEventArrivedBeforeProbeReturned()
+    {
+        const ulong addr = 0xC05D39F86E0C;
+        int attempts = 0;
+        var probeEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var probeResultGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var coordinator = new BluetoothAutoReconnectCoordinator(
+            isDeviceReady: _ => false,
+            isDeviceOsConnectedAsync: async _ =>
+            {
+                probeEntered.TrySetResult(true);
+                return await probeResultGate.Task;
+            },
+            connectImplAsync: _ =>
+            {
+                Interlocked.Increment(ref attempts);
+                return Task.FromResult(true);
+            },
+            delayAsync: (_, ct) => Task.Delay(1, ct));
+
+        coordinator.SetTargets([addr]);
+        coordinator.OnConnectionStatusChanged(addr, false);
+
+        await probeEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        // Device goes offline at the OS layer before the stale async probe finishes.
+        coordinator.OnOsDeviceDisconnected(addr);
+        probeResultGate.SetResult(true);
+
+        await Task.Delay(60);
+        Assert.Equal(0, Volatile.Read(ref attempts));
+    }
+
+    [Fact]
     public async Task NotifySystemResume_AndHidArrival_ReconnectOnlyOsConnectedTargets()
     {
         const ulong onlineAddr = 0xC05D39F86E0C;
@@ -317,35 +455,58 @@ public class BluetoothAutoReconnectTests
         await Task.Delay(40);
         Assert.DoesNotContain(sleepingAddr, connectCalls);
 
-        // Now second remote wakes up and emits bursty HID arrivals.
+        // Now second remote wakes up and emits HID arrival scoped to that remote.
         osConnectedSet.Add(sleepingAddr);
         clockMs += 5000;
-        coordinator.NotifyHidDeviceArrival();
-        coordinator.NotifyHidDeviceArrival();
-        coordinator.NotifyHidDeviceArrival();
+        coordinator.NotifyHidDeviceArrival(sleepingAddr);
+        coordinator.NotifyHidDeviceArrival(sleepingAddr);
 
         await WaitUntilAsync(() => readySet.Contains(sleepingAddr));
         Assert.Equal(2, connectCalls.Count);
     }
 
     [Fact]
-    public void MainViewModel_ForwardsResumeHidArrivalAndDeviceListChanges_ToBluetoothManager()
+    public void MainViewModel_FiltersHidArrivalToKnownRemotes_AndForwardsResumeAndDeviceChanges()
     {
         string path = Path.Combine(Path.GetTempPath(), $"bt-reconnect-mvm-{Guid.NewGuid():N}.json");
         try
         {
             var config = new ConfigService(path);
-            var devA = new RemoteDevice { Id = "A", BluetoothAddress = 0xC05D39F86E0C, Name = "MI RC" };
-            var devB = new RemoteDevice { Id = "B", BluetoothAddress = 0x4754514C6FCC, Name = "Chromecast Remote" };
+            var devA = new RemoteDevice { Id = "A", BluetoothAddress = 0xC05D39F86E0C, Name = "MI RC", ModelType = RemoteModelType.XiaomiRC003 };
+            var devB = new RemoteDevice { Id = "B", BluetoothAddress = 0x4754514C6FCC, Name = "Chromecast Remote", ModelType = RemoteModelType.GoogleG9N9N };
             config.Current.Devices.Add(devA);
             config.Current.Devices.Add(devB);
 
             var bt = new RecordingBluetoothManager();
-            using var vm = new MainViewModel(config, bt);
+            var devicePaths = new Dictionary<IntPtr, string?>
+            {
+                [new IntPtr(0x1001)] = @"\\?\HID#VID_046D&PID_C52B&MI_00#7&1234&0&0000#{884b96c3-56ef-11d1-bc8c-00a0c91405dd}",
+                [new IntPtr(0x1002)] = @"\\?\hid#{00001812-0000-1000-8000-00805f9b34fb}_dev_vid&012717_pid&32b8_rev&00a4_c05d39f86e0c#a&6c2ee57&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}\kbd",
+                [new IntPtr(0x1003)] = @"\\?\HID#VID_18D1&PID_9450#7&5678&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}",
+                [new IntPtr(0x1004)] = null
+            };
 
-            vm.HandleDeviceArrival(new IntPtr(0x1234));
+            using var vm = new MainViewModel(config, bt)
+            {
+                RawDevicePathResolverForTest = h => devicePaths.GetValueOrDefault(h)
+            };
+
+            // Ordinary USB keyboard and unresolved handle must not trigger remote reconnect probes.
+            vm.HandleDeviceArrival(new IntPtr(0x1001));
+            vm.HandleDeviceArrival(new IntPtr(0x1004));
+            Assert.Empty(bt.HidArrivals);
+
+            // Identified Xiaomi remote arrival targets only devA.
+            vm.HandleDeviceArrival(new IntPtr(0x1002));
+            Assert.Single(bt.HidArrivals);
+            Assert.Equal(devA.BluetoothAddress, bt.HidArrivals[0]);
+
+            // Identified Google VID/PID arrival with single configured G9N9N targets devB.
+            vm.HandleDeviceArrival(new IntPtr(0x1003));
+            Assert.Equal(2, bt.HidArrivals.Count);
+            Assert.Equal(devB.BluetoothAddress, bt.HidArrivals[1]);
+
             vm.HandleSystemResume();
-            Assert.Equal(1, bt.HidArrivalCount);
             Assert.Equal(1, bt.SystemResumeCount);
 
             vm.DevicesVm.RemoveDevice(devA);

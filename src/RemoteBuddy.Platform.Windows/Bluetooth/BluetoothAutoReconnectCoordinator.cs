@@ -22,6 +22,8 @@ internal sealed class BluetoothAutoReconnectCoordinator : IDisposable
         public bool IsTarget;
         public bool SuppressedByUser;
         public int RetryAttempt;
+        public long OperationVersion;
+        public long OsStateVersion;
         public Task<bool>? InFlightConnect;
         public bool InFlightInvalidated;
         public CancellationTokenSource? RetryCts;
@@ -35,6 +37,9 @@ internal sealed class BluetoothAutoReconnectCoordinator : IDisposable
     private readonly Func<long> _nowMs;
     private readonly object _lock = new();
     private readonly Dictionary<ulong, TargetState> _targets = new();
+    private readonly HashSet<ulong> _pendingHidArrivalAddresses = [];
+    private bool _pendingHidArrivalAll;
+    private long _nextOperationVersion;
     private CancellationTokenSource? _resumeSweepCts;
     private CancellationTokenSource? _hidArrivalCts;
     private long _lastHidArrivalProbeMs;
@@ -79,6 +84,9 @@ internal sealed class BluetoothAutoReconnectCoordinator : IDisposable
                 if (!desired.Contains(addr))
                 {
                     state.IsTarget = false;
+                    state.OperationVersion = ++_nextOperationVersion;
+                    state.OsStateVersion++;
+                    _pendingHidArrivalAddresses.Remove(addr);
                     toCancel.Add(DetachCts(ref state.RetryCts));
                     toCancel.Add(DetachCts(ref state.DisconnectProbeCts));
                     if (state.InFlightConnect == null)
@@ -119,6 +127,9 @@ internal sealed class BluetoothAutoReconnectCoordinator : IDisposable
 
             state.SuppressedByUser = true;
             state.RetryAttempt = 0;
+            state.OperationVersion = ++_nextOperationVersion;
+            state.OsStateVersion++;
+            _pendingHidArrivalAddresses.Remove(address);
             if (state.InFlightConnect is { IsCompleted: false })
             {
                 state.InFlightInvalidated = true;
@@ -143,6 +154,9 @@ internal sealed class BluetoothAutoReconnectCoordinator : IDisposable
             state.IsTarget = false;
             state.SuppressedByUser = false;
             state.RetryAttempt = 0;
+            state.OperationVersion = ++_nextOperationVersion;
+            state.OsStateVersion++;
+            _pendingHidArrivalAddresses.Remove(address);
             if (state.InFlightConnect is { IsCompleted: false })
             {
                 state.InFlightInvalidated = true;
@@ -165,6 +179,7 @@ internal sealed class BluetoothAutoReconnectCoordinator : IDisposable
 
         Task<bool>? priorInvalidated = null;
         Task<bool>? activeConnect = null;
+        long expectedOpVersion = 0;
         CancellationTokenSource? retryCts = null;
         CancellationTokenSource? probeCts = null;
 
@@ -177,6 +192,9 @@ internal sealed class BluetoothAutoReconnectCoordinator : IDisposable
                 _targets[address] = state;
             }
 
+            expectedOpVersion = ++_nextOperationVersion;
+            state.OperationVersion = expectedOpVersion;
+            state.OsStateVersion++;
             state.SuppressedByUser = false;
             state.RetryAttempt = 0;
             retryCts = DetachCts(ref state.RetryCts);
@@ -203,10 +221,10 @@ internal sealed class BluetoothAutoReconnectCoordinator : IDisposable
         CancelAndDispose(probeCts);
 
         if (activeConnect != null) return activeConnect;
-        return ConnectAfterInvalidatedAsync(address, priorInvalidated!);
+        return ConnectAfterInvalidatedAsync(address, priorInvalidated!, expectedOpVersion);
     }
 
-    private async Task<bool> ConnectAfterInvalidatedAsync(ulong address, Task<bool> priorInvalidated)
+    private async Task<bool> ConnectAfterInvalidatedAsync(ulong address, Task<bool> priorInvalidated, long expectedOpVersion)
     {
         try
         {
@@ -220,10 +238,11 @@ internal sealed class BluetoothAutoReconnectCoordinator : IDisposable
         lock (_lock)
         {
             if (_disposed) return false;
-            if (!_targets.TryGetValue(address, out var state))
+            if (!_targets.TryGetValue(address, out var state) ||
+                state.OperationVersion != expectedOpVersion ||
+                state.SuppressedByUser)
             {
-                state = new TargetState();
-                _targets[address] = state;
+                return false;
             }
 
             if (state.InFlightConnect is { IsCompleted: false } existing && !state.InFlightInvalidated)
@@ -252,6 +271,7 @@ internal sealed class BluetoothAutoReconnectCoordinator : IDisposable
                 return;
             }
 
+            state.OsStateVersion++;
             if (_isDeviceReady(address))
             {
                 return;
@@ -283,6 +303,8 @@ internal sealed class BluetoothAutoReconnectCoordinator : IDisposable
         {
             if (!_targets.TryGetValue(address, out var state)) return;
             state.RetryAttempt = 0;
+            state.OsStateVersion++;
+            _pendingHidArrivalAddresses.Remove(address);
             retryCts = DetachCts(ref state.RetryCts);
             probeCts = DetachCts(ref state.DisconnectProbeCts);
         }
@@ -302,6 +324,7 @@ internal sealed class BluetoothAutoReconnectCoordinator : IDisposable
         {
             if (_disposed || !_targets.TryGetValue(address, out var state)) return;
 
+            state.OsStateVersion++;
             if (connected)
             {
                 state.RetryAttempt = 0;
@@ -361,7 +384,7 @@ internal sealed class BluetoothAutoReconnectCoordinator : IDisposable
         }
     }
 
-    public void NotifyHidDeviceArrival()
+    public void NotifyHidDeviceArrival(ulong? targetAddress = null)
     {
         CancellationTokenSource? newCts = null;
         int delayMs = 0;
@@ -370,12 +393,33 @@ internal sealed class BluetoothAutoReconnectCoordinator : IDisposable
         {
             if (_disposed) return;
 
-            bool anyCandidate = _targets.Any(pair =>
-                pair.Value.IsTarget &&
-                !pair.Value.SuppressedByUser &&
-                !_isDeviceReady(pair.Key) &&
-                pair.Value.InFlightConnect is not { IsCompleted: false });
+            bool anyCandidate;
+            if (targetAddress is { } specificAddr)
+            {
+                anyCandidate = specificAddr != 0 &&
+                    _targets.TryGetValue(specificAddr, out var state) &&
+                    IsAutoConnectCandidateLocked(specificAddr, state, respectRetryBudget: true);
+            }
+            else
+            {
+                anyCandidate = _targets.Any(pair =>
+                    IsAutoConnectCandidateLocked(pair.Key, pair.Value, respectRetryBudget: true));
+            }
+
             if (!anyCandidate) return;
+
+            if (targetAddress is { } addr)
+            {
+                if (!_pendingHidArrivalAll)
+                {
+                    _pendingHidArrivalAddresses.Add(addr);
+                }
+            }
+            else
+            {
+                _pendingHidArrivalAll = true;
+                _pendingHidArrivalAddresses.Clear();
+            }
 
             if (_hidArrivalCts != null)
             {
@@ -393,6 +437,23 @@ internal sealed class BluetoothAutoReconnectCoordinator : IDisposable
         }
 
         _ = RunDebouncedHidArrivalAsync(newCts, delayMs);
+    }
+
+    private bool IsAutoConnectCandidateLocked(ulong address, TargetState state, bool respectRetryBudget)
+    {
+        if (!state.IsTarget || state.SuppressedByUser || _isDeviceReady(address) ||
+            state.InFlightConnect is { IsCompleted: false })
+        {
+            return false;
+        }
+
+        if (respectRetryBudget &&
+            (state.RetryCts != null || state.DisconnectProbeCts != null || state.RetryAttempt >= RetryDelaysMs.Length))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private Task<bool> StartConnectLocked(ulong address, TargetState state, bool isUserInitiated, string reason)
@@ -430,6 +491,8 @@ internal sealed class BluetoothAutoReconnectCoordinator : IDisposable
         CancellationTokenSource? retryCts = null;
         int retryDelayMs = 0;
         bool shouldCheckOsForRetry = false;
+        long capturedOpVersion = 0;
+        long capturedOsVersion = 0;
 
         lock (_lock)
         {
@@ -458,6 +521,8 @@ internal sealed class BluetoothAutoReconnectCoordinator : IDisposable
             if (!state.SuppressedByUser && state.RetryAttempt < RetryDelaysMs.Length && isCurrentTask)
             {
                 shouldCheckOsForRetry = true;
+                capturedOpVersion = state.OperationVersion;
+                capturedOsVersion = state.OsStateVersion;
             }
         }
 
@@ -483,6 +548,7 @@ internal sealed class BluetoothAutoReconnectCoordinator : IDisposable
         lock (_lock)
         {
             if (_disposed || !state.IsTarget || state.SuppressedByUser || _isDeviceReady(address) ||
+                state.OperationVersion != capturedOpVersion || state.OsStateVersion != capturedOsVersion ||
                 state.InFlightConnect is { IsCompleted: false } || state.RetryAttempt >= RetryDelaysMs.Length)
             {
                 return;
@@ -525,18 +591,7 @@ internal sealed class BluetoothAutoReconnectCoordinator : IDisposable
             try { cts.Dispose(); } catch { }
         }
 
-        if (!await IsEligibleAndOsConnectedAsync(address).ConfigureAwait(false)) return;
-
-        lock (_lock)
-        {
-            if (_disposed || !state.IsTarget || state.SuppressedByUser || _isDeviceReady(address) ||
-                state.InFlightConnect is { IsCompleted: false })
-            {
-                return;
-            }
-
-            _ = StartConnectLocked(address, state, isUserInitiated: false, reason: "retry");
-        }
+        await ProbeAndConnectTargetAsync(address, reason: "retry", respectRetryBudget: false).ConfigureAwait(false);
     }
 
     private async Task RunDisconnectProbeAsync(ulong address, CancellationTokenSource cts)
@@ -563,19 +618,7 @@ internal sealed class BluetoothAutoReconnectCoordinator : IDisposable
             try { cts.Dispose(); } catch { }
         }
 
-        if (!await IsEligibleAndOsConnectedAsync(address).ConfigureAwait(false)) return;
-
-        lock (_lock)
-        {
-            if (_disposed || !_targets.TryGetValue(address, out var state) ||
-                !state.IsTarget || state.SuppressedByUser || _isDeviceReady(address) ||
-                state.InFlightConnect is { IsCompleted: false })
-            {
-                return;
-            }
-
-            _ = StartConnectLocked(address, state, isUserInitiated: false, reason: "disconnect_probe");
-        }
+        await ProbeAndConnectTargetAsync(address, reason: "disconnect_probe", respectRetryBudget: false).ConfigureAwait(false);
     }
 
     private async Task RunResumeSweepAsync(CancellationTokenSource cts)
@@ -590,7 +633,8 @@ internal sealed class BluetoothAutoReconnectCoordinator : IDisposable
                 elapsed = targetMs;
                 await _delayAsync(stepDelay, token).ConfigureAwait(false);
                 if (token.IsCancellationRequested) return;
-                await ProbeAndReconnectDisconnectedTargetsAsync("system_resume").ConfigureAwait(false);
+                await ProbeAndReconnectTargetsAsync("system_resume", targetAddresses: null, respectRetryBudget: false)
+                    .ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
@@ -636,66 +680,89 @@ internal sealed class BluetoothAutoReconnectCoordinator : IDisposable
             try { cts.Dispose(); } catch { }
         }
 
+        ulong[]? specificAddresses;
+        bool probeAll;
         lock (_lock)
         {
             if (_disposed) return;
             _lastHidArrivalProbeMs = _nowMs();
+            probeAll = _pendingHidArrivalAll;
+            specificAddresses = probeAll ? null : _pendingHidArrivalAddresses.ToArray();
+            _pendingHidArrivalAll = false;
+            _pendingHidArrivalAddresses.Clear();
         }
 
-        await ProbeAndReconnectDisconnectedTargetsAsync("hid_arrival").ConfigureAwait(false);
+        await ProbeAndReconnectTargetsAsync("hid_arrival", specificAddresses, respectRetryBudget: true)
+            .ConfigureAwait(false);
     }
 
-    private async Task ProbeAndReconnectDisconnectedTargetsAsync(string reason)
+    private async Task ProbeAndReconnectTargetsAsync(string reason, ulong[]? targetAddresses, bool respectRetryBudget)
     {
         ulong[] candidates;
         lock (_lock)
         {
             if (_disposed) return;
-            candidates = _targets
-                .Where(pair => pair.Value.IsTarget &&
-                               !pair.Value.SuppressedByUser &&
-                               !_isDeviceReady(pair.Key) &&
-                               pair.Value.InFlightConnect is not { IsCompleted: false })
+            IEnumerable<KeyValuePair<ulong, TargetState>> scope = targetAddresses != null
+                ? targetAddresses
+                    .Distinct()
+                    .Select(addr => _targets.TryGetValue(addr, out var s)
+                        ? new KeyValuePair<ulong, TargetState>(addr, s)
+                        : default)
+                    .Where(pair => pair.Key != 0 && pair.Value != null)
+                : _targets;
+
+            candidates = scope
+                .Where(pair => IsAutoConnectCandidateLocked(pair.Key, pair.Value, respectRetryBudget))
                 .Select(pair => pair.Key)
                 .ToArray();
         }
 
         foreach (ulong address in candidates)
         {
-            if (!await IsEligibleAndOsConnectedAsync(address).ConfigureAwait(false)) continue;
-
-            lock (_lock)
-            {
-                if (_disposed || !_targets.TryGetValue(address, out var state) ||
-                    !state.IsTarget || state.SuppressedByUser || _isDeviceReady(address) ||
-                    state.InFlightConnect is { IsCompleted: false })
-                {
-                    continue;
-                }
-
-                _ = StartConnectLocked(address, state, isUserInitiated: false, reason);
-            }
+            await ProbeAndConnectTargetAsync(address, reason, respectRetryBudget).ConfigureAwait(false);
         }
     }
 
-    private async Task<bool> IsEligibleAndOsConnectedAsync(ulong address)
+    private async Task ProbeAndConnectTargetAsync(ulong address, string reason, bool respectRetryBudget)
     {
+        long capturedOpVersion;
+        long capturedOsVersion;
+
         lock (_lock)
         {
             if (_disposed || !_targets.TryGetValue(address, out var state) ||
-                !state.IsTarget || state.SuppressedByUser || _isDeviceReady(address))
+                !IsAutoConnectCandidateLocked(address, state, respectRetryBudget))
             {
-                return false;
+                return;
             }
+
+            capturedOpVersion = state.OperationVersion;
+            capturedOsVersion = state.OsStateVersion;
         }
 
+        bool osConnected;
         try
         {
-            return await _isDeviceOsConnectedAsync(address).ConfigureAwait(false);
+            osConnected = await _isDeviceOsConnectedAsync(address).ConfigureAwait(false);
         }
         catch
         {
-            return false;
+            osConnected = false;
+        }
+
+        if (!osConnected) return;
+
+        lock (_lock)
+        {
+            if (_disposed || !_targets.TryGetValue(address, out var state) ||
+                state.OperationVersion != capturedOpVersion ||
+                state.OsStateVersion != capturedOsVersion ||
+                !IsAutoConnectCandidateLocked(address, state, respectRetryBudget))
+            {
+                return;
+            }
+
+            _ = StartConnectLocked(address, state, isUserInitiated: false, reason);
         }
     }
 
@@ -725,6 +792,8 @@ internal sealed class BluetoothAutoReconnectCoordinator : IDisposable
         {
             if (_disposed) return;
             _disposed = true;
+            _pendingHidArrivalAll = false;
+            _pendingHidArrivalAddresses.Clear();
             toCancel = new List<CancellationTokenSource?>
             {
                 DetachCts(ref _resumeSweepCts),
@@ -733,6 +802,8 @@ internal sealed class BluetoothAutoReconnectCoordinator : IDisposable
             foreach (var state in _targets.Values)
             {
                 state.IsTarget = false;
+                state.OperationVersion = ++_nextOperationVersion;
+                state.OsStateVersion++;
                 toCancel.Add(DetachCts(ref state.RetryCts));
                 toCancel.Add(DetachCts(ref state.DisconnectProbeCts));
             }

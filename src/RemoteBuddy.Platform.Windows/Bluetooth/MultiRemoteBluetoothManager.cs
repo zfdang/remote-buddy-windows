@@ -228,10 +228,10 @@ public sealed class MultiRemoteBluetoothManager : IBluetoothManager
         _autoReconnect.NotifySystemResume();
     }
 
-    public void NotifyHidDeviceArrival()
+    public void NotifyHidDeviceArrival(ulong? address = null)
     {
         if (Volatile.Read(ref _disposed) != 0) return;
-        _autoReconnect.NotifyHidDeviceArrival();
+        _autoReconnect.NotifyHidDeviceArrival(address);
     }
 
     public void RemoveDevice(ulong address)
