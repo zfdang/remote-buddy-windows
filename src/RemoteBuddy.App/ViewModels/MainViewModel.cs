@@ -3,6 +3,7 @@
 
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using RemoteBuddy.App.Services;
 using RemoteBuddy.Core.Bluetooth;
 using RemoteBuddy.Core.Config;
 using RemoteBuddy.Core.Diagnostics;
@@ -23,6 +24,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly Dictionary<ulong, HidDeviceReader> _hidReaders = new();
     private readonly ChromecastButtonReceiver _chromecastButtonReceiver = new();
     private readonly RemoteVoiceKeyGuard _voiceKeyGuard;
+    internal IAppComposerFocus AppComposerFocusForTest { get; set; } = new AppComposerFocus();
+    private CancellationTokenSource? _pendingAppFocus;
     private IUsbKeyboardSender _usbKeyboard = new DoubaoUsbKeyboard();
     private readonly object _voiceLifecycleLock = new();
     private ActiveVoiceSession? _activeVoiceSession;
@@ -147,6 +150,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         set
         {
             if (ReferenceEquals(_activeOnboardingVm, value)) return;
+            CancelPendingAppFocus();
             if (_activeOnboardingVm != null)
             {
                 _activeOnboardingVm.PropertyChanged -= OnOnboardingPropertyChanged;
@@ -208,6 +212,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         EnvironmentVm = new EnvironmentViewModel();
         EnvironmentVm.RetryEtwCaptureAction = RetryEtwCapture;
         AppIntegrationVm = new AppIntegrationViewModel(_configService);
+        AppIntegrationVm.SettingsChanged += CancelPendingAppFocus;
         AboutVm = new AboutViewModel(
             _configService,
             Services.WindowsRelease.FetchAsync,
@@ -792,17 +797,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var session = new ActiveVoiceSession(owner, token, currentConfig.TriggerMode, currentConfig.Shortcut, currentConfig.Tool);
             _activeVoiceSession = session;
             AppLogger.Info($"Voice session started: Device=0x{owner:X12}, Tool={session.Tool}, Mode={session.TriggerMode}, Shortcut='{session.Shortcut}'", "MainViewModel");
-            // Submit all voice tool shortcuts via the USB/IP virtual keyboard so
-            // software hooks/apps that ignore LLKHF_INJECTED still respond cleanly,
-            // while still guarding against physical F5 repeats and premature release.
-            _voiceKeyGuard.BeginUsbShortcutHold(session.Shortcut, session.TriggerMode == VoiceTriggerMode.HoldToTalk);
-            var (shortcutSent, failureReason) = SendVoiceShortcut(session);
-            if (!shortcutSent) _voiceKeyGuard.EndShortcutHold();
-            _activeVoiceSession = session with { ShortcutSent = shortcutSent };
-            if (ActiveOnboardingVm is { CurrentWizardStep: WizardStep.TranscriptionVerify } activeOnboarding)
-            {
-                activeOnboarding.RecordVoiceShortcutDispatch(shortcutSent, failureReason);
-            }
+            if (ActiveOnboardingVm == null &&
+                AppComposerFocusForTest.Capture(_configService.Current.AppIntegrations) is { } target)
+                _ = PrepareAppFocusAsync(session, target);
+            else
+                StartVoiceShortcut(session);
         }
 
         if (System.Windows.Application.Current?.Dispatcher != null && !System.Windows.Application.Current.Dispatcher.CheckAccess())
@@ -840,6 +839,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     return;
                 }
 
+                CancelPendingAppFocus();
                 _voiceKeyGuard.Clear();
                 _voiceKeyGuardOwnerAddress = 0;
                 IsVoiceActive = false;
@@ -1150,6 +1150,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void ReleaseHeldVoiceShortcut()
     {
+        CancelPendingAppFocus();
         if (_activeVoiceSession is { } session)
         {
             _activeVoiceSession = null;
@@ -1158,6 +1159,66 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _voiceKeyGuard.EndShortcutHold();
         _voiceKeyGuardOwnerAddress = 0;
         NativeInputSender.ReleaseAllHeldSyntheticKeys();
+    }
+
+    internal void CancelPendingAppFocus() => _pendingAppFocus?.Cancel();
+
+    private async Task PrepareAppFocusAsync(ActiveVoiceSession session, AppFocusTarget target)
+    {
+        using var cancellation = new CancellationTokenSource();
+        _pendingAppFocus = cancellation;
+        var focus = AppComposerFocusForTest;
+        AppFocusResult result;
+        try
+        {
+            result = await focus.FocusAsync(target, IsVoiceLive, cancellation.Token)
+                .WaitAsync(AppComposerFocus.FocusTimeout, cancellation.Token);
+            if (cancellation.IsCancellationRequested) return;
+        }
+        catch (TimeoutException)
+        {
+            cancellation.Cancel();
+            result = AppFocusResult.TimedOut;
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            return;
+        }
+        finally
+        {
+            if (ReferenceEquals(_pendingAppFocus, cancellation))
+                _pendingAppFocus = null;
+        }
+
+        if (!focus.IsForeground(target))
+            result = AppFocusResult.ForegroundChanged;
+
+        AppLogger.Info($"Application integration focus: app={target.IntegrationId}, result={result}", "MainViewModel");
+        if (result != AppFocusResult.ForegroundChanged && IsVoiceLive())
+            StartVoiceShortcut(session);
+
+        bool IsVoiceLive()
+        {
+            lock (_voiceLifecycleLock)
+            {
+                return _liveVoiceToken == session.Token && _bluetoothManager.IsStreaming &&
+                    (_liveVoiceAddress == 0 || _liveVoiceAddress == session.DeviceAddress);
+            }
+        }
+    }
+
+    private void StartVoiceShortcut(ActiveVoiceSession session)
+    {
+        lock (_voiceLifecycleLock)
+        {
+            if (_liveVoiceToken != session.Token || _activeVoiceSession?.Token != session.Token) return;
+        }
+        _voiceKeyGuard.BeginUsbShortcutHold(session.Shortcut, session.TriggerMode == VoiceTriggerMode.HoldToTalk);
+        var (shortcutSent, failureReason) = SendVoiceShortcut(session);
+        if (!shortcutSent) _voiceKeyGuard.EndShortcutHold();
+        _activeVoiceSession = session with { ShortcutSent = shortcutSent };
+        if (ActiveOnboardingVm is { CurrentWizardStep: WizardStep.TranscriptionVerify } activeOnboarding)
+            activeOnboarding.RecordVoiceShortcutDispatch(shortcutSent, failureReason);
     }
 
     private (bool Sent, string? FailureReason) SendVoiceShortcut(ActiveVoiceSession session)
@@ -1409,6 +1470,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _voiceKeyGuard.Dispose();
         ResetGestures();
         GeneralVm.PreferencesChanged -= OnGeneralPreferencesChanged;
+        AppIntegrationVm.SettingsChanged -= CancelPendingAppFocus;
         SettingsVm.PreferencesChanged -= OnSettingsPreferencesChanged;
         AboutVm.ResetUpdateCheck();
         AboutVm.PreferencesChanged -= OnAboutPreferencesChanged;
