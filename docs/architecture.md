@@ -1,6 +1,6 @@
 # Remote Buddy (Windows) - 软件架构设计
 
-Remote Buddy for Windows 是面向 Windows 10/11 的纯软件版硬件语音桥接工具。其目标是将闲置的蓝牙电视遥控器（如小米蓝牙遥控器、Google Chromecast 遥控器等）直接通过电脑自带蓝牙连接，将其打造成系统全局的“按住说话”语音输入按键，并将遥控器麦克风拾取的声音低延迟送入微信输入法、豆包输入法、Windows 11 自带语音听写等目标工具中。
+Remote Buddy for Windows 是面向 Windows 10/11 的纯软件版硬件语音桥接工具。其目标是将闲置的蓝牙电视遥控器（如小米蓝牙遥控器、Google Chromecast 遥控器等）直接通过电脑自带蓝牙连接，将其打造成系统全局的“按住说话”语音输入按键，并将遥控器麦克风拾取的声音低延迟送入微信输入法、豆包输入法、腾讯 Chatterfly、Typeless、Windows 11 自带语音听写及其他自定义全局快捷键语音工具中。
 
 本项目坚持**纯软件方案**，无需任何额外 USB 开发板或硬件接收器。
 
@@ -13,7 +13,7 @@ Remote Buddy for Windows 是面向 Windows 10/11 的纯软件版硬件语音桥�
        → 匹配物理遥控器 → 该设备的手势与映射 → SendInput
 
 语音键 → WinRT GATT 的 ATVV 控制通知
-       → 共用语音占用仲裁 → 输入法快捷键（SendInput）
+       → 共用语音占用仲裁 → 输入法快捷键（USB/IP 虚拟键盘）
 
 麦克风 → ATVV 音频通知 → IMA ADPCM 解码 → WASAPI
        → VB-CABLE 播放端（CABLE Input）
@@ -36,7 +36,7 @@ Remote Buddy for Windows 是面向 Windows 10/11 的纯软件版硬件语音桥�
 | **音频推流** | **NAudio (基于 WASAPI Render)** | 成熟的低延迟音频写入库，以共享模式（Shared Event-Driven）将解码后的 PCM 音频推入虚拟声卡端点。 |
 | **音频解码** | **纯 C# 实现 IMA ADPCM 解码器** | 纯内存计算，结合 `Span<byte>` 与查表法，实现 `AUDIO_SYNC` 状态同步与动态会话恢复。 |
 | **虚拟麦克风** | **VB-CABLE** | 向导和「权限与驱动」使用同一个安装入口。应用优先从 Remote Buddy 网站下载固定版本，失败时回退到 VB-Audio，校验文件后启动官方安装程序。 |
-| **按键监控与注入** | **Raw Input、直接 HID、BthPort ETW、`SendInput`** | 采集来源可确认的普通键，通过 `SendInput` 执行映射和输入法快捷键，受 UIPI 权限边界约束。 |
+| **按键监控与注入** | **Raw Input、直接 HID、BthPort ETW、`SendInput`、USB/IP 虚拟键盘** | 采集来源可确认的普通键，通过 `SendInput` 执行普通按键映射（受 UIPI 权限边界约束）；语音工具快捷键统一通过 `HIDMaestro` / `usbip-win2` USB/IP 虚拟键盘发送。 |
 | **打包与分发** | **自包含单文件 ZIP** | 通过 GitHub Actions 产出 `x64` 自包含单文件可执行程序并附带许可证文件及 `SHA256SUMS.txt` 打包发布，无需额外安装包。 |
 
 ---

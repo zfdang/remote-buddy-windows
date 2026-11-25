@@ -69,10 +69,14 @@
                                 <TextBlock Text="{Binding CurrentShortcutDisplay}" Foreground="#FFF" FontFamily="Consolas" FontSize="12"/>
                             </Border>
                         </StackPanel>
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="🔊 音频路由：" Foreground="{StaticResource SecondaryTextBrush}" FontSize="13"/>
-                            <TextBlock Text="{Binding VirtualCableStatusDescription}" Foreground="{Binding VirtualCableStatusBrush}" FontSize="12" TextWrapping="Wrap"/>
-                        </StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="🔊 音频路由：" Foreground="{StaticResource SecondaryTextBrush}" FontSize="13"/>
+                            <TextBlock Grid.Column="1" Text="{Binding VirtualCableStatusDescription}" Foreground="{Binding VirtualCableStatusBrush}" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                        </Grid>
                     </StackPanel>
                 </Border>
 
