@@ -1709,6 +1709,7 @@ public partial class AppIntegrationViewModel : ObservableObject
     private readonly ConfigService _config;
 
     public ObservableCollection<AppIntegrationItemViewModel> Applications { get; } = new();
+    internal event Action? SettingsChanged;
 
     internal Action<string> OpenUrlAction { get; set; } = AppLinks.OpenExternalUrl;
 
@@ -1728,7 +1729,7 @@ public partial class AppIntegrationViewModel : ObservableObject
 
         var presets = new (string Id, string Name, string Detail)[]
         {
-            ("wechat", "微信 (WeChat)", "优先定位微信会话窗口输入框，支持消息输入与快捷发送"),
+            ("wechat", "微信 (WeChat)", "打开会话后，尝试聚焦消息输入框"),
             ("antigravity", "Antigravity", "优先聚焦 Antigravity 对话输入框，无缝输入提示词与指令"),
             ("chatgpt", "ChatGPT", "优先聚焦 ChatGPT 桌面客户端对话输入框"),
             ("claude", "Claude", "优先聚焦 Claude 桌面客户端对话输入框"),
@@ -1753,6 +1754,7 @@ public partial class AppIntegrationViewModel : ObservableObject
                 cfg.AppIntegrations[app.Id] = app.IsEnabled;
             }
         });
+        SettingsChanged?.Invoke();
     }
 
     [RelayCommand]

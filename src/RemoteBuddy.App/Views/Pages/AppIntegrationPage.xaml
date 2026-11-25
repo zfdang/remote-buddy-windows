@@ -28,9 +28,9 @@
             <!-- Introduction Card -->
             <Border Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="8" Padding="20" Margin="0,0,0,18">
                 <StackPanel>
-                    <TextBlock Text="开始语音输入时，优先使用您选中的输入框；如果当前未选中，将自动为您定位到该应用的对话输入区域。"
+                    <TextBlock Text="打开目标应用和会话，按下遥控器语音键。搭子会保留当前输入框的焦点，或尝试定位当前对话的输入框。"
                                FontSize="13" Foreground="{StaticResource PrimaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,8"/>
-                    <TextBlock Text="说明：仅当按下遥控器语音键时，系统才检查前台应用并执行焦点对准；平时切换窗口不会触发任何焦点干涉。"
+                    <TextBlock Text="只有前台应用的集成已开启时才会尝试聚焦。找不到明确的输入框时，语音输入会继续使用当前焦点。"
                                FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap"/>
                 </StackPanel>
             </Border>

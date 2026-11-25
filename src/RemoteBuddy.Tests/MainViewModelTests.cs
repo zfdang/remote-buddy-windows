@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Remote Buddy Contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
+using RemoteBuddy.App.Services;
 using RemoteBuddy.App.ViewModels;
 using RemoteBuddy.Core.Bluetooth;
 using RemoteBuddy.Core.Config;
@@ -18,10 +19,12 @@ public class MainViewModelTests
         public List<string> ClickCalls { get; } = [];
         public int ReleaseCalls { get; private set; }
         public bool NextResult { get; set; } = true;
+        public Action<string>? OnSendDown { get; set; }
 
         public bool SendDown(string shortcut)
         {
             DownCalls.Add(shortcut);
+            OnSendDown?.Invoke(shortcut);
             return NextResult;
         }
 
@@ -38,6 +41,22 @@ public class MainViewModelTests
         }
 
         public void Dispose() { }
+    }
+
+    private sealed class FakeAppComposerFocus : IAppComposerFocus
+    {
+        private static readonly AppFocusTarget Target = new(1, 2, "chatgpt");
+        public TaskCompletionSource<AppFocusResult> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public CancellationToken Token { get; private set; }
+        public bool Foreground { get; set; } = true;
+        public AppFocusTarget? Capture(IReadOnlyDictionary<string, bool>? enabledIntegrations) =>
+            enabledIntegrations?.GetValueOrDefault("chatgpt") == true ? Target : null;
+        public bool IsForeground(AppFocusTarget target) => Foreground;
+        public Task<AppFocusResult> FocusAsync(AppFocusTarget target, Func<bool> isVoiceLive, CancellationToken cancellationToken)
+        {
+            Token = cancellationToken;
+            return Completion.Task;
+        }
     }
 
     private sealed class TestBluetoothManager : IBluetoothManager
@@ -120,6 +139,94 @@ public class MainViewModelTests
             return Task.FromResult(true);
         }
         public void Dispose() { }
+    }
+
+    [Theory]
+    [InlineData((int)AppFocusResult.ExistingInput)]
+    [InlineData((int)AppFocusResult.ComposerFocused)]
+    [InlineData((int)AppFocusResult.ComposerUnavailable)]
+    public async Task AppIntegration_WaitsForFocusResultBeforeSendingVoiceShortcut(int result)
+    {
+        var config = new ConfigService(Path.Combine(Path.GetTempPath(), $"rb-focus-{Guid.NewGuid():N}.json"));
+        config.Current.AppIntegrations["chatgpt"] = true;
+        var bluetooth = new TestBluetoothManager();
+        var focus = new FakeAppComposerFocus();
+        var sent = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var keyboard = new FakeUsbKeyboardSender { OnSendDown = shortcut => sent.TrySetResult(shortcut) };
+        using var vm = new MainViewModel(config, bluetooth)
+        {
+            AppComposerFocusForTest = focus,
+            UsbKeyboardForTest = keyboard,
+            IsAdministratorForTest = () => true
+        };
+
+        bluetooth.RaiseVoiceSessionStarted(1);
+        Assert.True(focus.Token.CanBeCanceled);
+        Assert.Empty(keyboard.DownCalls);
+        focus.Completion.SetResult((AppFocusResult)result);
+        Assert.Equal(InputToolConfig.DefaultWeChatShortcut, await sent.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+        bluetooth.RaiseVoiceSessionEnded(1);
+    }
+
+    [Fact]
+    public void AppIntegration_DoesNotSendShortcutToChangedForeground()
+    {
+        var config = new ConfigService(Path.Combine(Path.GetTempPath(), $"rb-focus-{Guid.NewGuid():N}.json"));
+        config.Current.AppIntegrations["chatgpt"] = true;
+        var bluetooth = new TestBluetoothManager();
+        var focus = new FakeAppComposerFocus { Foreground = false };
+        focus.Completion.SetResult(AppFocusResult.ComposerFocused);
+        var keyboard = new FakeUsbKeyboardSender();
+        using var vm = new MainViewModel(config, bluetooth)
+        {
+            AppComposerFocusForTest = focus,
+            UsbKeyboardForTest = keyboard,
+            IsAdministratorForTest = () => true
+        };
+
+        bluetooth.RaiseVoiceSessionStarted(1);
+        bluetooth.RaiseVoiceSessionEnded(1);
+        Assert.Empty(keyboard.DownCalls);
+        Assert.Equal(0, keyboard.ReleaseCalls);
+    }
+
+    [Fact]
+    public void AppIntegration_VoiceEndCancelsPendingFocusWithoutDispatch()
+    {
+        var config = new ConfigService(Path.Combine(Path.GetTempPath(), $"rb-focus-{Guid.NewGuid():N}.json"));
+        config.Current.AppIntegrations["chatgpt"] = true;
+        var bluetooth = new TestBluetoothManager();
+        var focus = new FakeAppComposerFocus();
+        var keyboard = new FakeUsbKeyboardSender();
+        using var vm = new MainViewModel(config, bluetooth)
+        {
+            AppComposerFocusForTest = focus,
+            UsbKeyboardForTest = keyboard,
+            IsAdministratorForTest = () => true
+        };
+
+        bluetooth.RaiseVoiceSessionStarted(1);
+        bluetooth.RaiseVoiceSessionEnded(1);
+        Assert.True(focus.Token.IsCancellationRequested);
+        focus.Completion.SetResult(AppFocusResult.ComposerFocused);
+        Assert.Empty(keyboard.DownCalls);
+        Assert.Equal(0, keyboard.ReleaseCalls);
+    }
+
+    [Fact]
+    public void AppIntegration_ComposerMatchingUsesOnlyExplicitControlMetadata()
+    {
+        Assert.Equal("wechat", AppComposerFocus.GetIntegrationId("Weixin"));
+        Assert.Equal("chatgpt", AppComposerFocus.GetIntegrationId("ChatGPT"));
+        Assert.Null(AppComposerFocus.GetIntegrationId("WeType"));
+        Assert.Null(AppComposerFocus.GetIntegrationId("msedge"));
+        Assert.True(AppComposerFocus.ComposerScore("chatgpt", "prompt-textarea", "Ask anything") > 0);
+        Assert.True(AppComposerFocus.ComposerScore("antigravity", "", "Message input") > 0);
+        Assert.True(AppComposerFocus.ComposerScore("deepseek", "", "描述你想要构建的内容, / 调用指令, @ 文件或对话") > 0);
+        Assert.Equal(0, AppComposerFocus.ComposerScore("deepseek", "", "搜索会话名称"));
+        Assert.Equal(0, AppComposerFocus.ComposerScore("wechat", "chat-input-field", "搜索"));
+        Assert.Equal(0, AppComposerFocus.ComposerScore("claude", "", "Password"));
+        Assert.Equal(0, AppComposerFocus.ComposerScore("chatgpt", "", "Type here"));
     }
 
     [Fact]
