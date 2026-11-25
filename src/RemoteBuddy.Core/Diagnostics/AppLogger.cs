@@ -78,6 +78,10 @@ public static class AppLogger
                 return;
             }
             _isEnabled = enabled;
+            if (!enabled)
+            {
+                _recentLines.Clear();
+            }
             turnedOn = enabled;
         }
 
@@ -317,12 +321,17 @@ public static class AppLogger
 
         lock (_lock)
         {
+            if (!_isEnabled)
+            {
+                return [];
+            }
+
             if (_recentLines.Count > 0)
             {
                 return _recentLines.TakeLast(maxLines).ToArray();
             }
 
-            if (!_isEnabled || string.IsNullOrEmpty(_logFilePath) || !File.Exists(_logFilePath))
+            if (string.IsNullOrEmpty(_logFilePath) || !File.Exists(_logFilePath))
             {
                 return [];
             }

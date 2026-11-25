@@ -72,21 +72,25 @@
             <!-- Card 2: Diagnostic Logs -->
             <Border Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="8" Padding="20" Margin="0,0,0,18">
                 <StackPanel>
-                    <DockPanel LastChildFill="False">
-                        <StackPanel DockPanel.Dock="Left" MaxWidth="480">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
                             <TextBlock Text="诊断日志与故障排查" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}"/>
-                            <TextBlock Text="仅在需要排查问题时开启；关闭后将不再生成或写入本地日志文件。可一键复制脱敏诊断摘要（最多附带最近 300 行日志）用于反馈，严禁且不记录任何语音音频或转写文本。"
+                            <TextBlock Text="仅在需要排查问题时开启；关闭后将不再生成或写入本地日志文件。可一键复制诊断信息（最多附带最近 300 行日志）用于反馈，严禁且不记录任何语音音频或转写文本。"
                                        FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,4,0,10"/>
                             <CheckBox Content="启用排错日志" IsChecked="{Binding DiagnosticLoggingEnabled, Mode=TwoWay}" Foreground="#FFF" Margin="0,0,0,8"/>
                             <TextBlock Text="{Binding LogDirectoryPath, StringFormat='存储路径: {0}'}" FontSize="11" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap"/>
                         </StackPanel>
-                        <StackPanel DockPanel.Dock="Right" VerticalAlignment="Center" Width="168">
-                            <Button Content="📁 打开日志文件夹" Padding="14,8" Margin="0,0,0,8"
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center" MinWidth="168" Margin="16,0,0,0">
+                            <Button x:Name="OpenLogFolderButton" Content="📁 打开日志文件夹" Padding="14,8" Margin="0,0,0,8"
                                     Command="{Binding OpenLogFolderCommand}"/>
-                            <Button Content="📋 复制诊断信息" Padding="14,8" Background="#007ACC"
+                            <Button x:Name="CopyDiagnosticSummaryButton" Content="📋 复制诊断信息" Padding="14,8" Background="#007ACC"
                                     Command="{Binding CopyDiagnosticSummaryCommand}"/>
                         </StackPanel>
-                    </DockPanel>
+                    </Grid>
                     <TextBlock Text="{Binding DiagnosticCopyStatus}" Foreground="{Binding DiagnosticCopyStatusColor}"
                                FontSize="12" Margin="0,10,0,0" TextWrapping="Wrap"
                                Visibility="{Binding HasDiagnosticCopyStatus, Converter={StaticResource BoolToVisibilityConverter}}"/>
@@ -95,18 +99,22 @@
 
             <!-- Card 3: Open Source & Links -->
             <Border Background="{StaticResource CardBackgroundBrush}" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="8" Padding="20" Margin="0,0,0,18">
-                <DockPanel LastChildFill="False">
-                    <StackPanel DockPanel.Dock="Left">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
                         <TextBlock Text="开源许可与项目链接" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,6"/>
-                        <TextBlock Text="本项目遵循 GPL-3.0-only 开源协议发布。" FontSize="12" Foreground="{StaticResource SecondaryTextBrush}"/>
+                        <TextBlock Text="本项目遵循 GPL-3.0-only 开源协议发布。" FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap"/>
                     </StackPanel>
-                    <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
                         <Button Content="🌐 访问产品官网" Margin="0,0,10,0" Padding="12,7"
                                 Command="{Binding OpenWebsiteCommand}"/>
                         <Button Content="📦 GitHub 仓库" Padding="12,7"
                                 Command="{Binding OpenGitHubCommand}"/>
                     </StackPanel>
-                </DockPanel>
+                </Grid>
             </Border>
         </StackPanel>
     </ScrollViewer>

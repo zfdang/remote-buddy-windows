@@ -1221,6 +1221,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
             try { logSize = new System.IO.FileInfo(logPath).Length; } catch { }
         }
 
+        var driverStatus = Platform.Windows.Audio.VirtualAudioAuditor.AuditCableInputDevice(forceRefresh: true);
+        var cableOutputStatus = Platform.Windows.Audio.VirtualAudioAuditor.GetCableOutputStatus();
+        EnvironmentVm.DriverStatus = driverStatus;
+        EnvironmentVm.CableOutputStatus = cableOutputStatus;
+
         var input = _configService.Current.InputTool;
         return new WindowsDiagnosticSnapshot(
             AppVersion: AboutVm.AppVersion,
@@ -1230,8 +1235,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             RemoteConnected: _bluetoothManager.IsConnected,
             ConnectedRemoteCount: connectedAddresses.Count,
             RemoteModel: remoteModelSummary,
-            VirtualMicrophoneStatus: EnvironmentVm.DriverStatus.ToString(),
-            CableOutputStatus: EnvironmentVm.CableOutputStatus.ToString(),
+            VirtualMicrophoneStatus: driverStatus.ToString(),
+            CableOutputStatus: cableOutputStatus.ToString(),
             EtwCaptureStatus: EtwCaptureStatus.ToString(),
             VoiceTool: input.Tool.ToString(),
             VoiceTriggerMode: input.TriggerMode.ToString(),
