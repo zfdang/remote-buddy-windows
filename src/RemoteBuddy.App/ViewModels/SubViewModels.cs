@@ -289,7 +289,7 @@ public partial class DevicesViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    public void OpenDeviceGuide() => OpenUrlAction(AppLinks.DevicesUrl);
+    public void OpenDeviceGuide() => OpenUrlAction(AppLinks.DevicesFaqUrl);
 
     [RelayCommand]
     public void DismissConnectionFeedback() => ConnectionFeedbackMessage = string.Empty;
