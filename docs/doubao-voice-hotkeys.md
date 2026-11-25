@@ -8,8 +8,8 @@
 
 ## Remote Buddy 的发送方式
 
-- 选中「豆包输入法」时，Remote Buddy 使用 Microsoft 签名的 `usbip-win2` 主机控制器和 HIDMaestro 的公开 USB/IP 接口创建虚拟键盘。它将整组语音快捷键转换为键盘报告，保留左右修饰键，并在会话结束时释放按住的键。单击切换模式也用同一个后端。
-- 选中其他工具时，语音快捷键继续走原有 `SendInput` 路径。普通按键映射和 VB-CABLE 音频路由沿用原有实现。
+- 选中「豆包输入法」以及其它支持全局快捷键的语音工具时，Remote Buddy 均使用 Microsoft 签名的 `usbip-win2` 主机控制器和 HIDMaestro 的公开 USB/IP 接口创建虚拟键盘。它将整组语音快捷键转换为键盘报告，保留左右修饰键，并在会话结束时释放按住的键；单击切换模式也用同一个后端。
+- 普通按键映射继续走原有 `SendInput` 路径，VB-CABLE 音频路由沿用原有 WASAPI 实现。
 - Remote Buddy 依靠输入法的全局热键，保持当前输入法。USB/IP 路径使用 Windows 已信任的驱动签名。
 
 ## 设置与验收

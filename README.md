@@ -1,6 +1,6 @@
 # Remote Buddy (Windows)
 
-Remote Buddy（遥控搭子）Windows 版把蓝牙电视遥控器变成 Windows 10 / 11 上的全局语音输入与快捷控制工具。拿起遥控器说话、松开结束，把语音直接送入微信输入法、豆包输入法、Windows 系统听写或 Typeless 等输入工具，同时支持自定义普通按键快捷键、媒体控制与常用文本。
+Remote Buddy（遥控搭子）Windows 版把蓝牙电视遥控器变成 Windows 10 / 11 上的全局语音输入与快捷控制工具。拿起遥控器说话、松开结束，把语音直接送入微信输入法、豆包输入法、腾讯 Chatterfly、Typeless、Windows 系统听写或其他自定义全局快捷键语音工具，同时支持自定义普通按键快捷键、媒体控制与常用文本。
 
 [产品官网](https://remote.zfdang.com) · [官网下载](https://remote.zfdang.com/downloads/index.html#platform-windows) · [GitHub Releases](https://github.com/zfdang/remote-buddy-windows/releases/latest) · [设备选购指南](https://remote.zfdang.com/device.html) · [Windows 使用指南 (FAQ)](https://remote.zfdang.com/faq.html#windows-guide)
 
@@ -34,7 +34,7 @@ Remote Buddy（遥控搭子）Windows 版把蓝牙电视遥控器变成 Windows 
 
 - **零额外硬件，内置蓝牙直连**：直接通过 Windows 10/11 原生 WinRT 低功耗蓝牙（BLE GATT）连接小米遥控器、Google Chromecast 遥控器等设备，无需购买或插拔 2.4G 接收器。
 - **低延迟音频管线与防吞字保护**：完整实现 ATVV 语音协议状态机（含 `AUDIO_SYNC` 校准与动态 `SessionID` 管理），纯 C# 内存级解码 16 kHz / 16-bit 单声道 IMA ADPCM 音频，配合 WASAPI Pre-roll（首音预存）与 Drain（尾音排空）保护，避免输入法吞掉首字或截断尾句。
-- **适配主流中文与系统输入工具**：支持微信输入法、豆包输入法 / 客户端（内置签名 USB/IP 虚拟键盘驱动以适配豆包长按判定）、腾讯 Chatterfly、Typeless、Windows 自带语音听写（`Win + H`）及其他自定义全局快捷键语音工具。
+- **适配主流中文与系统输入工具**：支持微信输入法、豆包输入法 / 客户端、腾讯 Chatterfly、Typeless、Windows 自带语音听写（`Win + H`）及其他自定义全局快捷键语音工具（内置签名 USB/IP 虚拟键盘驱动以统一发送全局语音快捷键）。
 - **多遥控器共存与按键自定义**：支持多只遥控器同时连接并按物理实体隔离配置（各自维护单击、双击、长按映射，可发送快捷键、媒体键或常用文本；语音通道按先行占用原则使用）。
 - **8 步式新手向导与驱动辅助**：覆盖 VB-CABLE 驱动检测与一键安装、蓝牙扫描配对、按键实测、收音波形测试、输入工具选择及真实转写验收，减少初次排查成本。
 - **纯本地运行、零隐私采集**：不保存任何录音文件或识别文本历史，不包含遥测或第三方统计 SDK（日志仅保留于本地）。
@@ -47,7 +47,7 @@ Remote Buddy（遥控搭子）Windows 版把蓝牙电视遥控器变成 Windows 
 2. **以管理员身份运行**：右键点击 `RemoteBuddy.App.exe` 选择**「以管理员身份运行」**（首次运行若出现 SmartScreen 提示，可点击「更多信息 → 仍要运行」）。
    > 💡 **为什么推荐管理员权限**：
    > - 通过 **BthPort ETW** 内核事件完整捕获 Chromecast G9N9N 普通按键以及小米 RC003 的返回、音量加减键；
-   > - 为**豆包输入法**提供已签名的 USB/IP 虚拟键盘注入（绕开 `LLKHF_INJECTED` 过滤）；
+   > - 通过已签名的 USB/IP 虚拟键盘统一发送全部语音工具快捷键（绕开 `LLKHF_INJECTED` 过滤，适配豆包、微信、Chatterfly 等工具）；
    > - 跨越 Windows **UIPI** 权限隔离，向管理员终端或提权应用窗口正常注入快捷键；
    > - 支持在向导内安装驱动或重启异常的蓝牙适配器。
 3. **安装 VB-CABLE 虚拟麦克风并重启 Windows**：在向导第 2 步或主界面「权限与驱动」中点击**「安装 VB-CABLE」**（应用会优先从官网镜像下载固定校验的 `VBCABLE_Driver_Pack46.zip` 并支持 VB-Audio 官网回退），在安装器中选择 `Install Driver` 后**重启电脑**。
@@ -75,12 +75,12 @@ Windows 11 已实机验证一只 RC003 与一只 G9N9N 同时连接共存：两�
 
 ## 支持的输入法与语音工具
 
-> 通用前置要求：在目标输入法或系统录音设置中将麦克风设为 **`CABLE Output (VB-Audio Virtual Cable)`**。
+> 通用前置要求：在目标输入法或系统录音设置中将麦克风设为 **`CABLE Output (VB-Audio Virtual Cable)`**，并**以管理员身份运行** Remote Buddy 以启用签名 USB/IP 虚拟键盘发送全局语音快捷键。
 
 | 工具 | 推荐触发与快捷键 | 集成说明 |
 | :--- | :--- | :--- |
 | **微信输入法（WeType）** | 按住说话 · 默认 `Ctrl + F5` | 在微信输入法「语音输入」设置中开启「快捷键全局生效」与「按住说话」，麦克风设为 `CABLE Output` |
-| **豆包输入法 / 客户端** | 按住说话 · 默认右 Alt (`RAlt`) | 在豆包中将「全局唤起语音」设为「持续模式」并保持左右修饰键完全一致；需**以管理员身份运行** Remote Buddy 以启用签名 USB/IP 虚拟键盘（详见 [豆包配置指南](docs/doubao-voice-hotkeys.md)） |
+| **豆包输入法 / 客户端** | 按住说话 · 默认右 Alt (`RAlt`) | 在豆包中将「全局唤起语音」设为「持续模式」并保持左右修饰键完全一致（原理与细节见 [豆包配置指南](docs/doubao-voice-hotkeys.md)） |
 | **腾讯 Chatterfly** | 按住说话 · 默认 `Ctrl + Shift + V` | 在 Chatterfly「设置 → 语音设置」中保持快捷键一致并开启「快捷键全局可用」，麦克风设为 `CABLE Output` |
 | **Typeless 智能转写** | 按住说话 · 默认 `Ctrl + Alt + V` | 支持全局听写快捷键唤醒 |
 | **Windows 语音听写** | 单击切换 · `Win + H` | Windows 10/11 原生内置免安装，将系统默认输入设备设为 `CABLE Output` |
@@ -91,8 +91,8 @@ Windows 11 已实机验证一只 RC003 与一只 G9N9N 同时连接共存：两�
 ## 架构与技术栈
 
 ```text
-普通键 → Raw Input／直接 HID 或 BthPort ETW → 按蓝牙设备地址路由 → 单击 / 长按 / 双击映射
-语音键 → BLE GATT 的 ATVV 控制通知 → 取得语音占用 → SendInput 或 USB/IP 虚拟键盘快捷键
+普通键 → Raw Input／直接 HID 或 BthPort ETW → 按蓝牙设备地址路由 → 单击 / 长按 / 双击映射（SendInput）
+语音键 → BLE GATT 的 ATVV 控制通知 → 取得语音占用 → USB/IP 虚拟键盘快捷键
 麦克风 → ATVV 音频通知 → IMA ADPCM 解码 → WASAPI → VB-CABLE 虚拟麦克风 → 输入法
 ```
 
@@ -103,7 +103,7 @@ Windows 11 已实机验证一只 RC003 与一只 G9N9N 同时连接共存：两�
 | **蓝牙通信** | Windows 10/11 原生 WinRT BLE API (`Windows.Devices.Bluetooth`) |
 | **音频解码与推流** | 纯 C# IMA ADPCM 解码器（含 `AUDIO_SYNC` 校准）+ [NAudio](https://github.com/naudio/NAudio) WASAPI Render 推流 |
 | **虚拟麦克风** | [VB-CABLE](https://vb-audio.com/Cable/)（WHQL 认证虚拟声卡；应用内支持下载校验与引导安装） |
-| **按键捕获与注入** | Win32 `RegisterRawInputDevices` / `SendInput`（40 字节 x64 对齐）、BthPort ETW Event 402，以及面向豆包的 `HIDMaestro` / `usbip-win2` USB/IP 虚拟键盘 |
+| **按键捕获与注入** | Win32 `RegisterRawInputDevices` / `SendInput`（40 字节 x64 对齐，用于普通按键映射）、BthPort ETW Event 402，以及用于语音快捷键的 `HIDMaestro` / `usbip-win2` USB/IP 虚拟键盘 |
 
 ---
 
@@ -128,8 +128,8 @@ Windows 11 已实机验证一只 RC003 与一只 G9N9N 同时连接共存：两�
 | **[CommunityToolkit.Mvvm](https://github.com/CommunityToolkit/dotnet)** | `8.4.0` | MIT | MVVM 源生成与命令绑定基础设施 |
 | **[WPF-UI](https://github.com/lepoco/wpfui)** | `4.0.3` | MIT | 现代 Fluent 风格 WPF 控件与主题样式 |
 | **[NAudio](https://github.com/naudio/NAudio)**（`NAudio.Wasapi` / `NAudio.Core`） | `22.0.0` / `2.2.1` | MIT | WASAPI 虚拟音频设备枚举、状态审计与低延迟音频推流 |
-| **[HIDMaestro](https://github.com/hifihedgehog/HIDMaestro/releases/tag/v2.3.0)** | `2.3.0` | MIT | 构建期自动下载并校验 SHA-256，用于通过 USB/IP 接口创建豆包所需的硬件级虚拟键盘 |
-| **[usbip-win2](https://github.com/vadimgrn/usbip-win2/releases/tag/v.0.9.8.1)** | `0.9.8.1` | BSD-2-Clause | 经微软签名的 Windows USB/IP 主机控制器驱动（随 HIDMaestro 配合用于豆包输入法） |
+| **[HIDMaestro](https://github.com/hifihedgehog/HIDMaestro/releases/tag/v2.3.0)** | `2.3.0` | MIT | 构建期自动下载并校验 SHA-256，用于通过 USB/IP 接口创建发送全局语音快捷键所需的硬件级虚拟键盘 |
+| **[usbip-win2](https://github.com/vadimgrn/usbip-win2/releases/tag/v.0.9.8.1)** | `0.9.8.1` | BSD-2-Clause | 经微软签名的 Windows USB/IP 主机控制器驱动（随 HIDMaestro 配合发送硬件级语音快捷键） |
 | **[VB-CABLE Virtual Audio Device](https://vb-audio.com/Cable/)** | Pack 46 | Donationware（VB-Audio Software） | 微软 WHQL 认证虚拟音频线驱动；**本仓库及安装包不打包或二次分发 VB-CABLE**，由用户按其自身许可独立安装 |
 
 完整的第三方版权声明、许可证全文及对应源码归档链接请参阅 **[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)**。

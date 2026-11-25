@@ -43,7 +43,7 @@
 【语音启动流程 (Hold to Talk - Start)】
 1. 用户按下遥控器语音键 (或遥控器上报 0x08 START_SEARCH)
 2. 开启音频管线 Pre-roll 静音缓冲垫（50ms / 1600 字节 @ 16kHz 16-bit Mono）
-3. 调用 SendInput 向前台注入输入法开始录音快捷键
+3. 通过 USB/IP 虚拟键盘向前台注入输入法开始录音快捷键
 4. 向遥控器下发 0x0C (MIC_OPEN) -> 接收 0x04 (AUDIO_START) 并提取 SessionID
 5. 将 Pre-roll 缓冲与后续流数据无缝送入 WASAPI 输出
 
