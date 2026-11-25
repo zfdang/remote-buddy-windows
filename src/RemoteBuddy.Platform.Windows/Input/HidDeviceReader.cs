@@ -9,7 +9,14 @@ using RemoteBuddy.Core.Protocols;
 
 namespace RemoteBuddy.Platform.Windows.Input;
 
-public sealed record HidDeviceInfo(string Path, ushort UsagePage, ushort Usage, int InputReportByteLength);
+public sealed record HidDeviceInfo(string Path, ushort UsagePage, ushort Usage, int InputReportByteLength)
+{
+    public ushort? VendorId { get; init; }
+    public ushort? ProductId { get; init; }
+    public ushort? VersionNumber { get; init; }
+    public ushort OutputReportByteLength { get; init; }
+    public ushort FeatureReportByteLength { get; init; }
+}
 
 public sealed class HidDeviceReader : IDisposable
 {
@@ -20,6 +27,15 @@ public sealed class HidDeviceReader : IDisposable
     private const uint FILE_SHARE_WRITE = 0x00000002;
     private const uint OPEN_EXISTING = 3;
     private const uint FILE_FLAG_OVERLAPPED = 0x40000000;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct HIDD_ATTRIBUTES
+    {
+        public uint Size;
+        public ushort VendorID;
+        public ushort ProductID;
+        public ushort VersionNumber;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct SP_DEVICE_INTERFACE_DATA
@@ -72,6 +88,10 @@ public sealed class HidDeviceReader : IDisposable
 
     [DllImport("hid.dll", SetLastError = true)]
     private static extern bool HidD_GetPreparsedData(SafeFileHandle HidDeviceObject, out IntPtr PreparsedData);
+
+    [DllImport("hid.dll")]
+    [return: MarshalAs(UnmanagedType.U1)]
+    private static extern bool HidD_GetAttributes(SafeFileHandle HidDeviceObject, ref HIDD_ATTRIBUTES Attributes);
 
     [DllImport("hid.dll", SetLastError = true)]
     private static extern bool HidD_FreePreparsedData(IntPtr PreparsedData);
@@ -163,7 +183,16 @@ public sealed class HidDeviceReader : IDisposable
                 {
                     if (HidP_GetCaps(pData, out HIDP_CAPS caps) >= 0)
                     {
-                        return new HidDeviceInfo(path, caps.UsagePage, caps.Usage, caps.InputReportByteLength);
+                        var attributes = new HIDD_ATTRIBUTES { Size = (uint)Marshal.SizeOf<HIDD_ATTRIBUTES>() };
+                        bool hasAttributes = HidD_GetAttributes(handle, ref attributes);
+                        return new HidDeviceInfo(path, caps.UsagePage, caps.Usage, caps.InputReportByteLength)
+                        {
+                            VendorId = hasAttributes ? attributes.VendorID : null,
+                            ProductId = hasAttributes ? attributes.ProductID : null,
+                            VersionNumber = hasAttributes ? attributes.VersionNumber : null,
+                            OutputReportByteLength = caps.OutputReportByteLength,
+                            FeatureReportByteLength = caps.FeatureReportByteLength
+                        };
                     }
                 }
                 finally
@@ -257,7 +286,7 @@ public sealed class HidDeviceReader : IDisposable
             ActivePath = path;
 
             var ct = _cts.Token;
-            _readTask = Task.Run(() => ReadLoopAsync(handle, effectiveReportLen, modelType, ct), ct);
+            _readTask = Task.Run(() => ReadLoopAsync(handle, path, effectiveReportLen, modelType, ct), ct);
             AppLogger.Info($"HidDeviceReader started successfully for: {path} (ReportLen={effectiveReportLen}, Model={modelType})", "HidDeviceReader");
             return true;
         }
@@ -280,7 +309,7 @@ public sealed class HidDeviceReader : IDisposable
         return Start(best.Path, best.InputReportByteLength, modelType);
     }
 
-    private async Task ReadLoopAsync(SafeFileHandle handle, int reportLength, RemoteModelType modelType, CancellationToken cancellationToken)
+    private async Task ReadLoopAsync(SafeFileHandle handle, string path, int reportLength, RemoteModelType modelType, CancellationToken cancellationToken)
     {
         try
         {
@@ -288,10 +317,23 @@ public sealed class HidDeviceReader : IDisposable
             // Disable stream buffering so each read requests one HID report.
             using var stream = new FileStream(handle, FileAccess.Read, bufferSize: 1, isAsync: true);
             byte[] buffer = new byte[reportLength];
+            bool loggedFirstReport = false;
+            bool loggedDecoded = false;
+            bool loggedUnrecognized = false;
             while (!cancellationToken.IsCancellationRequested)
             {
                 int bytesRead = await stream.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
-                if (bytesRead == 0 || cancellationToken.IsCancellationRequested) break;
+                if (cancellationToken.IsCancellationRequested) break;
+                if (bytesRead == 0)
+                {
+                    AppLogger.Warn($"HID input ended: model={modelType}, path={path}", "HidDeviceReader");
+                    break;
+                }
+                if (!loggedFirstReport)
+                {
+                    loggedFirstReport = true;
+                    AppLogger.Info($"HID received first input report: model={modelType}, reportId=0x{buffer[0]:X2}, len={bytesRead}, path={path}", "HidDeviceReader");
+                }
 
                 var report = buffer.AsSpan(0, bytesRead);
                 List<RemoteButton> buttons = [];
@@ -307,6 +349,16 @@ public sealed class HidDeviceReader : IDisposable
                          T1RemoteProtocol.TryParseReport(report, out buttons, out _) ||
                          XiaomiProtocol.TryParseReport(report, out buttons)
                 };
+                if (parsed && !loggedDecoded && buttons.Count > 0)
+                {
+                    loggedDecoded = true;
+                    AppLogger.Info($"HID decoded button report: model={modelType}, reportId=0x{buffer[0]:X2}, len={bytesRead}, buttons={buttons.Count}, path={path}", "HidDeviceReader");
+                }
+                else if (!parsed && !loggedUnrecognized)
+                {
+                    loggedUnrecognized = true;
+                    AppLogger.Info($"HID received unrecognized report: model={modelType}, reportId=0x{buffer[0]:X2}, len={bytesRead}, path={path}", "HidDeviceReader");
+                }
                 if (parsed)
                 {
                     DispatchButtons(buttons);
@@ -320,7 +372,7 @@ public sealed class HidDeviceReader : IDisposable
         {
             if (!cancellationToken.IsCancellationRequested)
             {
-                AppLogger.Warn($"HidDeviceReader read loop exception: {ex.Message}", "HidDeviceReader");
+                AppLogger.Warn($"HidDeviceReader read loop exception: model={modelType}, path={path}, error={ex.Message}", "HidDeviceReader");
             }
         }
     }

@@ -155,18 +155,20 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
             await Task.Delay(150, connToken).ConfigureAwait(false);
             if (!IsStillCurrent()) return;
 
+            AppLogger.Info($"ETW GATT probe submitted: addr=0x{device.BluetoothAddress:X12}, attempt=1, cache=Uncached", "BluetoothManager");
             var result = await device.GetGattServicesForUuidAsync(marker, BluetoothCacheMode.Uncached).AsTask().ConfigureAwait(false);
+            AppLogger.Info($"ETW GATT probe completed: addr=0x{device.BluetoothAddress:X12}, attempt=1, status={result.Status}, services={result.Services.Count}, protocolError={result.ProtocolError}", "BluetoothManager");
             foreach (var service in result.Services) service.Dispose();
-            AppLogger.Info($"Chromecast button source query finished: {result.Status}", "BluetoothManager");
 
             if (result.Status != GattCommunicationStatus.Success)
             {
                 await Task.Delay(250, connToken).ConfigureAwait(false);
                 if (!IsStillCurrent()) return;
 
+                AppLogger.Info($"ETW GATT probe submitted: addr=0x{device.BluetoothAddress:X12}, attempt=2, cache=Uncached", "BluetoothManager");
                 var retryResult = await device.GetGattServicesForUuidAsync(marker, BluetoothCacheMode.Uncached).AsTask().ConfigureAwait(false);
+                AppLogger.Info($"ETW GATT probe completed: addr=0x{device.BluetoothAddress:X12}, attempt=2, status={retryResult.Status}, services={retryResult.Services.Count}, protocolError={retryResult.ProtocolError}", "BluetoothManager");
                 foreach (var service in retryResult.Services) service.Dispose();
-                AppLogger.Info($"Chromecast button source query retry: {retryResult.Status}", "BluetoothManager");
             }
         }
         catch (OperationCanceledException)
@@ -487,11 +489,11 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
             var information = new RemoteDeviceInformation(bluetoothAddress);
             if (!isChromecast)
             {
-                var deviceInformation = await ReadDeviceInformationAsync(device, information, includeHardwareDetails: false);
+                information = await ReadDeviceInformationAsync(device, information, includeHardwareDetails: false);
                 lock (_stateLock)
                 {
                     if (targetConnGen != _connectionGeneration) return false;
-                    if (deviceInformation.ModelNumber?.Contains("ARN9", StringComparison.OrdinalIgnoreCase) == true)
+                    if (information.ModelNumber?.Contains("ARN9", StringComparison.OrdinalIgnoreCase) == true)
                     {
                         _decoder.LowNibbleFirst = true;
                         AppLogger.Info("Detected ARN9 hardware model via DIS (LowNibbleFirst=true)", "BluetoothManager");
@@ -633,21 +635,16 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
 
                 ConnectedDeviceContainerId = foundContainerId;
                 if (isChromecast)
-                {
                     ConnectedEtwAttributeFilter = discoveredFilter;
-                    information = information with { VoiceCapabilities = capabilities };
-                    ConnectedDeviceInformation = information;
-                }
+                information = information with { VoiceCapabilities = capabilities };
+                ConnectedDeviceInformation = information;
                 IsReady = true;
             }
 
-            AppLogger.Info($"Bluetooth remote connected and ready: '{device.Name}', FrameSize={_frameSize}, ContainerId={ConnectedDeviceContainerId}", "BluetoothManager");
+            AppLogger.Info($"Bluetooth remote connected and ready: '{device.Name}', addr=0x{bluetoothAddress:X12}, FrameSize={_frameSize}, ContainerId={ConnectedDeviceContainerId}", "BluetoothManager");
             ConnectionStatusChanged?.Invoke(bluetoothAddress, true, device.Name);
             _ = Task.Run(() => VirtualAudioAuditor.GetCachedStatus());
-            if (isChromecast)
-            {
-                _ = LoadChromecastHardwareDetailsAsync(device, targetConnGen, information);
-            }
+            _ = LoadRemoteHardwareDetailsAsync(device, targetConnGen, information);
             return true;
         }
         catch (Exception ex)
@@ -853,7 +850,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
         return formatted;
     }
 
-    private async Task LoadChromecastHardwareDetailsAsync(BluetoothLEDevice device, int generation, RemoteDeviceInformation information)
+    private async Task LoadRemoteHardwareDetailsAsync(BluetoothLEDevice device, int generation, RemoteDeviceInformation information)
     {
         var updated = await ReadDeviceInformationAsync(device, information, includeHardwareDetails: true).ConfigureAwait(false);
         lock (_stateLock)
@@ -863,11 +860,11 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
         }
 
         AppLogger.Info(
-            $"G9N9N hardware details for 0x{device.BluetoothAddress:X12}: model='{updated.ModelNumber ?? "-"}', firmware='{updated.FirmwareRevision ?? "-"}', hardwareRev='{updated.HardwareRevision ?? "-"}', pnp='{updated.VendorProductId ?? "-"}', hidVersion='{updated.HidVersionText ?? "-"}'",
+            $"Bluetooth remote hardware: addr=0x{updated.BluetoothAddress:X12}, model='{updated.ModelNumber ?? "unavailable"}', firmware='{updated.FirmwareRevision ?? "unavailable"}', hardwareRev='{updated.HardwareRevision ?? "unavailable"}', pnp='{updated.VendorProductId ?? "unavailable"}', pnpVersion='{updated.HidVersionText ?? "unavailable"}', voiceProtocol='{updated.VoiceProtocol ?? "unavailable"}'",
             "BluetoothManager");
         if (updated == information) return;
 
-        ConnectedDeviceInformationChanged?.Invoke(device.BluetoothAddress);
+        ConnectedDeviceInformationChanged?.Invoke(updated.BluetoothAddress);
     }
 
     private static async Task<RemoteDeviceInformation> ReadDeviceInformationAsync(
@@ -883,7 +880,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 if (result.Status != GattCommunicationStatus.Success) return information;
                 var service = result.Services[0];
                 var model = await ReadDeviceInformationValueAsync(service, ModelNumberUuid).ConfigureAwait(false);
-                information = information with { ModelNumber = RemoteDeviceInformation.DecodeDeviceString(model) };
+                information = information with { ModelNumber = RemoteDeviceInformation.DecodeDeviceString(model) ?? information.ModelNumber };
                 if (!includeHardwareDetails) return information;
 
                 var firmware = await ReadDeviceInformationValueAsync(service, FirmwareRevisionUuid).ConfigureAwait(false);

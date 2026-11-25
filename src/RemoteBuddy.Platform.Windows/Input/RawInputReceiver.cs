@@ -130,6 +130,7 @@ public sealed class RawInputReceiver : IDisposable
     private readonly Dictionary<IntPtr, string> _devicePathCache = new();
     private readonly Dictionary<IntPtr, IntPtr> _preparsedDataCache = new();
     private readonly Dictionary<IntPtr, Dictionary<byte, HashSet<RemoteButton>>> _deviceReportButtons = new();
+    private readonly HashSet<(IntPtr Device, string Outcome)> _loggedHidReports = new();
     private readonly HashSet<IntPtr> _devicesHoldingF5 = new();
     private readonly object _lock = new();
 
@@ -221,6 +222,7 @@ public sealed class RawInputReceiver : IDisposable
                     Marshal.FreeHGlobal(preparsed);
                 }
                 _devicesHoldingF5.Remove(hDevice.Value);
+                _loggedHidReports.RemoveWhere(entry => entry.Device == hDevice.Value);
             }
             else
             {
@@ -243,6 +245,7 @@ public sealed class RawInputReceiver : IDisposable
                 _deviceReportButtons.Clear();
                 _devicePathCache.Clear();
                 _devicesHoldingF5.Clear();
+                _loggedHidReports.Clear();
             }
         }
 
@@ -258,6 +261,7 @@ public sealed class RawInputReceiver : IDisposable
         lock (_lock)
         {
             _devicePathCache.Remove(hDevice, out cachedPath);
+            _loggedHidReports.RemoveWhere(entry => entry.Device == hDevice);
             if (_preparsedDataCache.Remove(hDevice, out var preparsed) && preparsed != IntPtr.Zero)
             {
                 Marshal.FreeHGlobal(preparsed);
@@ -729,12 +733,18 @@ public sealed class RawInputReceiver : IDisposable
                         }
                     }
 
+                    byte reportId = GetReportId(slice);
+                    if (!filterRejected)
+                    {
+                        string outcome = !recognized ? "unrecognized" : currentButtons.Count == 0 ? "no mapped buttons" : "decoded";
+                        if (_loggedHidReports.Add((hDevice, outcome)))
+                            AppLogger.Info($"RawInput HID report: hDevice=0x{hDevice:X}, model={modelType}, reportId=0x{reportId:X2}, len={reportSize}, outcome={outcome}, buttons={currentButtons.Count}", "RawInputReceiver");
+                    }
+
                     if (!recognized)
                     {
                         continue;
                     }
-
-                    byte reportId = GetReportId(slice);
 
                     if (currentButtons.Count == 0 && reportId == 0)
                     {
@@ -896,6 +906,7 @@ public sealed class RawInputReceiver : IDisposable
             _deviceReportButtons.Clear();
             _devicePathCache.Clear();
             _devicesHoldingF5.Clear();
+            _loggedHidReports.Clear();
         }
     }
 }

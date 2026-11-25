@@ -51,7 +51,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly HashSet<ulong> _readyAddresses = new();
     private readonly Dictionary<IntPtr, ulong> _rawAddresses = new();
     private readonly HashSet<IntPtr> _nonTargetRawHandles = new();
-    private readonly Action<ButtonAssignment> _executeMapping;
+    private readonly HashSet<(ulong Address, InputSource Source, string Outcome)> _loggedButtonRoutes = [];
+    private readonly Action<ButtonAssignment>? _executeMappingOverride;
     private EtwButtonSource[] _etwSources = [];
     private CancellationTokenSource? _etwStartCts;
     private CancellationTokenSource? _probeRetryCts;
@@ -191,7 +192,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     internal MainViewModel(ConfigService configService, IBluetoothManager bluetoothManager, Action<ButtonAssignment>? executeMapping)
     {
-        _executeMapping = executeMapping ?? ExecuteButtonAction;
+        _executeMappingOverride = executeMapping;
         _configService = configService;
         _bluetoothManager = bluetoothManager;
         _voiceKeyGuard = new RemoteVoiceKeyGuard(() =>
@@ -348,6 +349,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var addresses = ready.Select(device => device.BluetoothAddress).ToHashSet();
         foreach (ulong address in _readyAddresses.Except(addresses).ToArray())
         {
+            _loggedButtonRoutes.RemoveWhere(entry => entry.Address == address);
             ResetDeviceGestures(address);
             lock (_etwProbeLock) _unboundEtwAddresses.Remove(address);
             foreach (var handle in _rawAddresses.Where(pair => pair.Value == address).Select(pair => pair.Key).ToArray())
@@ -436,8 +438,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
 
             if (_hidReaders.ContainsKey(address) || _readyAddresses.Contains(address)) continue;
+            LogRemoteShortcutConfiguration(device);
             var info = HidDeviceReader.FindBestDevice(address);
-            if (info == null) continue;
+            if (info == null)
+            {
+                AppLogger.Info($"HID input collection unavailable: addr=0x{address:X12}, model={device.ModelType}", "MainViewModel");
+                continue;
+            }
+            AppLogger.Info($"HID input collection selected: addr=0x{address:X12}, model={device.ModelType}, vid={info.VendorId?.ToString("X4") ?? "unavailable"}, pid={info.ProductId?.ToString("X4") ?? "unavailable"}, hidVersion={info.VersionNumber?.ToString("X4") ?? "unavailable"}, usagePage=0x{info.UsagePage:X4}, usage=0x{info.Usage:X4}, reportLengths(input/output/feature)={info.InputReportByteLength}/{info.OutputReportByteLength}/{info.FeatureReportByteLength}", "MainViewModel");
             device.HidDevicePath = info.Path;
             device.HidUsagePage = info.UsagePage;
             device.HidUsage = info.Usage;
@@ -457,6 +465,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         _readyAddresses.Clear();
         _readyAddresses.UnionWith(addresses);
+    }
+
+    private void LogRemoteShortcutConfiguration(RemoteDevice device)
+    {
+        var inputTool = GetEffectiveInputToolConfig();
+        var shortcuts = new List<string>();
+        foreach (var mapping in device.Mappings ?? [])
+        {
+            foreach (var trigger in Enum.GetValues<ButtonTrigger>())
+            {
+                var assignment = mapping.GetAssignment(trigger);
+                if (assignment.Action == ButtonActionType.KeyboardShortcut && !string.IsNullOrWhiteSpace(assignment.Shortcut))
+                    shortcuts.Add($"{mapping.Button}/{trigger}={assignment.Shortcut}");
+            }
+        }
+        AppLogger.Info($"Remote shortcut configuration: addr=0x{device.BluetoothAddress:X12}, model={device.ModelType}, mappingsEnabled={MappingVm.CustomMappingEnabled}, tool={inputTool.Tool}, trigger={inputTool.TriggerMode}, voiceShortcut='{inputTool.Shortcut}', mappedShortcuts=[{string.Join(", ", shortcuts)}]", "MainViewModel");
     }
 
     private void CancelEtwTasks()
@@ -935,9 +959,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (device == null)
         {
             _nonTargetRawHandles.Add(handle);
+            if (RawInputReceiver.IsKnownRemoteDevice(handle, path))
+                AppLogger.Info($"RawInput remote identity unmatched: hDevice=0x{handle:X}, model={RawInputReceiver.InferModelTypeFromDevice(handle, path)}", "MainViewModel");
             return false;
         }
         _rawAddresses[handle] = device.BluetoothAddress;
+        AppLogger.Info($"RawInput remote identity matched: hDevice=0x{handle:X}, addr=0x{device.BluetoothAddress:X12}, model={device.ModelType}", "MainViewModel");
         return true;
     }
 
@@ -961,12 +988,25 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     internal void HandleDeviceButton(ulong address, RemoteButton button, bool isDown, InputSource source = InputSource.Direct)
     {
-        if (!_bluetoothManager.IsDeviceReady(address)) return;
+        if (!_bluetoothManager.IsDeviceReady(address))
+        {
+            LogButtonRoute("device not ready");
+            return;
+        }
         var sourceDevice = KnownRemotes().FirstOrDefault(device => device.BluetoothAddress == address);
-        if (sourceDevice == null) return;
+        if (sourceDevice == null)
+        {
+            LogButtonRoute("unknown device");
+            return;
+        }
         if (ActiveOnboardingVm is { } onboarding)
         {
-            if (onboarding.SelectedDevice?.BluetoothAddress != address) return;
+            if (onboarding.SelectedDevice?.BluetoothAddress != address)
+            {
+                LogButtonRoute("different remote selected in wizard");
+                return;
+            }
+            LogButtonRoute("routed to wizard");
             if (isDown) onboarding.NotifyButtonPressed(button);
             if (button != RemoteButton.Voice || onboarding.CurrentWizardStep is not
                 (WizardStep.AudioTest or WizardStep.TranscriptionVerify)) return;
@@ -984,10 +1024,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
             long elapsed = now - last.Time;
             if (last.Source != source && elapsed < 150)
             {
+                LogButtonRoute("duplicate from another input source");
                 return;
             }
             if (last.Source == source && wasDown == isDown && elapsed < 60)
             {
+                LogButtonRoute("repeated report");
                 return;
             }
         }
@@ -1016,6 +1058,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         if (IsMappingPreviewSuppressed())
         {
+            LogButtonRoute("mapping preview active");
             if (!isDown && _gestures.TryGetValue(address, out var activeGestures))
             {
                 activeGestures.Reset();
@@ -1023,7 +1066,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        if (!MappingVm.CustomMappingEnabled) return;
+        if (!MappingVm.CustomMappingEnabled)
+        {
+            LogButtonRoute("custom mapping disabled");
+            return;
+        }
         if (!_gestures.TryGetValue(address, out var gestures))
         {
             if (!isDown) return;
@@ -1036,7 +1083,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         if (!isDown) gestures.HandleUp(button);
         else if (sourceDevice.Mappings?.FirstOrDefault(mapping => mapping.Button == button) is { } mapping)
+        {
+            LogButtonRoute("mapping gesture queued");
             gestures.HandleDown(mapping);
+        }
+        else LogButtonRoute("no mapping assigned");
+
+        void LogButtonRoute(string outcome)
+        {
+            if (isDown && button != RemoteButton.Voice && _loggedButtonRoutes.Add((address, source, outcome)))
+                AppLogger.Info($"Remote button routing: addr=0x{address:X12}, source={source}, button={button}, outcome={outcome}", "MainViewModel");
+        }
     }
 
     private void ExecuteMappedButton(ulong address, RemoteButton button, ButtonAssignment assignment)
@@ -1052,7 +1109,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        _executeMapping(assignment);
+        if (_executeMappingOverride != null)
+            _executeMappingOverride(assignment);
+        else
+            ExecuteButtonAction(address, button, assignment);
     }
 
     private static bool IsNativeKeyboardRemote(RemoteModelType type) =>
@@ -1106,7 +1166,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         bool sent = administrator && (session.TriggerMode == VoiceTriggerMode.HoldToTalk
             ? _usbKeyboard.SendDown(session.Shortcut)
             : _usbKeyboard.SendClick(session.Shortcut));
-        AppLogger.Info($"USB/IP voice shortcut start: Tool={session.Tool}, Mode={session.TriggerMode}, Shortcut='{session.Shortcut}', Admin={administrator}, Success={sent}", "MainViewModel");
+        AppLogger.Info($"USB/IP voice shortcut start: Tool={session.Tool}, Mode={session.TriggerMode}, Shortcut='{session.Shortcut}', Admin={administrator}, Success={sent}, addr=0x{session.DeviceAddress:X12}", "MainViewModel");
         if (!sent)
         {
             string message = administrator
@@ -1130,7 +1190,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         bool sent = session.TriggerMode == VoiceTriggerMode.HoldToTalk
             ? _usbKeyboard.Release()
             : _usbKeyboard.SendClick(session.Shortcut);
-        AppLogger.Info($"USB/IP voice shortcut end: Tool={session.Tool}, Mode={session.TriggerMode}, Shortcut='{session.Shortcut}', Success={sent}", "MainViewModel");
+        AppLogger.Info($"USB/IP voice shortcut end: Tool={session.Tool}, Mode={session.TriggerMode}, Shortcut='{session.Shortcut}', Success={sent}, addr=0x{session.DeviceAddress:X12}", "MainViewModel");
     }
 
     internal Func<IntPtr, string?> RawDevicePathResolverForTest { get; set; } = RawInputReceiver.GetDevicePath;
@@ -1290,14 +1350,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (args.PropertyName == nameof(MappingViewModel.CustomMappingEnabled)) ResetGestures();
     }
 
-    private void ExecuteButtonAction(ButtonAssignment assignment)
+    private void ExecuteButtonAction(ulong address, RemoteButton button, ButtonAssignment assignment)
     {
         if (!_bluetoothManager.IsConnected || ActiveOnboardingVm != null || !MappingVm.CustomMappingEnabled) return;
 
         switch (assignment.Action)
         {
             case ButtonActionType.KeyboardShortcut when !string.IsNullOrEmpty(assignment.Shortcut):
-                NativeInputSender.SendShortcutClick(assignment.Shortcut);
+                bool sent = NativeInputSender.SendShortcutClick(assignment.Shortcut);
+                string lastDownSource = _dedup.TryGetValue(address, out var deviceDedup) &&
+                    deviceDedup.TryGetValue((button, true), out var lastDown)
+                    ? lastDown.Source.ToString()
+                    : "unknown";
+                AppLogger.Info($"Mapped keyboard shortcut: addr=0x{address:X12}, button={button}, lastDownSource={lastDownSource}, shortcut='{assignment.Shortcut}', sent={sent}", "MainViewModel");
                 break;
             case ButtonActionType.MediaControl when assignment.Media != MediaCommand.None:
                 NativeInputSender.SendMedia(assignment.Media);

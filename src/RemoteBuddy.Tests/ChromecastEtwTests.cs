@@ -784,6 +784,46 @@ public class ChromecastEtwTests
     }
 
     [Fact]
+    public void ProbeDiagnostics_DistinguishRejectedMarkerFromSuccessfulBinding()
+    {
+        string tempLogDir = Path.Combine(Path.GetTempPath(), "RB_ProbeDiag_" + Guid.NewGuid().ToString("N"));
+        AppLogger.ResetForTesting();
+        AppLogger.Initialize(tempLogDir);
+        try
+        {
+            using var receiver = new ChromecastEtwReceiver();
+            var source = new EtwButtonSource(0x1234, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N);
+            receiver.SetSources([source]);
+            var bound = new List<ulong>();
+            receiver.SourceBound += bound.Add;
+            var (request, response) = CreateProbeHandshake(source.Marker);
+            byte[] rejected = (byte[])request.Clone();
+            rejected[6] = 5;
+
+            receiver.ProcessPacket(4, rejected);
+            receiver.ProcessPacket(4, rejected);
+            receiver.ProcessPacket(3, response);
+            Assert.Empty(bound);
+
+            receiver.ProcessPacket(4, request);
+            receiver.ProcessPacket(3, response);
+            Assert.Equal([source.Address], bound);
+
+            string log = File.ReadAllText(AppLogger.CurrentLogFilePath);
+            Assert.Single(log.Split('\n'), line => line.Contains("rejected outgoing ACL: reason=NonAttChannel"));
+            Assert.Single(log.Split('\n'), line => line.Contains("marker seen in rejected packet: addr=0x000000001234"));
+            Assert.Contains("BthPort observed GATT query for 0x000000001234", log);
+            Assert.Contains("ETW bound 0x000000001234 to ACL 0x0040 (via=ATT response 0x01", log);
+            Assert.DoesNotContain(Convert.ToHexString(request.AsSpan(15)), log);
+        }
+        finally
+        {
+            AppLogger.ResetForTesting();
+            if (Directory.Exists(tempLogDir)) Directory.Delete(tempLogDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void G9N9N_DiagnosticLogging_LogsObservedFormat_IgnoresExcluded_AndCapsUnknownsAt32()
     {
         string tempLogDir = Path.Combine(Path.GetTempPath(), "RB_G9N9N_Diag_" + Guid.NewGuid().ToString("N"));

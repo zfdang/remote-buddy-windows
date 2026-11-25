@@ -213,7 +213,7 @@
             <StackPanel x:Name="Step7Panel" Visibility="Collapsed">
                 <TextBlock Text="真实输入法转写验收" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="0,0,0,10"/>
                 <TextBlock Text="{Binding TranscriptionInstructions}" Foreground="{StaticResource SecondaryTextBrush}" TextWrapping="Wrap" Margin="0,0,0,14"/>
-                <TextBox Text="{Binding TranscriptionTestText, UpdateSourceTrigger=PropertyChanged}" Height="70" Background="#111" Foreground="#FFF" FontSize="14" Padding="10" TextWrapping="Wrap" Margin="0,0,0,14"/>
+                <TextBox Text="{Binding TranscriptionTestText, UpdateSourceTrigger=PropertyChanged}" IsKeyboardFocusWithinChanged="OnTranscriptionFocusChanged" Height="70" Background="#111" Foreground="#FFF" FontSize="14" Padding="10" TextWrapping="Wrap" Margin="0,0,0,14"/>
                 <CheckBox Content="我已确认上述输入法转写结果正确" IsChecked="{Binding IsTranscriptionVerified}" Foreground="#FFF"/>
             </StackPanel>
 
