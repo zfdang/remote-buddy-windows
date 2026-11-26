@@ -99,6 +99,8 @@ public sealed class ChromecastEtwReceiver : IDisposable
         public ushort? PendingHandle { get; set; }
         public ulong ActiveProbeRound { get; set; }
         public bool SawOutgoingProbeInRound { get; set; }
+        public bool SawOutgoingProbeEver { get; set; }
+        public bool CompletedProbeWithoutOutgoingAcl { get; set; }
         public ushort? CandidateProbeHandle { get; set; }
         public bool CandidateProbeConflict { get; set; }
         public ushort? PendingFallbackHandle { get; set; }
@@ -126,6 +128,13 @@ public sealed class ChromecastEtwReceiver : IDisposable
         }
     }
 
+    private readonly record struct PendingNotificationTap(
+        ushort Connection,
+        ushort Attribute,
+        ulong Address,
+        RemoteButton Button,
+        G9N9NReportFormat Format);
+
     private const long ProbeGraceWindowMs = 300;
     private readonly object _lock = new();
     private readonly object _stateLock = new();
@@ -135,6 +144,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
     private ulong _activeProbeRound;
     private bool _activeProbeEnded;
     private long _activeProbeEndedTickMs;
+    private PendingNotificationTap? _pendingNotificationTap;
     private readonly HashSet<string> _loggedProbeStages = [];
     private readonly HashSet<byte> _loggedUnsupportedKinds = [];
     private readonly HashSet<ulong> _readyAddresses = [];
@@ -159,6 +169,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
             _activeProbeRound = 0;
             _activeProbeEnded = false;
             _activeProbeEndedTickMs = 0;
+            _pendingNotificationTap = null;
             _loggedProbeStages.Clear();
             _loggedUnsupportedKinds.Clear();
             _loggedUnassignedNotifications.Clear();
@@ -219,6 +230,10 @@ public sealed class ChromecastEtwReceiver : IDisposable
             var source = _sources.FirstOrDefault(s => s.Source.Address == address && s.ActiveProbeRound == round);
             if (source != null)
             {
+                if (!source.SawOutgoingProbeInRound && !source.PendingHandle.HasValue && !source.SawOutgoingProbeEver)
+                {
+                    source.CompletedProbeWithoutOutgoingAcl = true;
+                }
                 PromoteProbeCandidateLocked(_sources, source, ref bindLog, ref newlyBoundAddr, ref fallbackLog);
             }
         }
@@ -601,6 +616,10 @@ public sealed class ChromecastEtwReceiver : IDisposable
                         disconnectedAddrs ??= [];
                         disconnectedAddrs.Add(source.Source.Address);
                     }
+                    if (_pendingNotificationTap?.Connection == handle)
+                    {
+                        _pendingNotificationTap = null;
+                    }
                 }
                 if (disconnectedAddrs != null)
                 {
@@ -640,9 +659,14 @@ public sealed class ChromecastEtwReceiver : IDisposable
                     if (!att.SequenceEqual(source.Request)) continue;
                     source.PendingHandle = connection;
                     source.SawOutgoingProbeInRound = true;
+                    source.SawOutgoingProbeEver = true;
                     source.CandidateProbeHandle = null;
                     source.CandidateProbeConflict = false;
                     source.PendingFallbackHandle = null;
+                    if (_pendingNotificationTap?.Address == source.Source.Address)
+                    {
+                        _pendingNotificationTap = null;
+                    }
                     gattQueryLog = $"BthPort observed GATT query for 0x{source.Source.Address:X12}";
                     break;
                 }
@@ -731,6 +755,110 @@ public sealed class ChromecastEtwReceiver : IDisposable
                         redactionLog = $"Windows omitted a verified button code (addr=0x{fallbackSource.Source.Address:X12}, attr=0x{fbAttr:X4}, expectedLen={expectedPayloadLength})";
                     }
                     truncatedAddr = fallbackSource.Source.Address;
+                }
+            }
+            if (pendingSource == null && boundSource == null && fallbackSource == null &&
+                !incomplete && att.Length >= 3 && att[0] is 0x1B or 0x1D &&
+                !sources.Any(s => s.SawOutgoingProbeEver) &&
+                !(_activeProbeAddress != 0 && !_activeProbeEnded))
+            {
+                ushort noteAttr = BinaryPrimitives.ReadUInt16LittleEndian(att[1..]);
+                var noteReport = att[3..];
+                SourceState? uniqueCandidate = null;
+                RemoteButton uniqueButton = RemoteButton.None;
+                bool uniqueDown = false;
+                G9N9NReportFormat uniqueFormat = G9N9NReportFormat.Unknown;
+                int matchCount = 0;
+
+                foreach (var candidate in sources)
+                {
+                    if (candidate.BoundHandle.HasValue ||
+                        (candidate.PendingFallbackHandle is ushort armedHandle && armedHandle != connection) ||
+                        _readyAddresses.Count == 0 ||
+                        !_readyAddresses.Contains(candidate.Source.Address))
+                    {
+                        continue;
+                    }
+
+                    if (!TryParseForSource(candidate, att, noteAttr, noteReport,
+                            out var candBtn, out bool candDown, out var candFmt))
+                    {
+                        continue;
+                    }
+
+                    matchCount++;
+                    if (matchCount > 1) break;
+                    uniqueCandidate = candidate;
+                    uniqueButton = candBtn;
+                    uniqueDown = candDown;
+                    uniqueFormat = candFmt;
+                }
+
+                if (matchCount != 1 ||
+                    uniqueCandidate == null ||
+                    uniqueCandidate.PendingHandle.HasValue ||
+                    uniqueCandidate.PendingFallbackHandle.HasValue ||
+                    uniqueCandidate.SawOutgoingProbeEver ||
+                    !uniqueCandidate.CompletedProbeWithoutOutgoingAcl)
+                {
+                    _pendingNotificationTap = null;
+                }
+                else
+                {
+                    if (uniqueDown && uniqueButton != RemoteButton.None)
+                    {
+                        if (_pendingNotificationTap is { } priorTap &&
+                            (priorTap.Connection != connection || priorTap.Address != uniqueCandidate.Source.Address))
+                        {
+                            _pendingNotificationTap = null;
+                        }
+                        else
+                        {
+                            _pendingNotificationTap = new PendingNotificationTap(
+                                connection, noteAttr, uniqueCandidate.Source.Address, uniqueButton, uniqueFormat);
+                            if (!_loggedProbeStages.Contains("UnverifiedPressObserved") &&
+                                _loggedProbeStages.Add("UnverifiedPressObserved"))
+                            {
+                                diagnosticLog ??= $"ETW fallback observed initial press pending release: addr=0x{uniqueCandidate.Source.Address:X12}, acl=0x{connection:X4}, attr=0x{noteAttr:X4}, button={uniqueButton}";
+                            }
+                        }
+                    }
+                    else if (!uniqueDown && uniqueButton == RemoteButton.None &&
+                             _pendingNotificationTap is { } tap &&
+                             tap.Connection == connection &&
+                             tap.Attribute == noteAttr &&
+                             tap.Address == uniqueCandidate.Source.Address &&
+                             !sources.Any(other => other != uniqueCandidate && other.BoundHandle == connection))
+                    {
+                        BindLocked(sources, uniqueCandidate, "single-candidate notification press+release");
+                        boundSource = uniqueCandidate;
+                        _pendingNotificationTap = null;
+
+                        if (uniqueCandidate.Source.Protocol == EtwProtocolKind.GoogleG9N9N)
+                        {
+                            if (noteAttr == G9N9NInputAttribute && !uniqueCandidate.LockedG9N9NHandle.HasValue)
+                            {
+                                uniqueCandidate.LockedG9N9NHandle = G9N9NInputAttribute;
+                            }
+                            if (uniqueCandidate.LoggedFormats.Add((noteAttr, tap.Format)))
+                            {
+                                formatLog =
+                                    $"G9N9N ETW report format observed: addr=0x{uniqueCandidate.Source.Address:X12}, attr=0x{noteAttr:X4}, format={tap.Format}, len={noteReport.Length}, sample={FormatHex(noteReport)}, button={tap.Button}, down=True";
+                            }
+                        }
+
+                        buttonAddr = uniqueCandidate.Source.Address;
+                        edge1 = tap.Button;
+                        edge1Down = true;
+                        edge2 = tap.Button;
+                        edge2Down = false;
+                        buttonReportDetails =
+                            $" protocol={uniqueCandidate.Source.Protocol} acl=0x{connection:X4} attr=0x{noteAttr:X4} opcode=0x{att[0]:X2} len={noteReport.Length}";
+                        if (uniqueCandidate.Source.Protocol == EtwProtocolKind.GoogleG9N9N && noteReport.Length <= MaxDiagnosticHexBytes)
+                        {
+                            buttonReportDetails += $" format={tap.Format} report={FormatHex(noteReport)}";
+                        }
+                    }
                 }
             }
             if (pendingSource == null && boundSource == null && att.Length >= 3 && att[0] is 0x1B or 0x1D &&
@@ -988,21 +1116,32 @@ public sealed class ChromecastEtwReceiver : IDisposable
         }
     }
 
+    private static bool TryParseForSource(
+        SourceState source,
+        ReadOnlySpan<byte> att,
+        ushort attribute,
+        ReadOnlySpan<byte> report,
+        out RemoteButton button,
+        out bool isDown,
+        out G9N9NReportFormat format)
+    {
+        button = RemoteButton.None;
+        isDown = false;
+        format = G9N9NReportFormat.Unknown;
+        if (source.Source.Protocol == EtwProtocolKind.GoogleG9N9N)
+        {
+            return EvaluateG9N9NAttribute(source, attribute) == G9N9NAttributeDecision.Allowed &&
+                   TryParseG9N9NPayload(report, out button, out isDown, out format);
+        }
+        return TryParseButtonReport(att, incomplete: false, source.Source.Protocol, out button, out isDown, out _);
+    }
+
     private static bool CanBindFallbackSource(
         SourceState source,
         ReadOnlySpan<byte> att,
         ushort attribute,
-        ReadOnlySpan<byte> report)
-    {
-        if (source.Source.Protocol == EtwProtocolKind.GoogleG9N9N)
-        {
-            return EvaluateG9N9NAttribute(source, attribute) == G9N9NAttributeDecision.Allowed &&
-                   TryParseG9N9NPayload(report, out _, out bool isDown, out _) &&
-                   isDown;
-        }
-        return TryParseButtonReport(att, incomplete: false, source.Source.Protocol, out _, out bool btnDown, out _) &&
-               btnDown;
-    }
+        ReadOnlySpan<byte> report) =>
+        TryParseForSource(source, att, attribute, report, out _, out bool isDown, out _) && isDown;
 
     private void LogUnmatchedMarker(ReadOnlySpan<byte> packet, string reason)
     {

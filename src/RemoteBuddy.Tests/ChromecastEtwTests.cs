@@ -1294,4 +1294,65 @@ public class ChromecastEtwTests
 
         Assert.Equal([g9.Address], truncated);
     }
+
+    [Fact]
+    public void FallbackBinding_WithoutAttProbeResponse_BindsSingleMatchingReadyCandidateOnPressReleasePair()
+    {
+        using var receiver = new ChromecastEtwReceiver();
+        var g9 = new EtwButtonSource(0x4754514C9587, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B, [0x003C, 0x003F]);
+        var xiaomi = new EtwButtonSource(0xC05D39FA361E, Guid.NewGuid(), EtwProtocolKind.Xiaomi);
+        receiver.SetSources([g9, xiaomi]);
+        receiver.SetReadyAddresses([g9.Address, xiaomi.Address]);
+
+        var bound = new List<ulong>();
+        var edges = new List<(ulong Address, RemoteButton Button, bool Down)>();
+        receiver.SourceBound += bound.Add;
+        receiver.ButtonEvent += (addr, btn, down) => edges.Add((addr, btn, down));
+
+        // Windows 10 app.log scenario: Success/services=0 completed, neither kind=4 nor ATT 0x01/0x07 appeared in ETW
+        receiver.BeginProbe(g9.Address, round: 1);
+        receiver.EndProbe(g9.Address, round: 1);
+
+        // Initial press is observed without immediate binding
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x04, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0E01));
+        Assert.Empty(bound);
+        Assert.Empty(edges);
+
+        // Matching release on the same connection + attribute completes binding and emits press+release
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, new byte[8], connectionHandle: 0x0E01));
+        Assert.Equal([g9.Address], bound);
+        Assert.Equal([(g9.Address, RemoteButton.Down, true), (g9.Address, RemoteButton.Down, false)], edges);
+
+        // Subsequent presses dispatch immediately
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x07, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0E01));
+        Assert.Equal([
+            (g9.Address, RemoteButton.Down, true),
+            (g9.Address, RemoteButton.Down, false),
+            (g9.Address, RemoteButton.Ok, true),
+        ], edges);
+    }
+
+    [Fact]
+    public void FallbackBinding_WithoutAttProbeResponse_SkipsWhenTwoReadyDevicesCanMatchNotification()
+    {
+        using var receiver = new ChromecastEtwReceiver();
+        var g9A = new EtwButtonSource(0x4754514C9587, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B);
+        var g9B = new EtwButtonSource(0x5566778899AA, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B);
+        receiver.SetSources([g9A, g9B]);
+        receiver.SetReadyAddresses([g9A.Address, g9B.Address]);
+
+        var bound = new List<ulong>();
+        var edges = new List<(ulong Address, RemoteButton Button, bool Down)>();
+        receiver.SourceBound += bound.Add;
+        receiver.ButtonEvent += (addr, btn, down) => edges.Add((addr, btn, down));
+
+        receiver.BeginProbe(g9A.Address, round: 1);
+        receiver.EndProbe(g9A.Address, round: 1);
+
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x04, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0E01));
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, new byte[8], connectionHandle: 0x0E01));
+
+        Assert.Empty(bound);
+        Assert.Empty(edges);
+    }
 }
