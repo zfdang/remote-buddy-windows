@@ -45,12 +45,17 @@
                         <TextBlock Text="{Binding DriverStatusMessage}" FontSize="14" Foreground="#FFF" TextWrapping="Wrap" Margin="0,0,0,14"/>
                         <StackPanel Orientation="Horizontal">
                             <Button Content="🔄 重新检测" Margin="0,0,10,0" Padding="14,6" Background="#007ACC" Command="{Binding RefreshDriverStatusCommand}"/>
-                            <Button Content="安装 VB-CABLE" Padding="14,6" Command="{Binding InstallCableCommand}"
+                            <Button Content="安装 VB-CABLE" Margin="0,0,10,0" Padding="14,6" Command="{Binding InstallCableCommand}"
                                     Visibility="{Binding CanInstallCable, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                            <Button Content="测试 VB-CABLE 环回" Padding="14,6"
+                                    Command="{Binding TestCableLoopbackCommand}"/>
                         </StackPanel>
                         <TextBlock Text="{Binding CableInstallMessage}" Margin="0,10,0,0" TextWrapping="Wrap"
                                    Foreground="{StaticResource SecondaryTextBrush}"
                                    Visibility="{Binding CableInstallMessage, Converter={StaticResource StringToVisibilityConverter}}"/>
+                        <TextBlock Text="{Binding CableLoopbackMessage}" Margin="0,10,0,0" TextWrapping="Wrap"
+                                   Foreground="{StaticResource SecondaryTextBrush}" AutomationProperties.LiveSetting="Polite"
+                                   Visibility="{Binding CableLoopbackMessage, Converter={StaticResource StringToVisibilityConverter}}"/>
                     </StackPanel>
                 </Border>
             </StackPanel>

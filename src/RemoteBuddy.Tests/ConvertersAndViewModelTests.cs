@@ -764,6 +764,38 @@ public class ConvertersAndViewModelTests
     }
 
     [Fact]
+    public void RefreshDriverStatus_ClearsPreviousCableLoopbackResult()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"rb-loopback-refresh-{Guid.NewGuid():N}.json");
+        var previousDriverOverride = VirtualAudioAuditor.StatusOverride;
+        var previousOutputOverride = VirtualAudioAuditor.CableOutputOverride;
+        try
+        {
+            VirtualAudioAuditor.StatusOverride = DriverReadinessStatus.Ready;
+            VirtualAudioAuditor.CableOutputOverride = CableOutputReadiness.Disabled;
+            using var manager = new DummyBluetoothManager();
+            using var vm = new OnboardingViewModel(new ConfigService(path), manager)
+            {
+                CableLoopbackMessage = "CABLE Output 未检测到测试音。"
+            };
+            Assert.False(vm.TestCableLoopbackCommand.CanExecute(null));
+
+            VirtualAudioAuditor.CableOutputOverride = CableOutputReadiness.Active;
+            vm.RefreshDriverStatus();
+
+            Assert.Equal(CableOutputReadiness.Active, vm.CableOutputStatus);
+            Assert.True(vm.TestCableLoopbackCommand.CanExecute(null));
+            Assert.Empty(vm.CableLoopbackMessage);
+        }
+        finally
+        {
+            VirtualAudioAuditor.StatusOverride = previousDriverOverride;
+            VirtualAudioAuditor.CableOutputOverride = previousOutputOverride;
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void TargetInputTool_OrderAndDisplayNames_MatchExpectedPresets()
     {
         Assert.Equal(
