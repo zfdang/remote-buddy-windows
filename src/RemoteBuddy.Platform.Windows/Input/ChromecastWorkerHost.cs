@@ -21,6 +21,10 @@ public static class ChromecastWorkerHost
     public const byte MsgTypeDeviceDisconnected = 0x03;
     public const byte MsgTypeSourceBound = 0x04;
 
+    public const byte CmdSetReadyAddresses = 0x10;
+    public const byte CmdBeginProbe = 0x11;
+    public const byte CmdEndProbe = 0x12;
+
     public static void RunWorker(string pipeName, IReadOnlyList<EtwButtonSource> sources)
         => RunWorker(pipeName, parentPid: 0, sources);
 
@@ -107,17 +111,17 @@ public static class ChromecastWorkerHost
 
         var pipeReadTask = Task.Run(async () =>
         {
-            byte[] buf = new byte[1];
             try
             {
-                while (!shutdownCts.IsCancellationRequested)
-                {
-                    int read = await pipe.ReadAsync(buf, shutdownCts.Token).ConfigureAwait(false);
-                    if (read == 0) break;
-                }
+                await ReadControlMessagesAsync(pipe, receiver, shutdownCts.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { }
+            catch (EndOfStreamException) { }
             catch (IOException) { }
+            catch (Exception ex)
+            {
+                AppLogger.Debug($"Worker control pipe read ended: {ex.Message}", "ChromecastWorkerHost");
+            }
             finally
             {
                 shutdownCts.Cancel();
@@ -160,5 +164,67 @@ public static class ChromecastWorkerHost
         receiver.Stop();
         try { await Task.WhenAny(writerTask, Task.Delay(500)).ConfigureAwait(false); } catch { }
         AppLogger.Info("ChromecastWorkerHost parent terminated or pipe closed, exiting cleanly", "ChromecastWorkerHost");
+    }
+
+    internal static async Task ReadControlMessagesAsync(Stream stream, ChromecastEtwReceiver receiver, CancellationToken ct)
+    {
+        byte[] cmdBuf = new byte[1];
+        while (!ct.IsCancellationRequested)
+        {
+            int read = await stream.ReadAsync(cmdBuf.AsMemory(0, 1), ct).ConfigureAwait(false);
+            if (read == 0) break;
+
+            byte cmd = cmdBuf[0];
+            if (cmd == CmdSetReadyAddresses)
+            {
+                byte[] countBuf = new byte[2];
+                await ReadExactAsync(stream, countBuf, ct).ConfigureAwait(false);
+                ushort count = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(countBuf);
+                if (count > 256) throw new InvalidDataException($"Invalid ready address count {count}");
+                var addresses = new ulong[count];
+                if (count > 0)
+                {
+                    byte[] addrBuf = new byte[count * 8];
+                    await ReadExactAsync(stream, addrBuf, ct).ConfigureAwait(false);
+                    for (int i = 0; i < count; i++)
+                    {
+                        addresses[i] = System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(addrBuf.AsSpan(i * 8, 8));
+                    }
+                }
+                receiver.SetReadyAddresses(addresses);
+            }
+            else if (cmd == CmdBeginProbe)
+            {
+                byte[] payload = new byte[16];
+                await ReadExactAsync(stream, payload, ct).ConfigureAwait(false);
+                ulong address = System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(0, 8));
+                ulong round = System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(8, 8));
+                receiver.BeginProbe(address, round);
+            }
+            else if (cmd == CmdEndProbe)
+            {
+                byte[] payload = new byte[16];
+                await ReadExactAsync(stream, payload, ct).ConfigureAwait(false);
+                ulong address = System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(0, 8));
+                ulong round = System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(8, 8));
+                receiver.EndProbe(address, round);
+            }
+            else
+            {
+                AppLogger.Warn($"Unknown parent control command 0x{cmd:X2}; terminating worker control reader.", "ChromecastWorkerHost");
+                break;
+            }
+        }
+    }
+
+    private static async Task ReadExactAsync(Stream stream, byte[] buffer, CancellationToken ct)
+    {
+        int total = 0;
+        while (total < buffer.Length)
+        {
+            int r = await stream.ReadAsync(buffer.AsMemory(total, buffer.Length - total), ct).ConfigureAwait(false);
+            if (r == 0) throw new EndOfStreamException();
+            total += r;
+        }
     }
 }

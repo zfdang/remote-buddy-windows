@@ -1091,4 +1091,309 @@ public class ChromecastEtwTests
             catch { }
         }
     }
+
+    private static byte[] CreateAttReadResponsePacket(byte[] value, ushort connectionHandle = 0x0040)
+    {
+        ushort l2capLen = (ushort)(1 + value.Length);
+        ushort aclDataLen = (ushort)(4 + l2capLen);
+        byte[] packet = new byte[4 + 4 + 1 + value.Length];
+        packet[0] = (byte)(connectionHandle & 0xFF);
+        packet[1] = (byte)(0x20 | ((connectionHandle >> 8) & 0x0F));
+        packet[2] = (byte)(aclDataLen & 0xFF);
+        packet[3] = (byte)((aclDataLen >> 8) & 0xFF);
+        packet[4] = (byte)(l2capLen & 0xFF);
+        packet[5] = (byte)((l2capLen >> 8) & 0xFF);
+        packet[6] = 0x04;
+        packet[7] = 0x00;
+        packet[8] = 0x0B; // ATT_READ_RSP
+        Array.Copy(value, 0, packet, 9, value.Length);
+        return packet;
+    }
+
+    [Fact]
+    public void FallbackBinding_RejectsUnverifiedConnectionWithHomeLikeKeyboardReport()
+    {
+        using var receiver = new ChromecastEtwReceiver();
+        var g9 = new EtwButtonSource(0x4754514C9587, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B);
+        receiver.SetSources([g9]);
+        receiver.SetReadyAddresses([g9.Address]);
+
+        var bound = new List<ulong>();
+        var edges = new List<(ulong Address, RemoteButton Button, bool Down)>();
+        receiver.SourceBound += bound.Add;
+        receiver.ButtonEvent += (addr, btn, down) => edges.Add((addr, btn, down));
+
+        // Probe runs for g9 without any response on unverified connection 0x0041
+        receiver.BeginProbe(g9.Address, round: 1);
+        receiver.EndProbe(g9.Address, round: 1);
+
+        // Unverified connection sends [0x0A, 0..0] (could be keyboard modifier report or Home)
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x0A, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0041));
+
+        Assert.Empty(bound);
+        Assert.Empty(edges);
+    }
+
+    [Fact]
+    public void FallbackBinding_TwoConnections_UnrelatedOutgoingAttOnConnectionADoesNotBlockDeviceB()
+    {
+        using var receiver = new ChromecastEtwReceiver();
+        var devA = new EtwButtonSource(0x111111111111, Guid.NewGuid(), EtwProtocolKind.Xiaomi);
+        var devB = new EtwButtonSource(0x4754514C9587, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B, [0x003C, 0x003F]);
+        receiver.SetSources([devA, devB]);
+        receiver.SetReadyAddresses([devA.Address, devB.Address]);
+
+        var bound = new List<ulong>();
+        var edges = new List<(ulong Address, RemoteButton Button, bool Down)>();
+        receiver.SourceBound += bound.Add;
+        receiver.ButtonEvent += (addr, btn, down) => edges.Add((addr, btn, down));
+
+        // Connection A sends an ordinary outgoing ATT Read Request (0x0A), unrelated to Device B
+        receiver.ProcessPacket(4, CreateAclPacket(0x0A, 0x0001, [], connectionHandle: 0x0040));
+
+        // Device B probes in round 1 on Windows 10 (no kind=4 marker), receives ATT Error Response on Connection B (0x0E01)
+        receiver.BeginProbe(devB.Address, round: 1);
+        receiver.ProcessPacket(3, CreateAclPacket(0x01, 0x0106, [0x00, 0x0A], connectionHandle: 0x0E01));
+        receiver.EndProbe(devB.Address, round: 1);
+
+        // Unverified Connection C must still be rejected even after Device B armed fallback on 0x0E01
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x0A, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0042));
+        Assert.Empty(edges);
+
+        // Verified Connection B sends G9N9N Down (0x04)
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x04, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0E01));
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, new byte[8], connectionHandle: 0x0E01));
+
+        Assert.Equal([devB.Address], bound);
+        Assert.Equal([(devB.Address, RemoteButton.Down, true), (devB.Address, RemoteButton.Down, false)], edges);
+    }
+
+    [Fact]
+    public void NormalBinding_SameModelPnpIdBeforeProbeResponse_DoesNotBindWrongConnectionOrBindTwice()
+    {
+        using var receiver = new ChromecastEtwReceiver();
+        var targetG9 = new EtwButtonSource(0x4754514C9587, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B);
+        var otherG9 = new EtwButtonSource(0x5566778899AA, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B);
+        byte[] pnpBytes = [0x02, 0xD1, 0x18, 0x50, 0x94, 0x10, 0x01];
+        receiver.SetSources([targetG9, otherG9]);
+        receiver.SetReadyAddresses([targetG9.Address, otherG9.Address]);
+
+        var bound = new List<ulong>();
+        var edges = new List<(ulong Address, RemoteButton Button, bool Down)>();
+        receiver.SourceBound += bound.Add;
+        receiver.ButtonEvent += (addr, btn, down) => edges.Add((addr, btn, down));
+
+        receiver.BeginProbe(targetG9.Address, round: 1);
+        // Another same-model remote emits the identical PnP ID before targetG9's normal probe response arrives
+        receiver.ProcessPacket(3, CreateAttReadResponsePacket(pnpBytes, connectionHandle: 0x0041));
+        receiver.EndProbe(targetG9.Address, round: 1);
+
+        // Button report on the other connection must not be attributed to targetG9
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x04, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0041));
+        Assert.Empty(bound);
+        Assert.Empty(edges);
+
+        // Target remote's normal outgoing probe + response arrives and binds cleanly once
+        var (request, response) = CreateProbeHandshake(targetG9.Marker, connectionHandle: 0x0E01);
+        receiver.ProcessPacket(4, request);
+        receiver.ProcessPacket(3, response);
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x04, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0E01));
+
+        Assert.Equal([targetG9.Address], bound);
+        Assert.Equal([(targetG9.Address, RemoteButton.Down, true)], edges);
+    }
+
+    [Fact]
+    public async Task WorkerControlSync_PropagatesReadyAddressesAndProbeRoundsToReceiver()
+    {
+        using var receiver = new ChromecastEtwReceiver();
+        var g9 = new EtwButtonSource(0x4754514C9587, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B);
+        var sleepingG9 = new EtwButtonSource(0x222222222222, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B);
+        receiver.SetSources([g9, sleepingG9]);
+
+        var bound = new List<ulong>();
+        var edges = new List<(ulong Address, RemoteButton Button, bool Down)>();
+        receiver.SourceBound += bound.Add;
+        receiver.ButtonEvent += (addr, btn, down) => edges.Add((addr, btn, down));
+
+        using var controlStream = new MemoryStream();
+        controlStream.Write(ChromecastWorkerClient.BuildSetReadyAddressesFrame([g9.Address]));
+        controlStream.Write(ChromecastWorkerClient.BuildBeginProbeFrame(g9.Address, round: 1));
+        controlStream.Position = 0;
+
+        await ChromecastWorkerHost.ReadControlMessagesAsync(controlStream, receiver, CancellationToken.None);
+
+        receiver.ProcessPacket(3, CreateAclPacket(0x01, 0x0106, [0x00, 0x0A], connectionHandle: 0x0E03));
+
+        using var endStream = new MemoryStream();
+        endStream.Write(ChromecastWorkerClient.BuildEndProbeFrame(g9.Address, round: 1));
+        endStream.Position = 0;
+        await ChromecastWorkerHost.ReadControlMessagesAsync(endStream, receiver, CancellationToken.None);
+
+        Assert.Empty(bound);
+
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x07, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0E03));
+        Assert.Equal([g9.Address], bound);
+        Assert.Equal([(g9.Address, RemoteButton.Ok, true)], edges);
+    }
+
+    [Fact]
+    public void FallbackBinding_ConflictingAttResponseInGraceWindow_RevokesArmedCandidate()
+    {
+        using var receiver = new ChromecastEtwReceiver();
+        var g9 = new EtwButtonSource(0x4754514C9587, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B);
+        receiver.SetSources([g9]);
+        receiver.SetReadyAddresses([g9.Address]);
+
+        var bound = new List<ulong>();
+        var edges = new List<(ulong Address, RemoteButton Button, bool Down)>();
+        receiver.SourceBound += bound.Add;
+        receiver.ButtonEvent += (addr, btn, down) => edges.Add((addr, btn, down));
+
+        receiver.BeginProbe(g9.Address, round: 1);
+        // Unrelated connection emits ATT error response before EndProbe, arming fallback on 0x0041
+        receiver.ProcessPacket(3, CreateAclPacket(0x01, 0x0106, [0x00, 0x0A], connectionHandle: 0x0041));
+        receiver.EndProbe(g9.Address, round: 1);
+
+        // Second connection emits ATT error response within the grace window -> conflict revokes 0x0041
+        receiver.ProcessPacket(3, CreateAclPacket(0x01, 0x0106, [0x00, 0x0A], connectionHandle: 0x0E01));
+        receiver.ProcessPacket(3, CreateAclPacket(0x01, 0x0106, [0x00, 0x0A], connectionHandle: 0x0041));
+
+        // Previous candidate connection must no longer bind or emit button events
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x04, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0041));
+        Assert.Empty(bound);
+        Assert.Empty(edges);
+
+        // Real remote still binds cleanly once via its marked outgoing probe + response
+        var (request, response) = CreateProbeHandshake(g9.Marker, connectionHandle: 0x0E01);
+        receiver.ProcessPacket(4, request);
+        receiver.ProcessPacket(3, response);
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x04, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0E01));
+
+        Assert.Equal([g9.Address], bound);
+        Assert.Equal([(g9.Address, RemoteButton.Down, true)], edges);
+    }
+
+    [Fact]
+    public void FallbackBinding_WithoutOutgoingAcl_DetectsRedactedNotificationAfterProbeResponse()
+    {
+        using var receiver = new ChromecastEtwReceiver();
+        var g9 = new EtwButtonSource(0x4754514C9587, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B);
+        receiver.SetSources([g9]);
+        receiver.SetReadyAddresses([g9.Address]);
+
+        var truncated = new List<ulong>();
+        receiver.TruncatedPacketDetected += truncated.Add;
+
+        receiver.BeginProbe(g9.Address, round: 1);
+        receiver.ProcessPacket(3, CreateAclPacket(0x01, 0x0106, [0x00, 0x0A], connectionHandle: 0x0E01));
+        receiver.EndProbe(g9.Address, round: 1);
+
+        byte[] redacted = CreateAclPacket(0x1B, 0x0029, new byte[8], connectionHandle: 0x0E01)[..11];
+        receiver.ProcessPacket(3, redacted);
+
+        Assert.Equal([g9.Address], truncated);
+    }
+
+    [Fact]
+    public void FallbackBinding_WithoutAttProbeResponse_BindsSingleMatchingReadyCandidateOnPressReleasePair()
+    {
+        using var receiver = new ChromecastEtwReceiver();
+        var g9 = new EtwButtonSource(0x4754514C9587, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B, [0x003C, 0x003F]);
+        var xiaomi = new EtwButtonSource(0xC05D39FA361E, Guid.NewGuid(), EtwProtocolKind.Xiaomi);
+        receiver.SetSources([g9, xiaomi]);
+        receiver.SetReadyAddresses([g9.Address, xiaomi.Address]);
+
+        var bound = new List<ulong>();
+        var edges = new List<(ulong Address, RemoteButton Button, bool Down)>();
+        receiver.SourceBound += bound.Add;
+        receiver.ButtonEvent += (addr, btn, down) => edges.Add((addr, btn, down));
+
+        // Windows 10 app.log scenario: Success/services=0 completed, neither kind=4 nor ATT 0x01/0x07 appeared in ETW
+        receiver.BeginProbe(g9.Address, round: 1);
+        receiver.EndProbe(g9.Address, round: 1);
+
+        // Initial press is observed without immediate binding
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x04, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0E01));
+        Assert.Empty(bound);
+        Assert.Empty(edges);
+
+        // Matching release on the same connection + attribute completes binding and emits press+release
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, new byte[8], connectionHandle: 0x0E01));
+        Assert.Equal([g9.Address], bound);
+        Assert.Equal([(g9.Address, RemoteButton.Down, true), (g9.Address, RemoteButton.Down, false)], edges);
+
+        // Subsequent presses dispatch immediately
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x07, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0E01));
+        Assert.Equal([
+            (g9.Address, RemoteButton.Down, true),
+            (g9.Address, RemoteButton.Down, false),
+            (g9.Address, RemoteButton.Ok, true),
+        ], edges);
+    }
+
+    [Fact]
+    public void FallbackBinding_WithoutAttProbeResponse_SkipsWhenTwoReadyDevicesCanMatchNotification()
+    {
+        using var receiver = new ChromecastEtwReceiver();
+        var g9A = new EtwButtonSource(0x4754514C9587, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B);
+        var g9B = new EtwButtonSource(0x5566778899AA, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B);
+        receiver.SetSources([g9A, g9B]);
+        receiver.SetReadyAddresses([g9A.Address, g9B.Address]);
+
+        var bound = new List<ulong>();
+        var edges = new List<(ulong Address, RemoteButton Button, bool Down)>();
+        receiver.SourceBound += bound.Add;
+        receiver.ButtonEvent += (addr, btn, down) => edges.Add((addr, btn, down));
+
+        receiver.BeginProbe(g9A.Address, round: 1);
+        receiver.EndProbe(g9A.Address, round: 1);
+
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x04, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0E01));
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, new byte[8], connectionHandle: 0x0E01));
+
+        Assert.Empty(bound);
+        Assert.Empty(edges);
+    }
+
+    [Fact]
+    public void ProbeAndUnassignedDiagnostics_LogProbeMetadataAndRedactUnboundNotificationBytes()
+    {
+        string tempLogDir = Path.Combine(Path.GetTempPath(), "RB_UnassignedDiag_" + Guid.NewGuid().ToString("N"));
+        AppLogger.ResetForTesting();
+        AppLogger.Initialize(tempLogDir);
+        try
+        {
+            using var receiver = new ChromecastEtwReceiver();
+            var g9 = new EtwButtonSource(0x4754514C9587, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B);
+            var xiaomi = new EtwButtonSource(0xC05D39FA361E, Guid.NewGuid(), EtwProtocolKind.Xiaomi);
+            receiver.SetSources([g9, xiaomi]);
+            receiver.SetReadyAddresses([g9.Address, xiaomi.Address]);
+
+            receiver.BeginProbe(g9.Address, round: 1);
+            receiver.ProcessPacket(3, CreateAttReadResponsePacket([0x02, 0xD1, 0x18], connectionHandle: 0x0E01));
+            receiver.ProcessPacket(3, CreateAclPacket(0x01, 0x0106, [0x00, 0x0A], connectionHandle: 0x0E01));
+            receiver.EndProbe(g9.Address, round: 1);
+
+            receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x04, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0E03));
+            receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0064, [0, 0, 0xF1, 0, 0, 0, 0, 0], connectionHandle: 0x0E04));
+
+            string logText = File.ReadAllText(AppLogger.CurrentLogFilePath);
+            Assert.Contains("ETW probe saw non-matching incoming ATT opcode without outgoing ACL: addr=0x4754514C9587, acl=0x0E01, opcode=0x0B, len=4, hex=0B02D118", logText);
+            Assert.Contains("ETW probe saw incoming ATT response without outgoing ACL: addr=0x4754514C9587, acl=0x0E01, opcode=0x01, len=5, hex=010601000A", logText);
+            Assert.Contains("ETW unassigned notification overlaps G9N9N HID attributes: acl=0x0E03, attr=0x0029, opcode=0x1B, capturedLen=8, expectedLen=8", logText);
+            Assert.Contains("ETW unassigned notification overlaps Xiaomi HID attributes: acl=0x0E04, attr=0x0064, opcode=0x1B, capturedLen=8, expectedLen=8", logText);
+            Assert.DoesNotContain("0400000000000000", logText);
+            Assert.DoesNotContain("0000F10000000000", logText);
+        }
+        finally
+        {
+            AppLogger.ResetForTesting();
+            try
+            {
+                if (Directory.Exists(tempLogDir)) Directory.Delete(tempLogDir, recursive: true);
+            }
+            catch { }
+        }
+    }
 }
