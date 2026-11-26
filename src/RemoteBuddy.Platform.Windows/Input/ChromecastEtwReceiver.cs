@@ -675,6 +675,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
             if (pendingSource == null && boundSource == null && !incomplete &&
                 GetActiveProbeSourceLocked(sources) is { } activeProbeSource &&
                 !activeProbeSource.SawOutgoingProbeInRound &&
+                !activeProbeSource.PendingHandle.HasValue &&
                 !activeProbeSource.BoundHandle.HasValue)
             {
                 if (att is [0x01, 0x06, _, _, _] or [0x07, ..])
@@ -686,9 +687,15 @@ public sealed class ChromecastEtwReceiver : IDisposable
                     }
                     else if (activeProbeSource.CandidateProbeHandle != connection)
                     {
+                        bool revoked = activeProbeSource.PendingFallbackHandle.HasValue;
                         activeProbeSource.CandidateProbeConflict = true;
+                        activeProbeSource.PendingFallbackHandle = null;
+                        fallbackSource = null;
+                        diagnosticLog = revoked
+                            ? $"ETW probe revoked armed fallback due to conflicting ATT response: addr=0x{activeProbeSource.Source.Address:X12}, firstAcl=0x{activeProbeSource.CandidateProbeHandle.Value:X4}, conflictingAcl=0x{connection:X4}"
+                            : $"ETW probe saw conflicting ATT response across connections: addr=0x{activeProbeSource.Source.Address:X12}, firstAcl=0x{activeProbeSource.CandidateProbeHandle.Value:X4}, conflictingAcl=0x{connection:X4}";
                     }
-                    if (_activeProbeEnded)
+                    if (_activeProbeEnded && !activeProbeSource.CandidateProbeConflict)
                     {
                         string? promoteFallbackLog = null;
                         PromoteProbeCandidateLocked(sources, activeProbeSource, ref bindLog, ref newlyBoundAddr, ref promoteFallbackLog);
@@ -961,11 +968,18 @@ public sealed class ChromecastEtwReceiver : IDisposable
         ref ulong? newlyBoundAddr,
         ref string? fallbackLog)
     {
-        if (source.BoundHandle.HasValue || source.SawOutgoingProbeInRound) return;
+        if (source.BoundHandle.HasValue || source.SawOutgoingProbeInRound || source.PendingHandle.HasValue)
+        {
+            source.PendingFallbackHandle = null;
+            return;
+        }
         if (_readyAddresses.Count > 0 && !_readyAddresses.Contains(source.Source.Address)) return;
         if (source.CandidateProbeHandle is not ushort candidate) return;
-        if (source.CandidateProbeConflict) return;
-        if (allSources.Any(other => other != source && other.BoundHandle == candidate)) return;
+        if (source.CandidateProbeConflict || allSources.Any(other => other != source && other.BoundHandle == candidate))
+        {
+            source.PendingFallbackHandle = null;
+            return;
+        }
 
         if (source.PendingFallbackHandle != candidate)
         {

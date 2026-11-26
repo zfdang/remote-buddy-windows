@@ -1238,6 +1238,43 @@ public class ChromecastEtwTests
     }
 
     [Fact]
+    public void FallbackBinding_ConflictingAttResponseInGraceWindow_RevokesArmedCandidate()
+    {
+        using var receiver = new ChromecastEtwReceiver();
+        var g9 = new EtwButtonSource(0x4754514C9587, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B);
+        receiver.SetSources([g9]);
+        receiver.SetReadyAddresses([g9.Address]);
+
+        var bound = new List<ulong>();
+        var edges = new List<(ulong Address, RemoteButton Button, bool Down)>();
+        receiver.SourceBound += bound.Add;
+        receiver.ButtonEvent += (addr, btn, down) => edges.Add((addr, btn, down));
+
+        receiver.BeginProbe(g9.Address, round: 1);
+        // Unrelated connection emits ATT error response before EndProbe, arming fallback on 0x0041
+        receiver.ProcessPacket(3, CreateAclPacket(0x01, 0x0106, [0x00, 0x0A], connectionHandle: 0x0041));
+        receiver.EndProbe(g9.Address, round: 1);
+
+        // Second connection emits ATT error response within the grace window -> conflict revokes 0x0041
+        receiver.ProcessPacket(3, CreateAclPacket(0x01, 0x0106, [0x00, 0x0A], connectionHandle: 0x0E01));
+        receiver.ProcessPacket(3, CreateAclPacket(0x01, 0x0106, [0x00, 0x0A], connectionHandle: 0x0041));
+
+        // Previous candidate connection must no longer bind or emit button events
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x04, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0041));
+        Assert.Empty(bound);
+        Assert.Empty(edges);
+
+        // Real remote still binds cleanly once via its marked outgoing probe + response
+        var (request, response) = CreateProbeHandshake(g9.Marker, connectionHandle: 0x0E01);
+        receiver.ProcessPacket(4, request);
+        receiver.ProcessPacket(3, response);
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x04, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0E01));
+
+        Assert.Equal([g9.Address], bound);
+        Assert.Equal([(g9.Address, RemoteButton.Down, true)], edges);
+    }
+
+    [Fact]
     public void FallbackBinding_WithoutOutgoingAcl_DetectsRedactedNotificationAfterProbeResponse()
     {
         using var receiver = new ChromecastEtwReceiver();
