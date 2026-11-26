@@ -450,8 +450,8 @@ public class MainViewModelTests
                 ConnectedDeviceAddress = 0x4754514C6FCC
             };
 
-            var mappedShortcuts = new List<string?>();
-            using var vm = new MainViewModel(config, bt, action => mappedShortcuts.Add(action.Shortcut))
+            var mappedActions = new List<ButtonAction>();
+            using var vm = new MainViewModel(config, bt, action => mappedActions.Add(action.Action))
             {
                 IsAdministratorForTest = () => true,
                 UsbKeyboardForTest = new FakeUsbKeyboardSender()
@@ -464,7 +464,7 @@ public class MainViewModelTests
 
             // Event from G9N9N (active Bluetooth address) arrives
             vm.HandleRawButtonEvent(IntPtr.Zero, RemoteButton.Home, true);
-            Assert.Equal(["Win+Tab"], mappedShortcuts);
+            Assert.Equal([ButtonAction.TaskView], mappedActions);
 
             // Since Xiaomi is selected in Mapping UI but event was from G9N9N, MappingVm should NOT receive press
             Assert.Null(pressedButton);
