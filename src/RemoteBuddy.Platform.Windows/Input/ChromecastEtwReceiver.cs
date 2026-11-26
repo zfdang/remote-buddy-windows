@@ -707,7 +707,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
                     if (!activeProbeSource.CandidateProbeHandle.HasValue)
                     {
                         activeProbeSource.CandidateProbeHandle = connection;
-                        diagnosticLog = $"ETW probe saw incoming ATT response without outgoing ACL: addr=0x{activeProbeSource.Source.Address:X12}, acl=0x{connection:X4}, opcode=0x{att[0]:X2}";
+                        diagnosticLog = $"ETW probe saw incoming ATT response without outgoing ACL: addr=0x{activeProbeSource.Source.Address:X12}, acl=0x{connection:X4}, opcode=0x{att[0]:X2}, len={att.Length}, hex={FormatBoundedHex(att)}";
                     }
                     else if (activeProbeSource.CandidateProbeHandle != connection)
                     {
@@ -731,7 +731,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
                          !_loggedProbeStages.Contains($"ProbeIncomingOpcode.{att[0]:X2}") &&
                          _loggedProbeStages.Add($"ProbeIncomingOpcode.{att[0]:X2}"))
                 {
-                    diagnosticLog = $"ETW probe saw non-matching incoming ATT opcode without outgoing ACL: addr=0x{activeProbeSource.Source.Address:X12}, acl=0x{connection:X4}, opcode=0x{att[0]:X2}, len={att.Length}";
+                    diagnosticLog = $"ETW probe saw non-matching incoming ATT opcode without outgoing ACL: addr=0x{activeProbeSource.Source.Address:X12}, acl=0x{connection:X4}, opcode=0x{att[0]:X2}, len={att.Length}, hex={FormatBoundedHex(att)}";
                 }
             }
 
@@ -866,12 +866,17 @@ public sealed class ChromecastEtwReceiver : IDisposable
             {
                 ushort attribute = BinaryPrimitives.ReadUInt16LittleEndian(att[1..]);
                 int capturedLength = att.Length - 3;
-                if (sources.Any(source => source.Source.Protocol == EtwProtocolKind.GoogleG9N9N &&
-                        !source.BoundHandle.HasValue &&
-                        EvaluateG9N9NAttribute(source, attribute) == G9N9NAttributeDecision.Allowed) &&
+                bool matchesG9 = sources.Any(source => source.Source.Protocol == EtwProtocolKind.GoogleG9N9N &&
+                    !source.BoundHandle.HasValue &&
+                    EvaluateG9N9NAttribute(source, attribute) == G9N9NAttributeDecision.Allowed);
+                bool matchesXiaomi = !matchesG9 && sources.Any(source => source.Source.Protocol == EtwProtocolKind.Xiaomi &&
+                    !source.BoundHandle.HasValue &&
+                    IsXiaomiButtonAttribute(attribute));
+                if ((matchesG9 || matchesXiaomi) &&
                     _loggedUnassignedNotifications.Add((connection, attribute, capturedLength, expectedPayloadLength)))
                 {
-                    diagnosticLog = $"ETW unassigned notification overlaps G9N9N HID attributes: acl=0x{connection:X4}, attr=0x{attribute:X4}, opcode=0x{att[0]:X2}, capturedLen={capturedLength}, expectedLen={expectedPayloadLength}";
+                    string modelLabel = matchesG9 ? "G9N9N" : "Xiaomi";
+                    diagnosticLog ??= $"ETW unassigned notification overlaps {modelLabel} HID attributes: acl=0x{connection:X4}, attr=0x{attribute:X4}, opcode=0x{att[0]:X2}, capturedLen={capturedLength}, expectedLen={expectedPayloadLength}";
                 }
             }
             foreach (var source in new[] { pendingSource, boundSource })
@@ -1213,6 +1218,9 @@ public sealed class ChromecastEtwReceiver : IDisposable
 
     private static string FormatHex(ReadOnlySpan<byte> data) =>
         data.IsEmpty ? "-" : Convert.ToHexString(data);
+
+    private static string FormatBoundedHex(ReadOnlySpan<byte> data) =>
+        data.Length > MaxDiagnosticHexBytes ? "<omitted>" : FormatHex(data);
 
     private static AttPacketRejection ReadAttPacket(ReadOnlySpan<byte> packet, out ushort connection, out ReadOnlySpan<byte> att, out bool incomplete, out int expectedPayloadLength)
     {

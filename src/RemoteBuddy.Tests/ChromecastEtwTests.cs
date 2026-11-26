@@ -1355,4 +1355,45 @@ public class ChromecastEtwTests
         Assert.Empty(bound);
         Assert.Empty(edges);
     }
+
+    [Fact]
+    public void ProbeAndUnassignedDiagnostics_LogProbeMetadataAndRedactUnboundNotificationBytes()
+    {
+        string tempLogDir = Path.Combine(Path.GetTempPath(), "RB_UnassignedDiag_" + Guid.NewGuid().ToString("N"));
+        AppLogger.ResetForTesting();
+        AppLogger.Initialize(tempLogDir);
+        try
+        {
+            using var receiver = new ChromecastEtwReceiver();
+            var g9 = new EtwButtonSource(0x4754514C9587, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B);
+            var xiaomi = new EtwButtonSource(0xC05D39FA361E, Guid.NewGuid(), EtwProtocolKind.Xiaomi);
+            receiver.SetSources([g9, xiaomi]);
+            receiver.SetReadyAddresses([g9.Address, xiaomi.Address]);
+
+            receiver.BeginProbe(g9.Address, round: 1);
+            receiver.ProcessPacket(3, CreateAttReadResponsePacket([0x02, 0xD1, 0x18], connectionHandle: 0x0E01));
+            receiver.ProcessPacket(3, CreateAclPacket(0x01, 0x0106, [0x00, 0x0A], connectionHandle: 0x0E01));
+            receiver.EndProbe(g9.Address, round: 1);
+
+            receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x04, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0E03));
+            receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0064, [0, 0, 0xF1, 0, 0, 0, 0, 0], connectionHandle: 0x0E04));
+
+            string logText = File.ReadAllText(AppLogger.CurrentLogFilePath);
+            Assert.Contains("ETW probe saw non-matching incoming ATT opcode without outgoing ACL: addr=0x4754514C9587, acl=0x0E01, opcode=0x0B, len=4, hex=0B02D118", logText);
+            Assert.Contains("ETW probe saw incoming ATT response without outgoing ACL: addr=0x4754514C9587, acl=0x0E01, opcode=0x01, len=5, hex=010601000A", logText);
+            Assert.Contains("ETW unassigned notification overlaps G9N9N HID attributes: acl=0x0E03, attr=0x0029, opcode=0x1B, capturedLen=8, expectedLen=8", logText);
+            Assert.Contains("ETW unassigned notification overlaps Xiaomi HID attributes: acl=0x0E04, attr=0x0064, opcode=0x1B, capturedLen=8, expectedLen=8", logText);
+            Assert.DoesNotContain("0400000000000000", logText);
+            Assert.DoesNotContain("0000F10000000000", logText);
+        }
+        finally
+        {
+            AppLogger.ResetForTesting();
+            try
+            {
+                if (Directory.Exists(tempLogDir)) Directory.Delete(tempLogDir, recursive: true);
+            }
+            catch { }
+        }
+    }
 }
