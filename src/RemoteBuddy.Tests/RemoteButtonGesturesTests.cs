@@ -10,11 +10,12 @@ public sealed class RemoteButtonGesturesTests
 {
     private sealed class Fixture
     {
-        public List<string?> Fired { get; } = new();
+        public List<ButtonAction> Fired { get; } = new();
         public RemoteButtonGestures Gestures { get; }
         public ButtonMapping Mapping { get; } = new()
         {
-            Button = RemoteButton.Up, ClickAction = ButtonActionType.KeyboardShortcut, ClickShortcut = "Up"
+            Button = RemoteButton.Up,
+            SingleClick = new ConfiguredButtonAction { Action = ButtonAction.ArrowUp }
         };
         private readonly Dictionary<int, Action> _timers = new();
         private int _now;
@@ -26,7 +27,7 @@ public sealed class RemoteButtonGesturesTests
                 var deadline = _now + delay;
                 _timers.Add(deadline, action);
                 return () => _timers.Remove(deadline);
-            }, assignment => Fired.Add(assignment.Shortcut));
+            }, assignment => Fired.Add(assignment.Action));
         }
 
         public void Down() => Gestures.HandleDown(Mapping);
@@ -52,90 +53,96 @@ public sealed class RemoteButtonGesturesTests
         var fixture = new Fixture();
         fixture.Down();
         fixture.Down();
-        Assert.Equal(["Up"], fixture.Fired);
+        Assert.Equal([ButtonAction.ArrowUp], fixture.Fired);
         fixture.Up();
         fixture.Tap();
-        Assert.Equal(["Up", "Up"], fixture.Fired);
+        Assert.Equal([ButtonAction.ArrowUp, ButtonAction.ArrowUp], fixture.Fired);
     }
 
     [Fact]
     public void DoubleClickReplacesPendingSingleClick()
     {
         var fixture = new Fixture();
-        fixture.Mapping.DoubleClickAction = ButtonActionType.KeyboardShortcut;
-        fixture.Mapping.DoubleClickShortcut = "Home";
+        fixture.Mapping.DoubleClick = new ConfiguredButtonAction { Action = ButtonAction.ScrollUp };
         fixture.Tap();
         fixture.Advance(299);
         Assert.Empty(fixture.Fired);
         fixture.Advance(1);
-        Assert.Equal(["Up"], fixture.Fired);
+        Assert.Equal([ButtonAction.ArrowUp], fixture.Fired);
 
         fixture.Tap();
         fixture.Advance(100);
         fixture.Tap();
         fixture.Advance(300);
-        Assert.Equal(["Up", "Home"], fixture.Fired);
+        Assert.Equal([ButtonAction.ArrowUp, ButtonAction.ScrollUp], fixture.Fired);
     }
 
     [Fact]
     public void LongPressFiresOnceAndSuppressesBothClicksOnRelease()
     {
         var fixture = new Fixture();
-        fixture.Mapping.LongPressAction = ButtonActionType.KeyboardShortcut;
-        fixture.Mapping.LongPressShortcut = "End";
-        fixture.Mapping.DoubleClickAction = ButtonActionType.KeyboardShortcut;
-        fixture.Mapping.DoubleClickShortcut = "Home";
+        fixture.Mapping.LongPress = new ConfiguredButtonAction { Action = ButtonAction.CommandReturn };
+        fixture.Mapping.DoubleClick = new ConfiguredButtonAction { Action = ButtonAction.ScrollUp };
         fixture.Tap();
         fixture.Advance(100);
         fixture.Down();
         fixture.Advance(549);
         Assert.Empty(fixture.Fired);
         fixture.Advance(1);
-        Assert.Equal(["End"], fixture.Fired);
+        Assert.Equal([ButtonAction.CommandReturn], fixture.Fired);
         fixture.Up();
         fixture.Advance(500);
-        Assert.Equal(["End"], fixture.Fired);
+        Assert.Equal([ButtonAction.CommandReturn], fixture.Fired);
     }
 
     [Fact]
     public void HoldingRepeatWithDoubleClickCancelsTheDeferredClickAndStopsOnRelease()
     {
         var fixture = new Fixture();
-        fixture.Mapping.LongPressAction = ButtonActionType.ContinuousRepeat;
-        fixture.Mapping.DoubleClickAction = ButtonActionType.KeyboardShortcut;
-        fixture.Mapping.DoubleClickShortcut = "Home";
+        fixture.Mapping.LongPress = new ConfiguredButtonAction { Action = ButtonAction.RepeatSingleClick };
+        fixture.Mapping.DoubleClick = new ConfiguredButtonAction { Action = ButtonAction.ScrollUp };
         fixture.Down();
         fixture.Advance(450);
         fixture.Up();
         fixture.Advance(500);
-        Assert.Equal(["Up", "Up"], fixture.Fired);
+        Assert.Equal([ButtonAction.ArrowUp, ButtonAction.ArrowUp], fixture.Fired);
 
         fixture.Tap();
         fixture.Gestures.Reset();
         fixture.Advance(1000);
-        Assert.Equal(["Up", "Up"], fixture.Fired);
+        Assert.Equal([ButtonAction.ArrowUp, ButtonAction.ArrowUp], fixture.Fired);
+    }
+
+    [Fact]
+    public void DirectPassthroughIgnoresGestureRecognizer()
+    {
+        var fixture = new Fixture();
+        fixture.Mapping.SingleClick = new ConfiguredButtonAction { Action = ButtonAction.DirectPassthrough };
+        fixture.Mapping.DoubleClick = new ConfiguredButtonAction { Action = ButtonAction.ScrollUp };
+        fixture.Tap();
+        fixture.Advance(500);
+        Assert.Empty(fixture.Fired);
     }
 
     [Fact]
     public void CancelledStaleCallbackDoesNotFireOrRescheduleRepeat()
     {
         var queued = new List<(Action Invoke, Action Cancel)>();
-        var fired = new List<string?>();
+        var fired = new List<ButtonAction>();
         var gestures = new RemoteButtonGestures(
             (_, cb) =>
             {
                 Action cancel = () => { };
                 queued.Add((cb, cancel));
-                return () => { }; // Simulate host timer whose cancel doesn't pull an already-queued callback
+                return () => { };
             },
-            a => fired.Add(a.Shortcut));
+            a => fired.Add(a.Action));
 
         var mapping = new ButtonMapping
         {
             Button = RemoteButton.Down,
-            ClickAction = ButtonActionType.KeyboardShortcut,
-            ClickShortcut = "Down",
-            LongPressAction = ButtonActionType.ContinuousRepeat
+            SingleClick = new ConfiguredButtonAction { Action = ButtonAction.ArrowDown },
+            LongPress = new ConfiguredButtonAction { Action = ButtonAction.RepeatSingleClick }
         };
 
         gestures.HandleDown(mapping);
@@ -143,10 +150,9 @@ public sealed class RemoteButtonGesturesTests
         Assert.Single(queued);
 
         gestures.HandleUp(RemoteButton.Down);
-        // Fire stale callback that was already queued before HandleUp cancelled it
         queued[0].Invoke();
         Assert.Single(fired);
-        Assert.Single(queued); // Must not reschedule repeat after release
+        Assert.Single(queued);
     }
 
     [Fact]
@@ -157,8 +163,7 @@ public sealed class RemoteButtonGesturesTests
         var mapping = new ButtonMapping
         {
             Button = RemoteButton.Ok,
-            ClickAction = ButtonActionType.KeyboardShortcut,
-            ClickShortcut = "Return"
+            SingleClick = new ConfiguredButtonAction { Action = ButtonAction.ReturnKey }
         };
 
         gestures = new RemoteButtonGestures(

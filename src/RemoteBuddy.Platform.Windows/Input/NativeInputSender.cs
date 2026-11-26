@@ -52,7 +52,10 @@ public struct HARDWAREINPUT
 
 public static class NativeInputSender
 {
+    public const uint INPUT_MOUSE = 0;
     public const uint INPUT_KEYBOARD = 1;
+    public const uint MOUSEEVENTF_WHEEL = 0x0800;
+    public const int WHEEL_DELTA = 120;
     public const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
     public const uint KEYEVENTF_KEYUP = 0x0002;
     public const uint KEYEVENTF_UNICODE = 0x0004;
@@ -94,6 +97,9 @@ public static class NativeInputSender
 
     [DllImport("user32.dll", SetLastError = true)]
     public static extern uint SendInput(uint nInputs, [In] INPUT[] pInputs, int cbSize);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool LockWorkStation();
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern uint MapVirtualKeyW(uint uCode, uint uMapType);
@@ -423,6 +429,72 @@ public static class NativeInputSender
             ReleasePartialSendInputs(inputArray, sent);
         }
         return sent == inputArray.Length;
+    }
+
+    public static bool SendMouseWheel(int lines)
+    {
+        if (lines == 0) return false;
+        var inputs = new[]
+        {
+            new INPUT
+            {
+                type = INPUT_MOUSE,
+                u = new InputUnion
+                {
+                    mi = new MOUSEINPUT
+                    {
+                        mouseData = unchecked((uint)(lines * WHEEL_DELTA)),
+                        dwFlags = MOUSEEVENTF_WHEEL,
+                        dwExtraInfo = SyntheticEventMarker
+                    }
+                }
+            }
+        };
+        return SendInput(1, inputs, Marshal.SizeOf<INPUT>()) == 1;
+    }
+
+    public static bool SendDeleteLine()
+    {
+        var inputs = new[]
+        {
+            CreateKeyInput(VK_LSHIFT, false),
+            CreateKeyInput(VK_HOME, false),
+            CreateKeyInput(VK_HOME, true),
+            CreateKeyInput(VK_LSHIFT, true),
+            CreateKeyInput(VK_BACK, false),
+            CreateKeyInput(VK_BACK, true)
+        };
+        uint sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+        if (sent > 0 && sent < inputs.Length)
+        {
+            ReleasePartialSendInputs(inputs, sent);
+        }
+        return sent == inputs.Length;
+    }
+
+    public static bool TryLockWorkStation()
+    {
+        try
+        {
+            return LockWorkStation();
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static bool TryGetDirectionVirtualKey(RemoteButton button, out ushort vk)
+    {
+        vk = button switch
+        {
+            RemoteButton.Up => VK_UP,
+            RemoteButton.Down => VK_DOWN,
+            RemoteButton.Left => VK_LEFT,
+            RemoteButton.Right => VK_RIGHT,
+            _ => 0
+        };
+        return vk != 0;
     }
 
     public static INPUT CreateKeyInput(ushort vk, bool isKeyUp)

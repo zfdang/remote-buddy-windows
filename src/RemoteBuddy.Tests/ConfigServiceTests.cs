@@ -200,7 +200,9 @@ public class ConfigServiceTests : IDisposable
         var service = new ConfigService(path);
 
         var customMappings = RemoteDevice.CreateDefaultMappings(RemoteModelType.GoogleG9N9N);
-        customMappings.Single(m => m.Button == RemoteButton.Home).ClickShortcut = "Ctrl+Alt+H";
+        customMappings.Single(m => m.Button == RemoteButton.Home).SetConfiguredAction(
+            ButtonTrigger.SingleClick,
+            new ConfiguredButtonAction { Action = ButtonAction.CustomShortcut, Shortcut = "Ctrl+Alt+H" });
 
         var first = new RemoteDevice
         {
@@ -225,11 +227,66 @@ public class ConfigServiceTests : IDisposable
         Assert.Single(service.Current.Devices);
         Assert.Equal("4754514C6FCC", canonical.Id);
         Assert.Equal("Chromecast Remote", canonical.Name);
-        Assert.Equal("Ctrl+Alt+H", canonical.Mappings.Single(m => m.Button == RemoteButton.Home).ClickShortcut);
+        Assert.Equal("Ctrl+Alt+H", canonical.Mappings.Single(m => m.Button == RemoteButton.Home).GetConfiguredAction(ButtonTrigger.SingleClick).Shortcut);
 
         var reloaded = new ConfigService(path);
         Assert.Single(reloaded.Current.Devices);
-        Assert.Equal("Ctrl+Alt+H", reloaded.Current.Devices[0].Mappings.Single(m => m.Button == RemoteButton.Home).ClickShortcut);
+        Assert.Equal("Ctrl+Alt+H", reloaded.Current.Devices[0].Mappings.Single(m => m.Button == RemoteButton.Home).GetConfiguredAction(ButtonTrigger.SingleClick).Shortcut);
+    }
+
+    [Fact]
+    public void Load_MigratesLegacyV1ButtonMappings_ToConfiguredButtonActions()
+    {
+        string path = Path.Combine(_tempDir, "legacy-config.json");
+        File.WriteAllText(path, """
+        {
+          "Version": 1,
+          "SelectedDeviceId": "DEV1",
+          "Devices": [
+            {
+              "Id": "DEV1",
+              "BluetoothAddress": 123456,
+              "Name": "Legacy Remote",
+              "ModelType": "GoogleG9N9N",
+              "Mappings": [
+                {
+                  "Button": "Home",
+                  "ClickAction": "KeyboardShortcut",
+                  "ClickShortcut": "Win+Tab",
+                  "DoubleClickAction": "TextSnippet",
+                  "DoubleClickText": "你好",
+                  "LongPressAction": "MediaControl",
+                  "LongPressMedia": "PlayPause"
+                },
+                {
+                  "Button": "Power",
+                  "ClickAction": "KeyboardShortcut",
+                  "ClickShortcut": "Ctrl+Alt+P",
+                  "LongPressAction": "ContinuousRepeat"
+                }
+              ]
+            }
+          ]
+        }
+        """);
+
+        var service = new ConfigService(path);
+        var dev = Assert.Single(service.Current.Devices);
+        var home = dev.Mappings.Single(m => m.Button == RemoteButton.Home);
+        Assert.Equal(ButtonAction.TaskView, home.GetConfiguredAction(ButtonTrigger.SingleClick).Action);
+        Assert.Equal(ButtonAction.TextSnippet, home.GetConfiguredAction(ButtonTrigger.DoubleClick).Action);
+        Assert.Equal("你好", home.GetConfiguredAction(ButtonTrigger.DoubleClick).Text);
+        Assert.Equal(ButtonAction.PlayPause, home.GetConfiguredAction(ButtonTrigger.LongPress).Action);
+
+        var power = dev.Mappings.Single(m => m.Button == RemoteButton.Power);
+        Assert.Equal(ButtonAction.CustomShortcut, power.GetConfiguredAction(ButtonTrigger.SingleClick).Action);
+        Assert.Equal("Ctrl+Alt+P", power.GetConfiguredAction(ButtonTrigger.SingleClick).Shortcut);
+        Assert.Equal(ButtonAction.RepeatSingleClick, power.GetConfiguredAction(ButtonTrigger.LongPress).Action);
+
+        service.Save();
+        string savedJson = File.ReadAllText(path);
+        Assert.DoesNotContain("ClickAction", savedJson);
+        Assert.Contains("SingleClick", savedJson);
     }
 
     [Fact]

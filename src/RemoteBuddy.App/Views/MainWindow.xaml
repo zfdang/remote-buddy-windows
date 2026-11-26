@@ -6,9 +6,9 @@
         xmlns:vm="clr-namespace:RemoteBuddy.App.ViewModels"
         xmlns:pages="clr-namespace:RemoteBuddy.App.Views.Pages"
         mc:Ignorable="d"
-        Title="{Binding CurrentTitle}" Height="720" Width="1020"
+        Title="{Binding CurrentTitle}" Height="760" Width="1120"
         Icon="/Resources/app.ico"
-        MinHeight="620" MinWidth="880"
+        MinHeight="640" MinWidth="920"
         WindowStartupLocation="CenterScreen"
         Background="{StaticResource PrimaryBackgroundBrush}">
     <Grid>

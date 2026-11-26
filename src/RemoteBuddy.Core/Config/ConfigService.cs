@@ -21,6 +21,8 @@ public class ConfigService
     private readonly string _configFilePath;
     private readonly string _backupFilePath;
 
+    public string ConfigFilePath => _configFilePath;
+
     public AppConfig Current { get; private set; }
 
     public ConfigService(string? customPath = null)
@@ -160,10 +162,21 @@ public class ConfigService
             if (parsed != null)
             {
                 parsed.InputTool ??= new();
+                parsed.CustomApplications ??= new();
                 parsed.Devices = DeduplicateDevices(parsed.Devices ?? new(), parsed.SelectedDeviceId);
                 foreach (var dev in parsed.Devices)
                 {
-                    dev.Mappings ??= RemoteDevice.CreateDefaultMappings(dev.ModelType);
+                    if (dev.Mappings == null || dev.Mappings.Count == 0)
+                    {
+                        dev.Mappings = RemoteDevice.CreateDefaultMappings(dev.ModelType);
+                    }
+                    else
+                    {
+                        foreach (var mapping in dev.Mappings)
+                        {
+                            mapping.MigrateLegacyIfNeeded();
+                        }
+                    }
                 }
                 config = parsed;
                 return true;
@@ -389,6 +402,7 @@ public class ConfigService
             ReceiveUpdateNotifications = source.ReceiveUpdateNotifications,
             DiagnosticLoggingEnabled = source.DiagnosticLoggingEnabled,
             HasCompletedOnboarding = source.HasCompletedOnboarding,
+            CustomMappingEnabled = source.CustomMappingEnabled,
             SelectedDeviceId = source.SelectedDeviceId,
             InputTool = new InputToolConfig
             {
@@ -400,6 +414,9 @@ public class ConfigService
             AppIntegrations = source.AppIntegrations != null
                 ? new Dictionary<string, bool>(source.AppIntegrations)
                 : new(),
+            CustomApplications = (source.CustomApplications ?? [])
+                .Select(app => app.Clone())
+                .ToList(),
             Devices = DeduplicateDevices(source.Devices ?? [], source.SelectedDeviceId)
                 .Select(d => new RemoteDevice
                 {
@@ -411,22 +428,7 @@ public class ConfigService
                     Gain = d.Gain,
                     VoiceButtonMode = d.VoiceButtonMode,
                     Mappings = (d.Mappings ?? [])
-                        .Select(m => new ButtonMapping
-                        {
-                            Button = m.Button,
-                            ClickAction = m.ClickAction,
-                            ClickShortcut = m.ClickShortcut,
-                            ClickText = m.ClickText,
-                            ClickMedia = m.ClickMedia,
-                            DoubleClickAction = m.DoubleClickAction,
-                            DoubleClickShortcut = m.DoubleClickShortcut,
-                            DoubleClickText = m.DoubleClickText,
-                            DoubleClickMedia = m.DoubleClickMedia,
-                            LongPressAction = m.LongPressAction,
-                            LongPressShortcut = m.LongPressShortcut,
-                            LongPressText = m.LongPressText,
-                            LongPressMedia = m.LongPressMedia
-                        })
+                        .Select(m => m.Clone())
                         .ToList()
                 })
                 .ToList()

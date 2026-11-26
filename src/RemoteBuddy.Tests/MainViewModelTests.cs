@@ -607,7 +607,7 @@ public class MainViewModelTests
                 {
                     Id = id.ToString(), BluetoothAddress = id, Name = "Chromecast Remote",
                     ModelType = RemoteModelType.GoogleG9N9N,
-                    Mappings = [new ButtonMapping { Button = RemoteButton.Ok, ClickAction = ButtonActionType.TextSnippet, ClickText = $"remote-{id}" }]
+                    Mappings = [new ButtonMapping { Button = RemoteButton.Ok, SingleClick = new ConfiguredButtonAction { Action = ButtonAction.TextSnippet, Text = $"remote-{id}" } }]
                 };
                 config.Current.Devices.Add(device);
                 bluetooth.ReadyAddresses.Add(id);
@@ -658,27 +658,24 @@ public class MainViewModelTests
                     new ButtonMapping
                     {
                         Button = RemoteButton.Left,
-                        ClickAction = ButtonActionType.KeyboardShortcut,
-                        ClickShortcut = "Left"
+                        SingleClick = new ConfiguredButtonAction { Action = ButtonAction.ArrowLeft }
                     },
                     new ButtonMapping
                     {
                         Button = RemoteButton.Right,
-                        ClickAction = ButtonActionType.KeyboardShortcut,
-                        ClickShortcut = "Right"
+                        SingleClick = new ConfiguredButtonAction { Action = ButtonAction.DirectPassthrough }
                     },
                     new ButtonMapping
                     {
                         Button = RemoteButton.Ok,
-                        ClickAction = ButtonActionType.KeyboardShortcut,
-                        ClickShortcut = "Enter"
+                        SingleClick = new ConfiguredButtonAction { Action = ButtonAction.ReturnKey }
                     }
                 ]
             };
             config.Current.Devices.Add(xiaomi);
             bluetooth.ReadyAddresses.Add(xiaomi.BluetoothAddress);
 
-            using var vm = new MainViewModel(config, bluetooth, action => executedShortcuts.Add(action.Shortcut));
+            using var vm = new MainViewModel(config, bluetooth, action => executedShortcuts.Add(action.Action.ToString()));
 
             vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Left, true);
             vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Left, false);
@@ -719,8 +716,7 @@ public class MainViewModelTests
                     new ButtonMapping
                     {
                         Button = RemoteButton.Left,
-                        ClickAction = ButtonActionType.KeyboardShortcut,
-                        ClickShortcut = "Ctrl+Left"
+                        SingleClick = new ConfiguredButtonAction { Action = ButtonAction.CustomShortcut, Shortcut = "Ctrl+Left" }
                     }
                 ]
             };
@@ -749,7 +745,7 @@ public class MainViewModelTests
         {
             var config = new ConfigService(path);
             var bluetooth = new TestBluetoothManager();
-            var executedShortcuts = new List<string?>();
+            var executedActions = new List<ButtonAction>();
 
             var g9n9n = new RemoteDevice
             {
@@ -762,21 +758,20 @@ public class MainViewModelTests
                     new ButtonMapping
                     {
                         Button = RemoteButton.Left,
-                        ClickAction = ButtonActionType.KeyboardShortcut,
-                        ClickShortcut = "Left"
+                        SingleClick = new ConfiguredButtonAction { Action = ButtonAction.ArrowLeft }
                     }
                 ]
             };
             config.Current.Devices.Add(g9n9n);
             bluetooth.ReadyAddresses.Add(g9n9n.BluetoothAddress);
 
-            using var vm = new MainViewModel(config, bluetooth, action => executedShortcuts.Add(action.Shortcut));
+            using var vm = new MainViewModel(config, bluetooth, action => executedActions.Add(action.Action));
 
             vm.HandleDeviceButton(g9n9n.BluetoothAddress, RemoteButton.Left, true);
             vm.HandleDeviceButton(g9n9n.BluetoothAddress, RemoteButton.Left, false);
 
             // G9N9N does not deliver native Windows keyboard arrow keys, so synthetic injection is required
-            Assert.Equal(new[] { "Left" }, executedShortcuts);
+            Assert.Equal(new[] { ButtonAction.ArrowLeft }, executedActions);
         }
         finally
         {
@@ -1010,10 +1005,8 @@ public class MainViewModelTests
                     new ButtonMapping
                     {
                         Button = RemoteButton.Home,
-                        ClickAction = ButtonActionType.TextSnippet,
-                        ClickText = "home",
-                        LongPressAction = ButtonActionType.TextSnippet,
-                        LongPressText = "home-long"
+                        SingleClick = new ConfiguredButtonAction { Action = ButtonAction.TextSnippet, Text = "home" },
+                        LongPress = new ConfiguredButtonAction { Action = ButtonAction.TextSnippet, Text = "home-long" }
                     }
                 ]
             };
@@ -1056,8 +1049,7 @@ public class MainViewModelTests
                     new ButtonMapping
                     {
                         Button = RemoteButton.Home,
-                        ClickAction = ButtonActionType.TextSnippet,
-                        ClickText = "home"
+                        SingleClick = new ConfiguredButtonAction { Action = ButtonAction.TextSnippet, Text = "home" }
                     }
                 ]
             };
@@ -1100,14 +1092,12 @@ public class MainViewModelTests
                     new ButtonMapping
                     {
                         Button = RemoteButton.Home,
-                        ClickAction = ButtonActionType.TextSnippet,
-                        ClickText = "home"
+                        SingleClick = new ConfiguredButtonAction { Action = ButtonAction.TextSnippet, Text = "home" }
                     },
                     new ButtonMapping
                     {
                         Button = RemoteButton.Back,
-                        ClickAction = ButtonActionType.TextSnippet,
-                        ClickText = "back"
+                        SingleClick = new ConfiguredButtonAction { Action = ButtonAction.TextSnippet, Text = "back" }
                     }
                 ]
             };
@@ -1149,10 +1139,8 @@ public class MainViewModelTests
                     new ButtonMapping
                     {
                         Button = RemoteButton.Home,
-                        ClickAction = ButtonActionType.TextSnippet,
-                        ClickText = "home-single",
-                        DoubleClickAction = ButtonActionType.TextSnippet,
-                        DoubleClickText = "home-double"
+                        SingleClick = new ConfiguredButtonAction { Action = ButtonAction.TextSnippet, Text = "home-single" },
+                        DoubleClick = new ConfiguredButtonAction { Action = ButtonAction.TextSnippet, Text = "home-double" }
                     }
                 ]
             };
@@ -1300,8 +1288,8 @@ public class MainViewModelTests
             var bt = new TestBluetoothManager();
             bt.ReadyAddresses.Add(xiaomi.BluetoothAddress);
 
-            var executed = new List<string?>();
-            using var vm = new MainViewModel(config, bt, action => executed.Add(action.Shortcut));
+            var executed = new List<ButtonAction>();
+            using var vm = new MainViewModel(config, bt, action => executed.Add(action.Action));
             vm.IsMainWindowActive = true;
             vm.Navigate("Mapping");
             vm.MappingVm.IsMappingSelectionLocked = false;
@@ -1343,15 +1331,15 @@ public class MainViewModelTests
             var bt = new TestBluetoothManager();
             bt.ReadyAddresses.Add(xiaomi.BluetoothAddress);
 
-            var executed = new List<string?>();
-            using var vm = new MainViewModel(config, bt, action => executed.Add(action.Shortcut));
+            var executed = new List<ButtonAction>();
+            using var vm = new MainViewModel(config, bt, action => executed.Add(action.Action));
             vm.IsMainWindowActive = false;
             vm.Navigate("Mapping");
 
             vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Home, true);
             vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Home, false);
 
-            Assert.Equal(["Win+Tab"], executed);
+            Assert.Equal([ButtonAction.TaskView], executed);
         }
         finally
         {
@@ -1380,19 +1368,77 @@ public class MainViewModelTests
             var bt = new TestBluetoothManager();
             bt.ReadyAddresses.Add(xiaomi.BluetoothAddress);
 
-            var executed = new List<string?>();
-            using var vm = new MainViewModel(config, bt, action => executed.Add(action.Shortcut));
+            var executed = new List<ButtonAction>();
+            using var vm = new MainViewModel(config, bt, action => executed.Add(action.Action));
             vm.IsMainWindowActive = true;
             vm.Navigate("General");
 
             vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Home, true);
             vm.HandleDeviceButton(xiaomi.BluetoothAddress, RemoteButton.Home, false);
 
-            Assert.Equal(["Win+Tab"], executed);
+            Assert.Equal([ButtonAction.TaskView], executed);
         }
         finally
         {
             if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void CommonPhraseOverlay_ClaimsButtonsAndVoiceKeyDismissesWithoutStartingVoice()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"phrase-overlay-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new TestBluetoothManager { IsConnected = true, IsReady = true };
+            const ulong addr = 0x4754514C6FCC;
+            bt.ReadyAddresses.Add(addr);
+            var g9 = new RemoteDevice
+            {
+                Id = "g9",
+                BluetoothAddress = addr,
+                Name = "Chromecast Remote",
+                ModelType = RemoteModelType.GoogleG9N9N,
+                Mappings =
+                [
+                    new ButtonMapping
+                    {
+                        Button = RemoteButton.Back,
+                        SingleClick = new ConfiguredButtonAction { Action = ButtonAction.TextSnippet, Text = "leaked-back" }
+                    }
+                ]
+            };
+            config.Current.Devices.Add(g9);
+            config.Current.SelectedDeviceId = g9.Id;
+
+            var executed = new List<string?>();
+            int overlayOpened = 0;
+            int overlayClosed = 0;
+            using var vm = new MainViewModel(config, bt, a => executed.Add(a.Text));
+            vm.RequestToggleCommonPhraseOverlay += (_, _) => overlayOpened++;
+            vm.RequestCloseCommonPhraseOverlay += () => overlayClosed++;
+
+            vm.ToggleCommonPhraseOverlay(addr);
+            Assert.Equal(1, overlayOpened);
+
+            // Pressing Voice dismisses the overlay without starting a voice session
+            vm.HandleDeviceButton(addr, RemoteButton.Voice, true);
+            Assert.Equal(1, overlayClosed);
+            Assert.Equal(0, bt.StartVoiceSessionCount);
+
+            // Re-open overlay and press Back: must close overlay without leaking Back's mapped action
+            vm.ToggleCommonPhraseOverlay(addr);
+            vm.HandleDeviceButton(addr, RemoteButton.Back, true);
+            vm.HandleDeviceButton(addr, RemoteButton.Back, false);
+            Assert.Equal(2, overlayClosed);
+            Assert.Empty(executed);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+            string phrasesPath = CommonPhraseStore.ResolveDefaultPathForConfigDirectory(path);
+            if (File.Exists(phrasesPath)) File.Delete(phrasesPath);
         }
     }
 

@@ -45,6 +45,16 @@ public class NativeInputSenderTests
     [InlineData("Down", new ushort[] { }, (ushort)0x28)]
     [InlineData("Left", new ushort[] { }, (ushort)0x25)]
     [InlineData("Right", new ushort[] { }, (ushort)0x27)]
+    [InlineData("Ctrl+Win+Left", new ushort[] { 0xA2, 0x5B }, (ushort)0x25)]
+    [InlineData("Ctrl+Win+Right", new ushort[] { 0xA2, 0x5B }, (ushort)0x27)]
+    [InlineData("Win+Shift+S", new ushort[] { 0x5B, 0xA0 }, (ushort)'S')]
+    [InlineData("Win+N", new ushort[] { 0x5B }, (ushort)'N')]
+    [InlineData("Win+S", new ushort[] { 0x5B }, (ushort)'S')]
+    [InlineData("Win+D", new ushort[] { 0x5B }, (ushort)'D')]
+    [InlineData("Alt+F4", new ushort[] { 0xA4 }, (ushort)0x73)]
+    [InlineData("Shift+Enter", new ushort[] { 0xA0 }, (ushort)0x0D)]
+    [InlineData("Ctrl+Enter", new ushort[] { 0xA2 }, (ushort)0x0D)]
+    [InlineData("Apps", new ushort[] { }, (ushort)0x5D)]
     public void TryParseShortcut_ParsesValidShortcutsAndModifiers(string shortcut, ushort[] expectedModifiers, ushort expectedMainKey)
     {
         bool success = NativeInputSender.TryParseShortcut(shortcut, out var modifiers, out var mainKey);

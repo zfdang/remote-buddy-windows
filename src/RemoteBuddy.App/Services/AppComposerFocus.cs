@@ -22,6 +22,7 @@ internal enum AppFocusResult
 internal interface IAppComposerFocus
 {
     AppFocusTarget? Capture(IReadOnlyDictionary<string, bool>? enabledIntegrations);
+    AppFocusTarget? CaptureForegroundForExplicitFocus() => null;
     bool IsForeground(AppFocusTarget target);
     Task<AppFocusResult> FocusAsync(AppFocusTarget target, Func<bool> isVoiceLive, CancellationToken cancellationToken);
 }
@@ -45,9 +46,18 @@ internal sealed class AppComposerFocus : IAppComposerFocus
         ["WorkBuddy"] = "workbuddy"
     };
 
-    public AppFocusTarget? Capture(IReadOnlyDictionary<string, bool>? enabledIntegrations)
+    public AppFocusTarget? Capture(IReadOnlyDictionary<string, bool>? enabledIntegrations) =>
+        CaptureInternal(enabledIntegrations, ignoreIntegrationFilter: false);
+
+    public AppFocusTarget? CaptureForegroundForExplicitFocus() =>
+        CaptureInternal(null, ignoreIntegrationFilter: true);
+
+    private static AppFocusTarget? CaptureInternal(
+        IReadOnlyDictionary<string, bool>? enabledIntegrations,
+        bool ignoreIntegrationFilter)
     {
-        if (enabledIntegrations == null || !enabledIntegrations.Values.Any(enabled => enabled)) return null;
+        if (!ignoreIntegrationFilter && (enabledIntegrations == null || !enabledIntegrations.Values.Any(enabled => enabled)))
+            return null;
         nint window = GetForegroundWindow();
         if (window == 0 || GetWindowThreadProcessId(window, out uint processId) == 0 ||
             processId == Environment.ProcessId)
@@ -58,7 +68,11 @@ internal sealed class AppComposerFocus : IAppComposerFocus
         {
             using var process = Process.GetProcessById((int)processId);
             string? id = GetIntegrationId(process.ProcessName);
-            return id != null && enabledIntegrations.GetValueOrDefault(id)
+            if (ignoreIntegrationFilter)
+            {
+                return new AppFocusTarget(window, processId, id ?? "generic");
+            }
+            return id != null && enabledIntegrations!.GetValueOrDefault(id)
                 ? new AppFocusTarget(window, processId, id)
                 : null;
         }

@@ -13,12 +13,12 @@ public sealed class RemoteButtonGestures
     private const int MaximumRepeatMilliseconds = 60_000;
 
     private readonly Func<int, Action, Action> _schedule;
-    private readonly Action<RemoteButton, ButtonAssignment> _execute;
+    private readonly Action<RemoteButton, ConfiguredButtonAction> _execute;
 
-    public RemoteButtonGestures(Func<int, Action, Action> schedule, Action<ButtonAssignment> execute)
+    public RemoteButtonGestures(Func<int, Action, Action> schedule, Action<ConfiguredButtonAction> execute)
         : this(schedule, (_, a) => execute(a)) { }
 
-    public RemoteButtonGestures(Func<int, Action, Action> schedule, Action<RemoteButton, ButtonAssignment> execute)
+    public RemoteButtonGestures(Func<int, Action, Action> schedule, Action<RemoteButton, ConfiguredButtonAction> execute)
     {
         _schedule = schedule;
         _execute = execute;
@@ -27,16 +27,18 @@ public sealed class RemoteButtonGestures
     private sealed class Press(ButtonMapping mapping)
     {
         public RemoteButton Button => mapping.Button;
-        public ButtonAssignment SingleClick { get; } = mapping.GetAssignment(ButtonTrigger.SingleClick);
-        public ButtonAssignment LongPress { get; } = mapping.GetAssignment(ButtonTrigger.LongPress);
-        public ButtonAssignment DoubleClick { get; } = mapping.GetAssignment(ButtonTrigger.DoubleClick);
+        public ConfiguredButtonAction SingleClick { get; } = mapping.GetEffectiveAction(ButtonTrigger.SingleClick);
+        public ConfiguredButtonAction LongPress { get; } = mapping.GetEffectiveAction(ButtonTrigger.LongPress);
+        public ConfiguredButtonAction DoubleClick { get; } = mapping.GetEffectiveAction(ButtonTrigger.DoubleClick);
         public bool IsDown { get; set; } = true;
         public bool IsSecondPress { get; set; }
         public bool FiredOnPress { get; set; }
         public Action? CancelTimer { get; set; }
-        public bool Repeats => LongPress.Action == ButtonActionType.ContinuousRepeat && SingleClick.Action != ButtonActionType.None;
-        public bool HasLongPress => LongPress.Action is not (ButtonActionType.None or ButtonActionType.ContinuousRepeat);
-        public bool HasDoubleClick => DoubleClick.Action is not (ButtonActionType.None or ButtonActionType.ContinuousRepeat);
+        public bool Repeats =>
+            LongPress.Action == ButtonAction.RepeatSingleClick &&
+            SingleClick.Action is not (ButtonAction.Disabled or ButtonAction.OpenUrl or ButtonAction.DirectPassthrough);
+        public bool HasLongPress => LongPress.Action is not (ButtonAction.Disabled or ButtonAction.RepeatSingleClick);
+        public bool HasDoubleClick => DoubleClick.Action is not (ButtonAction.Disabled or ButtonAction.RepeatSingleClick);
 
         public void StopTimer()
         {
@@ -49,6 +51,12 @@ public sealed class RemoteButtonGestures
 
     public void HandleDown(ButtonMapping mapping)
     {
+        var single = mapping.GetEffectiveAction(ButtonTrigger.SingleClick);
+        if (single.Action == ButtonAction.DirectPassthrough)
+        {
+            return;
+        }
+
         var button = mapping.Button;
         if (_presses.TryGetValue(button, out var press))
         {
@@ -69,13 +77,17 @@ public sealed class RemoteButtonGestures
         }
 
         if (press.Repeats)
+        {
             Schedule(press, RepeatStartMilliseconds, () => Repeat(press, RepeatStartMilliseconds));
+        }
         else if (press.HasLongPress)
+        {
             Schedule(press, LongPressMilliseconds, () =>
             {
                 press.FiredOnPress = true;
                 Fire(button, press.LongPress);
             });
+        }
     }
 
     public void HandleUp(RemoteButton button)
@@ -96,7 +108,9 @@ public sealed class RemoteButtonGestures
 
         _presses.Remove(button);
         if (!press.FiredOnPress)
+        {
             Fire(button, press.IsSecondPress ? press.DoubleClick : press.SingleClick);
+        }
     }
 
     public void Reset()
@@ -139,8 +153,8 @@ public sealed class RemoteButtonGestures
         };
     }
 
-    private void Fire(RemoteButton button, ButtonAssignment assignment)
+    private void Fire(RemoteButton button, ConfiguredButtonAction assignment)
     {
-        if (assignment.Action != ButtonActionType.None) _execute(button, assignment);
+        if (assignment.Action != ButtonAction.Disabled) _execute(button, assignment);
     }
 }

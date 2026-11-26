@@ -152,14 +152,13 @@ public class ConvertersAndViewModelTests
 
         // Clear Home button
         vm.ClearSelectedMapping();
-        Assert.Equal(ButtonActionType.None, vm.SelectedMapping.SingleClick.Action);
+        Assert.Equal(ButtonAction.Disabled, vm.SelectedMapping.SingleClick.Action);
         Assert.Empty(vm.SelectedMapping.SingleClick.Shortcut);
 
         // Reset to Defaults
         vm.ResetToDefaults();
         vm.SelectButton("Home");
-        Assert.Equal(ButtonActionType.KeyboardShortcut, vm.SelectedMapping.SingleClick.Action);
-        Assert.Equal("Win+Tab", vm.SelectedMapping.SingleClick.Shortcut);
+        Assert.Equal(ButtonAction.TaskView, vm.SelectedMapping.SingleClick.Action);
     }
 
     [Fact]
