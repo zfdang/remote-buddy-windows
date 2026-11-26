@@ -630,6 +630,8 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
     [RelayCommand]
     public void RefreshDriverStatus()
     {
+        TestCableLoopbackCommand.Cancel();
+        CableLoopbackMessage = string.Empty;
         DriverStatus = VirtualAudioAuditor.AuditCableInputDevice(forceRefresh: true);
         CableOutputStatus = VirtualAudioAuditor.GetCableOutputStatus();
         OnPropertyChanged(nameof(DriverStatusMessage));
@@ -649,7 +651,7 @@ public partial class OnboardingViewModel : ObservableObject, IDisposable
             CableLoopbackMessage = result switch
             {
                 CableLoopbackResult.Passed => "环回通过，CABLE Output 收到了测试音。如果输入工具仍无声，请确认它选用的麦克风是 CABLE Output。",
-                CableLoopbackResult.NoSignal => "CABLE Output 未检测到测试音。请检查 Windows 音量混音器中 Remote Buddy 和 VB-CABLE 的静音及音量设置。",
+                CableLoopbackResult.NoSignal => "CABLE Output 未检测到测试音。请在音量混音器里检查 CABLE Input 和 Remote Buddy 的静音及音量，再到 Windows 声音设置的录制设备里检查 CABLE Output。",
                 CableLoopbackResult.EndpointUnavailable => "未找到可用的 CABLE Input 和 CABLE Output。请在 Windows 声音设置中启用这两个设备并重新检测。",
                 CableLoopbackResult.VoiceBusy => "正在使用遥控器语音。请结束语音后再测。",
                 _ => "测试音播放或录音失败。请确认 VB-CABLE 可用，详细信息见应用日志。"

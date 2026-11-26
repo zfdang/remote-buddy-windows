@@ -324,7 +324,16 @@ public static class VirtualAudioAuditor
 
     internal static MMDevice? GetCableOutputDevice(MMDevice cableInput)
     {
-        string adapterName = cableInput.DeviceFriendlyName;
+        string adapterName;
+        try
+        {
+            adapterName = cableInput.DeviceFriendlyName;
+        }
+        catch (COMException ex)
+        {
+            AppLogger.Debug($"CABLE Input unavailable during output lookup (HResult=0x{ex.HResult:X8})", "VirtualAudioAuditor");
+            return null;
+        }
         if (!adapterName.Contains("VB-Audio", StringComparison.OrdinalIgnoreCase)) return null;
 
         using var enumerator = new MMDeviceEnumerator();

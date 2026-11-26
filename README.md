@@ -123,15 +123,15 @@ Windows 11 已实机验证一只 RC003 与一只 G9N9N 同时连接共存：两�
 
 ## 项目文档
 
-- [Windows 遥控器输入实现](docs/windows-remote-input.md)：对照小米 RC003 与 Chromecast G9N9N 的普通键、语音信号、设备绑定与多遥控器并发规则
-- [G9N9N 兼容性与诊断日志](docs/g9n9n-compatibility.md)：查阅不同按键报告格式，以及普通键异常时应核对的本地日志
-- [Windows 蓝牙遥控器输入分层](docs/windows-ble-input-layers.md) 对照 BthPort ETW、用户态 HID-over-GATT 驱动、WinRT GATT 和 Raw Input 各层可见的信号。
-- [Frida / Frida Gadget 驱动层采集方案](docs/frida-gadget-hid-tap-design.md) 介绍从 `WUDFHost.exe` 的 HID-over-GATT 驱动回调读取原始按键报告的做法及其维护成本。Remote Buddy 当前通过 Raw Input、直接 HID 和 BthPort ETW 采集普通键。
-- [豆包语音快捷键与 USB/IP 虚拟键盘](docs/doubao-voice-hotkeys.md)：说明豆包对 `LLKHF_INJECTED` 的过滤机制、USB/IP 虚拟键盘路径与验收步骤
-- [虚拟音频与驱动集成方案](docs/virtual-audio-and-driver.md)：Windows DSE 驱动签名约束、VB-CABLE 状态检测流转与 WASAPI 推流设计
-- [按键监听与快捷键注入规范](docs/input-and-hotkeys.md)：Raw Input 监听与附加映射边界、Pre-roll / Drain 时序保证及 UIPI 权限说明
-- [小米 RC003 按键与 Windows 报告](docs/xiaomi-rc003-buttons.md)：Raw Input 键码、ETW 补取键及默认映射
-- [G9N9N 按键与 Windows 报告](docs/g9n9n-buttons.md)：HID 索引、Consumer Usage、智能切换模式及默认映射
+- [Windows 遥控器输入实现](docs/windows-remote-input.md) · 对照小米 RC003 与 Chromecast G9N9N 的普通键、语音信号、设备绑定与多遥控器并发规则
+- [G9N9N 兼容性与诊断日志](docs/g9n9n-compatibility.md) · 查阅不同按键报告格式，以及普通键异常时应核对的本地日志
+- [Windows 蓝牙遥控器输入分层](docs/windows-ble-input-layers.md) · 对照 BthPort ETW、用户态 HID-over-GATT 驱动、WinRT GATT 和 Raw Input 各层可见的信号
+- [Frida / Frida Gadget 驱动层采集方案](docs/frida-gadget-hid-tap-design.md) · 从 `WUDFHost.exe` 的 HID-over-GATT 驱动回调读取按键报告的备选方案及其维护成本
+- [豆包语音快捷键与 USB/IP 虚拟键盘](docs/doubao-voice-hotkeys.md) · 说明豆包对 `LLKHF_INJECTED` 的过滤机制、USB/IP 虚拟键盘路径与验收步骤
+- [虚拟音频与驱动集成方案](docs/virtual-audio-and-driver.md) · Windows DSE 驱动签名约束、VB-CABLE 状态检测流转与 WASAPI 推流设计
+- [按键监听与快捷键注入规范](docs/input-and-hotkeys.md) · Raw Input 监听与附加映射边界、Pre-roll / Drain 时序保证及 UIPI 权限说明
+- [小米 RC003 按键与 Windows 报告](docs/xiaomi-rc003-buttons.md) · Raw Input 键码、ETW 补取键及默认映射
+- [G9N9N 按键与 Windows 报告](docs/g9n9n-buttons.md) · HID 索引、Consumer Usage、智能切换模式及默认映射
 - [ATVV 协议参考](docs/device-protocols.md) · [软件架构](docs/architecture.md)
 
 ---
