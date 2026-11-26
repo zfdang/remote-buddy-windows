@@ -75,6 +75,5 @@ public interface IBluetoothManager : IDisposable
     Task<bool> StartVoiceSessionAsync(ulong address) => address == ConnectedDeviceAddress ? StartVoiceSessionAsync() : Task.FromResult(false);
     Task<bool> StopVoiceSessionAsync(ulong address) => address == ConnectedDeviceAddress ? StopVoiceSessionAsync() : Task.FromResult(false);
     Task ProbeButtonSourceAsync(Guid marker, ulong address) => Task.CompletedTask;
-    byte[]? GetProbeReadPayload(ulong address) => null;
     EtwAttributeFilter GetEtwAttributeFilter(ulong address) => default;
 }

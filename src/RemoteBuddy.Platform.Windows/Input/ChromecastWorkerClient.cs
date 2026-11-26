@@ -315,10 +315,10 @@ public sealed class ChromecastWorkerClient : IDisposable
         await SendControlFrameAsync(BuildSetReadyAddressesFrame(addresses), ct).ConfigureAwait(false);
     }
 
-    internal Task SendBeginProbeAsync(ulong address, ulong round, byte[]? expectedReadResponse, CancellationToken ct = default)
+    internal Task SendBeginProbeAsync(ulong address, ulong round, CancellationToken ct = default)
     {
         if (!_isRunning) return Task.CompletedTask;
-        return SendControlFrameAsync(BuildBeginProbeFrame(address, round, expectedReadResponse), ct);
+        return SendControlFrameAsync(BuildBeginProbeFrame(address, round), ct);
     }
 
     internal Task SendEndProbeAsync(ulong address, ulong round, CancellationToken ct = default)
@@ -340,18 +340,12 @@ public sealed class ChromecastWorkerClient : IDisposable
         return frame;
     }
 
-    internal static byte[] BuildBeginProbeFrame(ulong address, ulong round, byte[]? expectedReadResponse)
+    internal static byte[] BuildBeginProbeFrame(ulong address, ulong round)
     {
-        ushort readLen = (ushort)Math.Min(expectedReadResponse?.Length ?? 0, 512);
-        var frame = new byte[19 + readLen];
+        var frame = new byte[17];
         frame[0] = ChromecastWorkerHost.CmdBeginProbe;
         System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(frame.AsSpan(1, 8), address);
         System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(frame.AsSpan(9, 8), round);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(17, 2), readLen);
-        if (readLen > 0 && expectedReadResponse != null)
-        {
-            expectedReadResponse.AsSpan(0, readLen).CopyTo(frame.AsSpan(19));
-        }
         return frame;
     }
 

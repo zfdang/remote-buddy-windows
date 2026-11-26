@@ -591,8 +591,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (source.Address == 0) continue;
 
                 ulong round = (ulong)Interlocked.Increment(ref _etwProbeRound);
-                byte[]? expectedRead = _bluetoothManager.GetProbeReadPayload(address);
-                await _chromecastButtonReceiver.BeginProbeAsync(address, round, expectedRead, ct).ConfigureAwait(false);
+                await _chromecastButtonReceiver.BeginProbeAsync(address, round, ct).ConfigureAwait(false);
                 try
                 {
                     await _bluetoothManager.ProbeButtonSourceAsync(source.Marker, address).ConfigureAwait(false);

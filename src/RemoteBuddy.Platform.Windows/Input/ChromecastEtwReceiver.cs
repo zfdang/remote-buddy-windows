@@ -100,10 +100,8 @@ public sealed class ChromecastEtwReceiver : IDisposable
         public ulong ActiveProbeRound { get; set; }
         public bool SawOutgoingProbeInRound { get; set; }
         public ushort? CandidateProbeHandle { get; set; }
-        public bool CandidateProbeReadMatched { get; set; }
         public bool CandidateProbeConflict { get; set; }
         public ushort? PendingFallbackHandle { get; set; }
-        public byte[]? ExpectedProbeReadResponse { get; set; }
         public bool LoggedUnmatchedMarker { get; set; }
         public ushort? BoundHandle { get; set; }
         public ushort? LockedG9N9NHandle { get; set; }
@@ -118,7 +116,6 @@ public sealed class ChromecastEtwReceiver : IDisposable
             BoundHandle = null;
             PendingFallbackHandle = null;
             CandidateProbeHandle = null;
-            CandidateProbeReadMatched = false;
             CandidateProbeConflict = false;
             LockedG9N9NHandle = null;
             Held = RemoteButton.None;
@@ -180,7 +177,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
         }
     }
 
-    internal void BeginProbe(ulong address, ulong round, byte[]? expectedReadResponse = null)
+    internal void BeginProbe(ulong address, ulong round)
     {
         if (address == 0 || round == 0) return;
         lock (_stateLock)
@@ -196,13 +193,8 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 source.ActiveProbeRound = round;
                 source.SawOutgoingProbeInRound = false;
                 source.CandidateProbeHandle = null;
-                source.CandidateProbeReadMatched = false;
                 source.CandidateProbeConflict = false;
                 source.PendingFallbackHandle = null;
-                if (expectedReadResponse is { Length: > 0 })
-                {
-                    source.ExpectedProbeReadResponse = (byte[])expectedReadResponse.Clone();
-                }
                 break;
             }
         }
@@ -602,7 +594,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
                         if (source.CandidateProbeHandle == handle)
                         {
                             source.CandidateProbeHandle = null;
-                            source.CandidateProbeReadMatched = false;
+                            source.CandidateProbeConflict = false;
                         }
                         if (source.BoundHandle != handle) continue;
                         source.ResetConnectionState();
@@ -648,6 +640,8 @@ public sealed class ChromecastEtwReceiver : IDisposable
                     if (!att.SequenceEqual(source.Request)) continue;
                     source.PendingHandle = connection;
                     source.SawOutgoingProbeInRound = true;
+                    source.CandidateProbeHandle = null;
+                    source.CandidateProbeConflict = false;
                     source.PendingFallbackHandle = null;
                     gattQueryLog = $"BthPort observed GATT query for 0x{source.Source.Address:X12}";
                     break;
@@ -683,34 +677,16 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 !activeProbeSource.SawOutgoingProbeInRound &&
                 !activeProbeSource.BoundHandle.HasValue)
             {
-                if (att.Length >= 2 && att[0] == 0x0B &&
-                    activeProbeSource.ExpectedProbeReadResponse is { Length: > 0 } expectedRead &&
-                    att[1..].SequenceEqual(expectedRead))
+                if (att is [0x01, 0x06, _, _, _] or [0x07, ..])
                 {
-                    activeProbeSource.CandidateProbeHandle = connection;
-                    activeProbeSource.CandidateProbeReadMatched = true;
-                    activeProbeSource.CandidateProbeConflict = false;
-                    diagnosticLog = $"ETW probe matched device read signature: addr=0x{activeProbeSource.Source.Address:X12}, acl=0x{connection:X4}";
-                    if (_activeProbeEnded)
+                    if (!activeProbeSource.CandidateProbeHandle.HasValue)
                     {
-                        string? unusedFallback = null;
-                        PromoteProbeCandidateLocked(sources, activeProbeSource, ref bindLog, ref newlyBoundAddr, ref unusedFallback);
-                        if (activeProbeSource.BoundHandle == connection) boundSource = activeProbeSource;
+                        activeProbeSource.CandidateProbeHandle = connection;
+                        diagnosticLog = $"ETW probe saw incoming ATT response without outgoing ACL: addr=0x{activeProbeSource.Source.Address:X12}, acl=0x{connection:X4}, opcode=0x{att[0]:X2}";
                     }
-                }
-                else if (att is [0x01, 0x06, _, _, _] or [0x07, ..])
-                {
-                    if (!activeProbeSource.CandidateProbeReadMatched)
+                    else if (activeProbeSource.CandidateProbeHandle != connection)
                     {
-                        if (!activeProbeSource.CandidateProbeHandle.HasValue)
-                        {
-                            activeProbeSource.CandidateProbeHandle = connection;
-                            diagnosticLog = $"ETW probe saw incoming ATT response without outgoing ACL: addr=0x{activeProbeSource.Source.Address:X12}, acl=0x{connection:X4}, opcode=0x{att[0]:X2}";
-                        }
-                        else if (activeProbeSource.CandidateProbeHandle != connection)
-                        {
-                            activeProbeSource.CandidateProbeConflict = true;
-                        }
+                        activeProbeSource.CandidateProbeConflict = true;
                     }
                     if (_activeProbeEnded)
                     {
@@ -719,6 +695,12 @@ public sealed class ChromecastEtwReceiver : IDisposable
                         if (promoteFallbackLog != null) diagnosticLog = promoteFallbackLog;
                         if (activeProbeSource.PendingFallbackHandle == connection) fallbackSource = activeProbeSource;
                     }
+                }
+                else if (att[0] is not (0x1B or 0x1D) &&
+                         !_loggedProbeStages.Contains($"ProbeIncomingOpcode.{att[0]:X2}") &&
+                         _loggedProbeStages.Add($"ProbeIncomingOpcode.{att[0]:X2}"))
+                {
+                    diagnosticLog = $"ETW probe saw non-matching incoming ATT opcode without outgoing ACL: addr=0x{activeProbeSource.Source.Address:X12}, acl=0x{connection:X4}, opcode=0x{att[0]:X2}, len={att.Length}";
                 }
             }
 
@@ -982,29 +964,8 @@ public sealed class ChromecastEtwReceiver : IDisposable
         if (source.BoundHandle.HasValue || source.SawOutgoingProbeInRound) return;
         if (_readyAddresses.Count > 0 && !_readyAddresses.Contains(source.Source.Address)) return;
         if (source.CandidateProbeHandle is not ushort candidate) return;
-        if (source.CandidateProbeConflict && !source.CandidateProbeReadMatched) return;
+        if (source.CandidateProbeConflict) return;
         if (allSources.Any(other => other != source && other.BoundHandle == candidate)) return;
-
-        if (source.CandidateProbeReadMatched)
-        {
-            foreach (var other in allSources)
-            {
-                if (other != source && other.PendingFallbackHandle == candidate)
-                {
-                    other.PendingFallbackHandle = null;
-                }
-            }
-            source.ResetConnectionState();
-            source.BoundHandle = candidate;
-            source.PendingHandle = null;
-            newlyBoundAddr = source.Source.Address;
-            string hidRange = source.HasHidRange
-                ? $"0x{source.HidHandleStart:X4}..0x{source.HidHandleEnd:X4}"
-                : "none";
-            bindLog =
-                $"ETW bound 0x{source.Source.Address:X12} to ACL 0x{candidate:X4} (via=ATT read response (no outgoing ACL), protocol={source.Source.Protocol}, hidRange={hidRange}, excluded={source.ExcludedAttributes.Count})";
-            return;
-        }
 
         if (source.PendingFallbackHandle != candidate)
         {

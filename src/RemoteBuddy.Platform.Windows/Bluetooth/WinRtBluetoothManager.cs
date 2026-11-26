@@ -126,10 +126,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
     public ulong ConnectedDeviceAddress => _connectedDevice?.BluetoothAddress ?? 0;
     public Guid? ConnectedDeviceContainerId { get; private set; }
     public RemoteDeviceInformation? ConnectedDeviceInformation { get; private set; }
-    public byte[]? ConnectedPnpIdBytes { get; private set; }
     public EtwAttributeFilter ConnectedEtwAttributeFilter { get; private set; }
-
-    public byte[]? GetProbeReadPayload(ulong address) => address == ConnectedDeviceAddress ? ConnectedPnpIdBytes : null;
 
     internal async Task ProbeButtonSourceAsync(Guid marker)
     {
@@ -172,11 +169,6 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 var retryResult = await device.GetGattServicesForUuidAsync(marker, BluetoothCacheMode.Uncached).AsTask().ConfigureAwait(false);
                 AppLogger.Info($"ETW GATT probe completed: addr=0x{device.BluetoothAddress:X12}, attempt=2, status={retryResult.Status}, services={retryResult.Services.Count}, protocolError={retryResult.ProtocolError}", "BluetoothManager");
                 foreach (var service in retryResult.Services) service.Dispose();
-            }
-
-            if (IsStillCurrent() && ConnectedPnpIdBytes is { Length: > 0 })
-            {
-                await ReadPnpIdUncachedAsync(device).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
@@ -860,11 +852,10 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
 
     private async Task LoadRemoteHardwareDetailsAsync(BluetoothLEDevice device, int generation, RemoteDeviceInformation information)
     {
-        var (updated, pnpBytes) = await ReadDeviceInformationWithRawPnpAsync(device, information, includeHardwareDetails: true).ConfigureAwait(false);
+        var updated = await ReadDeviceInformationAsync(device, information, includeHardwareDetails: true).ConfigureAwait(false);
         lock (_stateLock)
         {
             if (generation != _connectionGeneration) return;
-            if (pnpBytes is { Length: > 0 }) ConnectedPnpIdBytes = pnpBytes;
             if (updated != information) ConnectedDeviceInformation = updated;
         }
 
@@ -876,36 +867,32 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
         ConnectedDeviceInformationChanged?.Invoke(updated.BluetoothAddress);
     }
 
-    private static Task<RemoteDeviceInformation> ReadDeviceInformationAsync(
-        BluetoothLEDevice device, RemoteDeviceInformation information, bool includeHardwareDetails) =>
-        ReadDeviceInformationWithRawPnpAsync(device, information, includeHardwareDetails).ContinueWith(t => t.Result.Information, TaskContinuationOptions.OnlyOnRanToCompletion);
-
-    private static async Task<(RemoteDeviceInformation Information, byte[]? RawPnpBytes)> ReadDeviceInformationWithRawPnpAsync(
+    private static async Task<RemoteDeviceInformation> ReadDeviceInformationAsync(
         BluetoothLEDevice device, RemoteDeviceInformation information, bool includeHardwareDetails)
     {
         try
         {
             var result = await device.GetGattServicesForUuidAsync(DeviceInformationServiceUuid).AsTask().ConfigureAwait(false);
-            if (result.Services.Count == 0) return (information, null);
+            if (result.Services.Count == 0) return information;
 
             try
             {
-                if (result.Status != GattCommunicationStatus.Success) return (information, null);
+                if (result.Status != GattCommunicationStatus.Success) return information;
                 var service = result.Services[0];
                 var model = await ReadDeviceInformationValueAsync(service, ModelNumberUuid).ConfigureAwait(false);
                 information = information with { ModelNumber = RemoteDeviceInformation.DecodeDeviceString(model) ?? information.ModelNumber };
-                if (!includeHardwareDetails) return (information, null);
+                if (!includeHardwareDetails) return information;
 
                 var firmware = await ReadDeviceInformationValueAsync(service, FirmwareRevisionUuid).ConfigureAwait(false);
                 var hardware = await ReadDeviceInformationValueAsync(service, HardwareRevisionUuid).ConfigureAwait(false);
                 var pnpId = await ReadDeviceInformationValueAsync(service, PnpIdUuid).ConfigureAwait(false);
-                return (information with
+                return information with
                 {
                     FirmwareRevision = RemoteDeviceInformation.DecodeDeviceString(firmware),
                     HardwareRevision = RemoteDeviceInformation.DecodeDeviceString(hardware),
                     PnpId = RemoteDeviceInformation.DecodePnpId(pnpId),
                     ProductVersion = RemoteDeviceInformation.DecodePnpProductVersion(pnpId),
-                }, pnpId);
+                };
             }
             finally
             {
@@ -915,32 +902,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
         catch (Exception ex)
         {
             AppLogger.Debug($"DIS query failed: {ex.Message}", "BluetoothManager");
-            return (information, null);
-        }
-    }
-
-    private static async Task ReadPnpIdUncachedAsync(BluetoothLEDevice device)
-    {
-        try
-        {
-            var result = await device.GetGattServicesForUuidAsync(DeviceInformationServiceUuid, BluetoothCacheMode.Cached).AsTask().ConfigureAwait(false);
-            if (result.Status != GattCommunicationStatus.Success || result.Services.Count == 0) return;
-            try
-            {
-                var service = result.Services[0];
-                var chars = await service.GetCharacteristicsForUuidAsync(PnpIdUuid, BluetoothCacheMode.Cached).AsTask().ConfigureAwait(false);
-                if (chars.Status != GattCommunicationStatus.Success || chars.Characteristics.Count == 0) return;
-                var value = await chars.Characteristics[0].ReadValueAsync(BluetoothCacheMode.Uncached).AsTask().ConfigureAwait(false);
-                AppLogger.Debug($"ETW GATT PnP ID probe read completed: addr=0x{device.BluetoothAddress:X12}, status={value.Status}", "BluetoothManager");
-            }
-            finally
-            {
-                foreach (var service in result.Services) service.Dispose();
-            }
-        }
-        catch (Exception ex)
-        {
-            AppLogger.Debug($"ETW GATT PnP ID probe read skipped: {ex.Message}", "BluetoothManager");
+            return information;
         }
     }
 
@@ -2421,7 +2383,6 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
             _audioStopReceived = false;
             ConnectedDeviceContainerId = null;
             ConnectedDeviceInformation = null;
-            ConnectedPnpIdBytes = null;
             ConnectedEtwAttributeFilter = default;
             _capabilitiesTcs?.TrySetCanceled();
             _audioStopTcs?.TrySetCanceled();

@@ -195,19 +195,11 @@ public static class ChromecastWorkerHost
             }
             else if (cmd == CmdBeginProbe)
             {
-                byte[] headerBuf = new byte[18];
-                await ReadExactAsync(stream, headerBuf, ct).ConfigureAwait(false);
-                ulong address = System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(headerBuf.AsSpan(0, 8));
-                ulong round = System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(headerBuf.AsSpan(8, 8));
-                ushort readLen = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(headerBuf.AsSpan(16, 2));
-                if (readLen > 512) throw new InvalidDataException($"Invalid expected read length {readLen}");
-                byte[]? expectedRead = null;
-                if (readLen > 0)
-                {
-                    expectedRead = new byte[readLen];
-                    await ReadExactAsync(stream, expectedRead, ct).ConfigureAwait(false);
-                }
-                receiver.BeginProbe(address, round, expectedRead);
+                byte[] payload = new byte[16];
+                await ReadExactAsync(stream, payload, ct).ConfigureAwait(false);
+                ulong address = System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(0, 8));
+                ulong round = System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(8, 8));
+                receiver.BeginProbe(address, round);
             }
             else if (cmd == CmdEndProbe)
             {

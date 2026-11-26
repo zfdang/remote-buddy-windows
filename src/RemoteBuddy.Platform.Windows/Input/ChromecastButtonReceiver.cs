@@ -107,12 +107,12 @@ public sealed class ChromecastButtonReceiver : IDisposable
         _ = _workerClient.SendReadyAddressesAsync(snapshot);
     }
 
-    public async Task BeginProbeAsync(ulong address, ulong round, byte[]? expectedReadResponse = null, CancellationToken ct = default)
+    public async Task BeginProbeAsync(ulong address, ulong round, CancellationToken ct = default)
     {
-        _etwReceiver.BeginProbe(address, round, expectedReadResponse);
+        _etwReceiver.BeginProbe(address, round);
         if (_workerClient.IsRunning)
         {
-            await _workerClient.SendBeginProbeAsync(address, round, expectedReadResponse, ct).ConfigureAwait(false);
+            await _workerClient.SendBeginProbeAsync(address, round, ct).ConfigureAwait(false);
         }
     }
 

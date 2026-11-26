@@ -1169,35 +1169,38 @@ public class ChromecastEtwTests
     }
 
     [Fact]
-    public void FallbackBinding_WithExpectedReadResponse_BindsImmediatelyAndResolvesConflict()
+    public void NormalBinding_SameModelPnpIdBeforeProbeResponse_DoesNotBindWrongConnectionOrBindTwice()
     {
         using var receiver = new ChromecastEtwReceiver();
-        var g9 = new EtwButtonSource(0x4754514C9587, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B);
+        var targetG9 = new EtwButtonSource(0x4754514C9587, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B);
+        var otherG9 = new EtwButtonSource(0x5566778899AA, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B);
         byte[] pnpBytes = [0x02, 0xD1, 0x18, 0x50, 0x94, 0x10, 0x01];
-        receiver.SetSources([g9]);
-        receiver.SetReadyAddresses([g9.Address]);
+        receiver.SetSources([targetG9, otherG9]);
+        receiver.SetReadyAddresses([targetG9.Address, otherG9.Address]);
 
         var bound = new List<ulong>();
         var edges = new List<(ulong Address, RemoteButton Button, bool Down)>();
         receiver.SourceBound += bound.Add;
         receiver.ButtonEvent += (addr, btn, down) => edges.Add((addr, btn, down));
 
-        receiver.BeginProbe(g9.Address, round: 1, pnpBytes);
-        // Unrelated connection happens to emit 0x01, 0x06 during the probe window
-        receiver.ProcessPacket(3, CreateAclPacket(0x01, 0x0106, [0x00, 0x0A], connectionHandle: 0x0041));
-        // Real G9N9N connection emits matching PnP ID ATT_READ_RSP (0x0B)
-        receiver.ProcessPacket(3, CreateAttReadResponsePacket(pnpBytes, connectionHandle: 0x0E01));
-        receiver.EndProbe(g9.Address, round: 1);
+        receiver.BeginProbe(targetG9.Address, round: 1);
+        // Another same-model remote emits the identical PnP ID before targetG9's normal probe response arrives
+        receiver.ProcessPacket(3, CreateAttReadResponsePacket(pnpBytes, connectionHandle: 0x0041));
+        receiver.EndProbe(targetG9.Address, round: 1);
 
-        Assert.Equal([g9.Address], bound);
-
-        // Stranger connection 0x0041 must not produce button events
-        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x0A, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0041));
+        // Button report on the other connection must not be attributed to targetG9
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x04, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0041));
+        Assert.Empty(bound);
         Assert.Empty(edges);
 
-        // Real G9N9N connection 0x0E01 dispatches button events
-        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x03, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0E01));
-        Assert.Equal([(g9.Address, RemoteButton.Up, true)], edges);
+        // Target remote's normal outgoing probe + response arrives and binds cleanly once
+        var (request, response) = CreateProbeHandshake(targetG9.Marker, connectionHandle: 0x0E01);
+        receiver.ProcessPacket(4, request);
+        receiver.ProcessPacket(3, response);
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x04, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0E01));
+
+        Assert.Equal([targetG9.Address], bound);
+        Assert.Equal([(targetG9.Address, RemoteButton.Down, true)], edges);
     }
 
     [Fact]
@@ -1206,7 +1209,6 @@ public class ChromecastEtwTests
         using var receiver = new ChromecastEtwReceiver();
         var g9 = new EtwButtonSource(0x4754514C9587, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B);
         var sleepingG9 = new EtwButtonSource(0x222222222222, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B);
-        byte[] pnpBytes = [0x02, 0xD1, 0x18, 0x50, 0x94, 0x10, 0x01];
         receiver.SetSources([g9, sleepingG9]);
 
         var bound = new List<ulong>();
@@ -1216,21 +1218,22 @@ public class ChromecastEtwTests
 
         using var controlStream = new MemoryStream();
         controlStream.Write(ChromecastWorkerClient.BuildSetReadyAddressesFrame([g9.Address]));
-        controlStream.Write(ChromecastWorkerClient.BuildBeginProbeFrame(g9.Address, round: 1, pnpBytes));
+        controlStream.Write(ChromecastWorkerClient.BuildBeginProbeFrame(g9.Address, round: 1));
         controlStream.Position = 0;
 
         await ChromecastWorkerHost.ReadControlMessagesAsync(controlStream, receiver, CancellationToken.None);
 
-        receiver.ProcessPacket(3, CreateAttReadResponsePacket(pnpBytes, connectionHandle: 0x0E03));
+        receiver.ProcessPacket(3, CreateAclPacket(0x01, 0x0106, [0x00, 0x0A], connectionHandle: 0x0E03));
 
         using var endStream = new MemoryStream();
         endStream.Write(ChromecastWorkerClient.BuildEndProbeFrame(g9.Address, round: 1));
         endStream.Position = 0;
         await ChromecastWorkerHost.ReadControlMessagesAsync(endStream, receiver, CancellationToken.None);
 
-        Assert.Equal([g9.Address], bound);
+        Assert.Empty(bound);
 
         receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x07, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0E03));
+        Assert.Equal([g9.Address], bound);
         Assert.Equal([(g9.Address, RemoteButton.Ok, true)], edges);
     }
 
