@@ -61,6 +61,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private CancellationTokenSource? _probeRetryCts;
     private readonly HashSet<ulong> _unboundEtwAddresses = [];
     private readonly object _etwProbeLock = new();
+    private readonly SemaphoreSlim _etwProbeSerializeLock = new(1, 1);
+    private long _etwProbeRound;
     private bool _etwElevationDeclined;
     private bool _voiceKeyGuardInstalled;
 
@@ -437,9 +439,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 var source = Volatile.Read(ref _etwSources).FirstOrDefault(entry => entry.Address == address);
                 if (source.Address != 0 && _chromecastButtonReceiver.IsRunning)
                 {
+                    int currentGen = Volatile.Read(ref _buttonSourceGeneration);
                     lock (_etwProbeLock) _unboundEtwAddresses.Add(address);
-                    _ = ProbeButtonSourceWithFallbackAsync(source.Marker, address);
-                    StartProbeRetryLoop(Volatile.Read(ref _buttonSourceGeneration));
+                    _ = ProbeAddressesSerializedAsync([address], currentGen, CancellationToken.None);
+                    StartProbeRetryLoop(currentGen);
                 }
             }
 
@@ -542,24 +545,74 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        foreach (var source in sources)
+        var targetAddresses = sources
+            .Where(source => !ct.IsCancellationRequested && _bluetoothManager.IsDeviceReady(source.Address))
+            .Select(source => source.Address)
+            .ToArray();
+        if (targetAddresses.Length > 0)
         {
-            if (ct.IsCancellationRequested) return;
-            if (_bluetoothManager.IsDeviceReady(source.Address))
-            {
-                _ = ProbeButtonSourceWithFallbackAsync(source.Marker, source.Address);
-            }
+            _ = ProbeAddressesSerializedAsync(targetAddresses, generation, ct);
         }
 
         StartProbeRetryLoop(generation);
     }
 
-    private async Task ProbeButtonSourceWithFallbackAsync(Guid marker, ulong address)
+    private async Task ProbeAddressesSerializedAsync(ulong[] targetAddresses, int generation, CancellationToken ct)
     {
-        await _bluetoothManager.ProbeButtonSourceAsync(marker, address).ConfigureAwait(false);
-        if (_bluetoothManager.IsDeviceReady(address))
+        if (targetAddresses.Length == 0) return;
+
+        try
         {
-            _chromecastButtonReceiver.NotifyProbeCompleted();
+            await _etwProbeSerializeLock.WaitAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        try
+        {
+            for (int i = 0; i < targetAddresses.Length; i++)
+            {
+                ulong address = targetAddresses[i];
+                if (ct.IsCancellationRequested ||
+                    generation != Volatile.Read(ref _buttonSourceGeneration) ||
+                    !_chromecastButtonReceiver.IsRunning ||
+                    !_bluetoothManager.IsDeviceReady(address))
+                {
+                    continue;
+                }
+
+                bool stillUnbound;
+                lock (_etwProbeLock) stillUnbound = _unboundEtwAddresses.Contains(address);
+                if (!stillUnbound) continue;
+
+                var source = Volatile.Read(ref _etwSources).FirstOrDefault(s => s.Address == address);
+                if (source.Address == 0) continue;
+
+                ulong round = (ulong)Interlocked.Increment(ref _etwProbeRound);
+                byte[]? expectedRead = _bluetoothManager.GetProbeReadPayload(address);
+                await _chromecastButtonReceiver.BeginProbeAsync(address, round, expectedRead, ct).ConfigureAwait(false);
+                try
+                {
+                    await _bluetoothManager.ProbeButtonSourceAsync(source.Marker, address).ConfigureAwait(false);
+                }
+                finally
+                {
+                    await _chromecastButtonReceiver.EndProbeAsync(address, round, CancellationToken.None).ConfigureAwait(false);
+                }
+
+                if (i + 1 < targetAddresses.Length && !ct.IsCancellationRequested)
+                {
+                    try { await Task.Delay(150, ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { break; }
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            _etwProbeSerializeLock.Release();
         }
     }
 
@@ -601,11 +654,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 }
 
                 if (remaining.Length == 0) return;
-                foreach (var src in remaining)
-                {
-                    AppLogger.Info($"Retrying ETW GATT probe for unbound remote 0x{src.Address:X12}", "MainViewModel");
-                    _ = ProbeButtonSourceWithFallbackAsync(src.Marker, src.Address);
-                }
+                await ProbeAddressesSerializedAsync(
+                    remaining.Select(s => s.Address).ToArray(),
+                    generation,
+                    token).ConfigureAwait(false);
             }
         }, CancellationToken.None);
     }
@@ -645,9 +697,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var source = _etwSources.FirstOrDefault(s => s.Address == address);
             if (source.Address != 0)
             {
+                int currentGen = Volatile.Read(ref _buttonSourceGeneration);
                 lock (_etwProbeLock) _unboundEtwAddresses.Add(address);
-                _ = ProbeButtonSourceWithFallbackAsync(source.Marker, address);
-                StartProbeRetryLoop(Volatile.Read(ref _buttonSourceGeneration));
+                _ = ProbeAddressesSerializedAsync([address], currentGen, CancellationToken.None);
+                StartProbeRetryLoop(currentGen);
             }
         }
     });

@@ -28,12 +28,14 @@ public sealed class ChromecastWorkerClient : IDisposable
     public event Action<bool>? Disconnected;
 
     private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
+    private readonly SemaphoreSlim _controlWriteLock = new(1, 1);
     private readonly object _lock = new();
     private NamedPipeServerStream? _pipeServer;
     private Process? _workerProcess;
     private CancellationTokenSource? _cts;
     private CancellationTokenSource? _startCts;
     private Task? _readTask;
+    private ulong[] _latestReadyAddresses = [];
     private volatile bool _isRunning;
     private volatile bool _intentionalStop;
 
@@ -184,6 +186,12 @@ public sealed class ChromecastWorkerClient : IDisposable
             }
 
             AppLogger.Info("ChromecastWorkerClient: Received ready confirmation (0x01) from worker", "ChromecastWorkerClient");
+            ulong[] readySnapshot;
+            lock (_lock) readySnapshot = _latestReadyAddresses;
+            if (readySnapshot.Length > 0)
+            {
+                await SendControlFrameAsync(BuildSetReadyAddressesFrame(readySnapshot), localStartCts.Token).ConfigureAwait(false);
+            }
             return true;
         }
         catch (OperationCanceledException)
@@ -294,6 +302,88 @@ public sealed class ChromecastWorkerClient : IDisposable
             int r = await stream.ReadAsync(buffer.AsMemory(total, buffer.Length - total), ct).ConfigureAwait(false);
             if (r == 0) throw new EndOfStreamException();
             total += r;
+        }
+    }
+
+    internal async Task SendReadyAddressesAsync(ulong[] addresses, CancellationToken ct = default)
+    {
+        lock (_lock)
+        {
+            _latestReadyAddresses = (ulong[])addresses.Clone();
+        }
+        if (!_isRunning) return;
+        await SendControlFrameAsync(BuildSetReadyAddressesFrame(addresses), ct).ConfigureAwait(false);
+    }
+
+    internal Task SendBeginProbeAsync(ulong address, ulong round, byte[]? expectedReadResponse, CancellationToken ct = default)
+    {
+        if (!_isRunning) return Task.CompletedTask;
+        return SendControlFrameAsync(BuildBeginProbeFrame(address, round, expectedReadResponse), ct);
+    }
+
+    internal Task SendEndProbeAsync(ulong address, ulong round, CancellationToken ct = default)
+    {
+        if (!_isRunning) return Task.CompletedTask;
+        return SendControlFrameAsync(BuildEndProbeFrame(address, round), ct);
+    }
+
+    internal static byte[] BuildSetReadyAddressesFrame(IReadOnlyList<ulong> addresses)
+    {
+        ushort count = (ushort)Math.Min(addresses.Count, 256);
+        var frame = new byte[3 + count * 8];
+        frame[0] = ChromecastWorkerHost.CmdSetReadyAddresses;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(1, 2), count);
+        for (int i = 0; i < count; i++)
+        {
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(frame.AsSpan(3 + i * 8, 8), addresses[i]);
+        }
+        return frame;
+    }
+
+    internal static byte[] BuildBeginProbeFrame(ulong address, ulong round, byte[]? expectedReadResponse)
+    {
+        ushort readLen = (ushort)Math.Min(expectedReadResponse?.Length ?? 0, 512);
+        var frame = new byte[19 + readLen];
+        frame[0] = ChromecastWorkerHost.CmdBeginProbe;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(frame.AsSpan(1, 8), address);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(frame.AsSpan(9, 8), round);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(17, 2), readLen);
+        if (readLen > 0 && expectedReadResponse != null)
+        {
+            expectedReadResponse.AsSpan(0, readLen).CopyTo(frame.AsSpan(19));
+        }
+        return frame;
+    }
+
+    internal static byte[] BuildEndProbeFrame(ulong address, ulong round)
+    {
+        var frame = new byte[17];
+        frame[0] = ChromecastWorkerHost.CmdEndProbe;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(frame.AsSpan(1, 8), address);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(frame.AsSpan(9, 8), round);
+        return frame;
+    }
+
+    private async Task SendControlFrameAsync(byte[] frame, CancellationToken ct)
+    {
+        NamedPipeServerStream? server;
+        lock (_lock) server = _pipeServer;
+        if (server == null || !server.IsConnected) return;
+
+        await _controlWriteLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            lock (_lock) server = _pipeServer;
+            if (server == null || !server.IsConnected) return;
+            await server.WriteAsync(frame, ct).ConfigureAwait(false);
+            await server.FlushAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { }
+        catch (IOException) { }
+        catch (ObjectDisposedException) { }
+        finally
+        {
+            _controlWriteLock.Release();
         }
     }
 

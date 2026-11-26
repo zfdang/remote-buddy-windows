@@ -100,9 +100,30 @@ public sealed class ChromecastButtonReceiver : IDisposable
         UnexpectedDisconnect?.Invoke();
     }
 
-    public void SetReadyAddresses(IEnumerable<ulong> addresses) => _etwReceiver.SetReadyAddresses(addresses);
+    public void SetReadyAddresses(IEnumerable<ulong> addresses)
+    {
+        var snapshot = addresses.Where(a => a != 0).Distinct().ToArray();
+        _etwReceiver.SetReadyAddresses(snapshot);
+        _ = _workerClient.SendReadyAddressesAsync(snapshot);
+    }
 
-    public void NotifyProbeCompleted() => _etwReceiver.ArmFallbackIfNoOutgoingAcl();
+    public async Task BeginProbeAsync(ulong address, ulong round, byte[]? expectedReadResponse = null, CancellationToken ct = default)
+    {
+        _etwReceiver.BeginProbe(address, round, expectedReadResponse);
+        if (_workerClient.IsRunning)
+        {
+            await _workerClient.SendBeginProbeAsync(address, round, expectedReadResponse, ct).ConfigureAwait(false);
+        }
+    }
+
+    public async Task EndProbeAsync(ulong address, ulong round, CancellationToken ct = default)
+    {
+        _etwReceiver.EndProbe(address, round);
+        if (_workerClient.IsRunning)
+        {
+            await _workerClient.SendEndProbeAsync(address, round, ct).ConfigureAwait(false);
+        }
+    }
 
     public async Task<bool> StartAsync(IReadOnlyList<EtwButtonSource> sources, CancellationToken ct = default)
     {

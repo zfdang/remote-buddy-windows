@@ -97,6 +97,13 @@ public sealed class ChromecastEtwReceiver : IDisposable
             ? new HashSet<ushort>(excluded)
             : [];
         public ushort? PendingHandle { get; set; }
+        public ulong ActiveProbeRound { get; set; }
+        public bool SawOutgoingProbeInRound { get; set; }
+        public ushort? CandidateProbeHandle { get; set; }
+        public bool CandidateProbeReadMatched { get; set; }
+        public bool CandidateProbeConflict { get; set; }
+        public ushort? PendingFallbackHandle { get; set; }
+        public byte[]? ExpectedProbeReadResponse { get; set; }
         public bool LoggedUnmatchedMarker { get; set; }
         public ushort? BoundHandle { get; set; }
         public ushort? LockedG9N9NHandle { get; set; }
@@ -109,6 +116,10 @@ public sealed class ChromecastEtwReceiver : IDisposable
         public void ResetConnectionState()
         {
             BoundHandle = null;
+            PendingFallbackHandle = null;
+            CandidateProbeHandle = null;
+            CandidateProbeReadMatched = false;
+            CandidateProbeConflict = false;
             LockedG9N9NHandle = null;
             Held = RemoteButton.None;
             SawRedaction = false;
@@ -118,15 +129,17 @@ public sealed class ChromecastEtwReceiver : IDisposable
         }
     }
 
+    private const long ProbeGraceWindowMs = 300;
     private readonly object _lock = new();
     private readonly object _stateLock = new();
     private SourceState[] _sources = [];
     private volatile bool _sawPacketEvent;
-    private volatile bool _sawOutgoingAcl;
-    private bool _allowUnassignedNotificationFallback;
+    private ulong _activeProbeAddress;
+    private ulong _activeProbeRound;
+    private bool _activeProbeEnded;
+    private long _activeProbeEndedTickMs;
     private readonly HashSet<string> _loggedProbeStages = [];
     private readonly HashSet<byte> _loggedUnsupportedKinds = [];
-    private readonly HashSet<ushort> _observedProbeResponseHandles = [];
     private readonly HashSet<ulong> _readyAddresses = [];
     private readonly HashSet<(ushort Connection, ushort Attribute, int Captured, int Expected)> _loggedUnassignedNotifications = [];
 
@@ -145,11 +158,12 @@ public sealed class ChromecastEtwReceiver : IDisposable
         {
             _sources = next;
             _sawPacketEvent = false;
-            _sawOutgoingAcl = false;
-            _allowUnassignedNotificationFallback = false;
+            _activeProbeAddress = 0;
+            _activeProbeRound = 0;
+            _activeProbeEnded = false;
+            _activeProbeEndedTickMs = 0;
             _loggedProbeStages.Clear();
             _loggedUnsupportedKinds.Clear();
-            _observedProbeResponseHandles.Clear();
             _loggedUnassignedNotifications.Clear();
         }
     }
@@ -166,24 +180,64 @@ public sealed class ChromecastEtwReceiver : IDisposable
         }
     }
 
-    internal void ArmFallbackIfNoOutgoingAcl()
+    internal void BeginProbe(ulong address, ulong round, byte[]? expectedReadResponse = null)
     {
-        bool logEnabled = false;
+        if (address == 0 || round == 0) return;
         lock (_stateLock)
         {
-            if (!_sawOutgoingAcl && !_allowUnassignedNotificationFallback)
+            _activeProbeAddress = address;
+            _activeProbeRound = round;
+            _activeProbeEnded = false;
+            _activeProbeEndedTickMs = 0;
+
+            foreach (var source in _sources)
             {
-                _allowUnassignedNotificationFallback = true;
-                logEnabled = true;
+                if (source.Source.Address != address) continue;
+                source.ActiveProbeRound = round;
+                source.SawOutgoingProbeInRound = false;
+                source.CandidateProbeHandle = null;
+                source.CandidateProbeReadMatched = false;
+                source.CandidateProbeConflict = false;
+                source.PendingFallbackHandle = null;
+                if (expectedReadResponse is { Length: > 0 })
+                {
+                    source.ExpectedProbeReadResponse = (byte[])expectedReadResponse.Clone();
+                }
+                break;
             }
-        }
-        if (logEnabled)
-        {
-            AppLogger.Info("BthPort Event 402 did not emit outgoing ACL packets; enabling incoming-notification fallback binding", "ChromecastEtwReceiver");
         }
     }
 
+    internal void EndProbe(ulong address, ulong round)
+    {
+        if (address == 0 || round == 0) return;
+        FlushSessionNow();
+
+        string? bindLog = null;
+        ulong? newlyBoundAddr = null;
+        string? fallbackLog = null;
+        lock (_stateLock)
+        {
+            if (_activeProbeAddress == address && _activeProbeRound == round)
+            {
+                _activeProbeEnded = true;
+                _activeProbeEndedTickMs = Environment.TickCount64;
+            }
+
+            var source = _sources.FirstOrDefault(s => s.Source.Address == address && s.ActiveProbeRound == round);
+            if (source != null)
+            {
+                PromoteProbeCandidateLocked(_sources, source, ref bindLog, ref newlyBoundAddr, ref fallbackLog);
+            }
+        }
+
+        if (bindLog != null) AppLogger.Info(bindLog, "ChromecastEtwReceiver");
+        if (fallbackLog != null) AppLogger.Info(fallbackLog, "ChromecastEtwReceiver");
+        if (newlyBoundAddr.HasValue) SourceBound?.Invoke(newlyBoundAddr.Value);
+    }
+
     private string? _sessionName;
+    private Guid _sessionGuid;
     private ulong _sessionHandle;
     private ulong _traceHandle = 0xFFFFFFFFFFFFFFFF;
     private Thread? _processThread;
@@ -299,6 +353,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 return false;
             }
 
+            _sessionGuid = prop.Wnode.Guid;
             _isRunning = true;
             _processThread = new Thread(ProcessTraceThread)
             {
@@ -307,7 +362,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
             };
             _processThread.Start();
             _flushCancellation = new CancellationTokenSource();
-            _ = FlushBuffersAsync(_sessionHandle, _sessionName, prop.Wnode.Guid, _flushCancellation.Token);
+            _ = FlushBuffersAsync(_sessionHandle, _sessionName, _sessionGuid, _flushCancellation.Token);
 
             _ = CheckSourceBindingAsync(_flushCancellation.Token);
 
@@ -351,6 +406,38 @@ public sealed class ChromecastEtwReceiver : IDisposable
         }
     }
 
+    private void FlushSessionNow()
+    {
+        ulong sessionHandle;
+        string? sessionName;
+        Guid sessionGuid;
+        lock (_lock)
+        {
+            if (!_isRunning || _sessionHandle == 0 || string.IsNullOrEmpty(_sessionName)) return;
+            sessionHandle = _sessionHandle;
+            sessionName = _sessionName;
+            sessionGuid = _sessionGuid;
+        }
+        int structureSize = Marshal.SizeOf<EVENT_TRACE_PROPERTIES>();
+        int bufferSize = structureSize + (sessionName.Length + 1) * sizeof(char);
+        var properties = new EVENT_TRACE_PROPERTIES
+        {
+            Wnode = new WNODE_HEADER { BufferSize = (uint)bufferSize, Guid = sessionGuid },
+            LoggerNameOffset = (uint)structureSize
+        };
+        IntPtr buffer = Marshal.AllocHGlobal(bufferSize);
+        try
+        {
+            Marshal.StructureToPtr(properties, buffer, false);
+            ControlTraceW(sessionHandle, null, buffer, 3 /* EVENT_TRACE_CONTROL_FLUSH */);
+        }
+        catch { }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
     private async Task CheckSourceBindingAsync(CancellationToken cancellationToken)
     {
         foreach (int seconds in new[] { 4, 8 })
@@ -366,22 +453,16 @@ public sealed class ChromecastEtwReceiver : IDisposable
 
             if (cancellationToken.IsCancellationRequested) return;
             string[] unboundSources;
-            bool enableFallbackLog = false;
             lock (_stateLock)
             {
-                if (_sawPacketEvent && !_sawOutgoingAcl && !_allowUnassignedNotificationFallback)
-                {
-                    _allowUnassignedNotificationFallback = true;
-                    enableFallbackLog = true;
-                }
                 unboundSources = _sources.Where(s => !s.BoundHandle.HasValue).Select(s =>
                     $"0x{s.Source.Address:X12}/{s.Source.Protocol}=" +
-                    (s.PendingHandle is ushort handle ? $"awaiting ATT response on ACL 0x{handle:X4}" : "no matching ATT request"))
+                    (s.PendingHandle is ushort handle
+                        ? $"awaiting ATT response on ACL 0x{handle:X4}"
+                        : (s.PendingFallbackHandle is ushort fbHandle
+                            ? $"probe-verified ACL 0x{fbHandle:X4}, awaiting notification"
+                            : "no matching ATT request")))
                     .ToArray();
-            }
-            if (enableFallbackLog)
-            {
-                AppLogger.Info("BthPort Event 402 did not emit outgoing ACL packets; enabling incoming-notification fallback binding", "ChromecastEtwReceiver");
             }
             if (cancellationToken.IsCancellationRequested) return;
             if (unboundSources.Length == 0) continue;
@@ -514,10 +595,15 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 ushort handle = (ushort)(BinaryPrimitives.ReadUInt16LittleEndian(packet[3..]) & 0x0FFF);
                 lock (_stateLock)
                 {
-                    _observedProbeResponseHandles.Remove(handle);
                     foreach (var source in _sources)
                     {
                         if (source.PendingHandle == handle) source.PendingHandle = null;
+                        if (source.PendingFallbackHandle == handle) source.PendingFallbackHandle = null;
+                        if (source.CandidateProbeHandle == handle)
+                        {
+                            source.CandidateProbeHandle = null;
+                            source.CandidateProbeReadMatched = false;
+                        }
                         if (source.BoundHandle != handle) continue;
                         source.ResetConnectionState();
                         disconnectedAddrs ??= [];
@@ -546,7 +632,6 @@ public sealed class ChromecastEtwReceiver : IDisposable
         }
         if (kind == AclSent)
         {
-            _sawOutgoingAcl = true;
             if (ShouldLogProbeStage("OutgoingAtt"))
                 AppLogger.Info($"ETW probe saw outgoing ATT: opcode=0x{att[0]:X2}, len={att.Length}, incomplete={incomplete}", "ChromecastEtwReceiver");
             if (incomplete)
@@ -562,6 +647,8 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 {
                     if (!att.SequenceEqual(source.Request)) continue;
                     source.PendingHandle = connection;
+                    source.SawOutgoingProbeInRound = true;
+                    source.PendingFallbackHandle = null;
                     gattQueryLog = $"BthPort observed GATT query for 0x{source.Source.Address:X12}";
                     break;
                 }
@@ -587,47 +674,74 @@ public sealed class ChromecastEtwReceiver : IDisposable
             var sources = _sources;
             var pendingSource = sources.FirstOrDefault(source => source.PendingHandle == connection);
             var boundSource = sources.FirstOrDefault(source => source.BoundHandle == connection);
-            if (pendingSource == null && boundSource == null)
+            var fallbackSource = pendingSource == null && boundSource == null
+                ? sources.FirstOrDefault(source => source.PendingFallbackHandle == connection && !source.BoundHandle.HasValue)
+                : null;
+
+            if (pendingSource == null && boundSource == null && !incomplete &&
+                GetActiveProbeSourceLocked(sources) is { } activeProbeSource &&
+                !activeProbeSource.SawOutgoingProbeInRound &&
+                !activeProbeSource.BoundHandle.HasValue)
             {
-                if (!_sawOutgoingAcl && !incomplete && (att is [0x01, 0x06, _, _, _] or [0x07, ..]))
+                if (att.Length >= 2 && att[0] == 0x0B &&
+                    activeProbeSource.ExpectedProbeReadResponse is { Length: > 0 } expectedRead &&
+                    att[1..].SequenceEqual(expectedRead))
                 {
-                    if (_observedProbeResponseHandles.Add(connection))
+                    activeProbeSource.CandidateProbeHandle = connection;
+                    activeProbeSource.CandidateProbeReadMatched = true;
+                    activeProbeSource.CandidateProbeConflict = false;
+                    diagnosticLog = $"ETW probe matched device read signature: addr=0x{activeProbeSource.Source.Address:X12}, acl=0x{connection:X4}";
+                    if (_activeProbeEnded)
                     {
-                        diagnosticLog = $"ETW probe saw incoming ATT response without outgoing ACL: acl=0x{connection:X4}, opcode=0x{att[0]:X2}";
+                        string? unusedFallback = null;
+                        PromoteProbeCandidateLocked(sources, activeProbeSource, ref bindLog, ref newlyBoundAddr, ref unusedFallback);
+                        if (activeProbeSource.BoundHandle == connection) boundSource = activeProbeSource;
                     }
                 }
-                else if (!_sawOutgoingAcl && _allowUnassignedNotificationFallback &&
-                         att.Length >= 3 && att[0] is 0x1B or 0x1D)
+                else if (att is [0x01, 0x06, _, _, _] or [0x07, ..])
                 {
-                    ushort fallbackAttr = BinaryPrimitives.ReadUInt16LittleEndian(att[1..]);
-                    var fallbackReport = att[3..];
-                    if (!incomplete)
+                    if (!activeProbeSource.CandidateProbeReadMatched)
                     {
-                        var matched = FindUniqueFallbackSourceLocked(sources, att, fallbackAttr, fallbackReport);
-                        if (matched != null)
+                        if (!activeProbeSource.CandidateProbeHandle.HasValue)
                         {
-                            string evidence = _observedProbeResponseHandles.Contains(connection)
-                                ? "ATT probe response + button notification"
-                                : "unassigned button notification (no outgoing ACL)";
-                            BindLocked(sources, matched, evidence);
-                            boundSource = matched;
+                            activeProbeSource.CandidateProbeHandle = connection;
+                            diagnosticLog = $"ETW probe saw incoming ATT response without outgoing ACL: addr=0x{activeProbeSource.Source.Address:X12}, acl=0x{connection:X4}, opcode=0x{att[0]:X2}";
+                        }
+                        else if (activeProbeSource.CandidateProbeHandle != connection)
+                        {
+                            activeProbeSource.CandidateProbeConflict = true;
                         }
                     }
-                    else if (fallbackReport.IsEmpty &&
-                             expectedPayloadLength is 1 or 2 or 3 or 8 &&
-                             _observedProbeResponseHandles.Contains(connection))
+                    if (_activeProbeEnded)
                     {
-                        var redactedMatch = FindUniqueRedactedG9N9NSourceLocked(sources, fallbackAttr);
-                        if (redactedMatch != null)
-                        {
-                            if (!redactedMatch.SawRedaction)
-                            {
-                                redactedMatch.SawRedaction = true;
-                                redactionLog = $"Windows omitted a verified button code (addr=0x{redactedMatch.Source.Address:X12}, attr=0x{fallbackAttr:X4}, expectedLen={expectedPayloadLength})";
-                            }
-                            truncatedAddr = redactedMatch.Source.Address;
-                        }
+                        string? promoteFallbackLog = null;
+                        PromoteProbeCandidateLocked(sources, activeProbeSource, ref bindLog, ref newlyBoundAddr, ref promoteFallbackLog);
+                        if (promoteFallbackLog != null) diagnosticLog = promoteFallbackLog;
+                        if (activeProbeSource.PendingFallbackHandle == connection) fallbackSource = activeProbeSource;
                     }
+                }
+            }
+
+            if (fallbackSource != null && att.Length >= 3 && att[0] is 0x1B or 0x1D)
+            {
+                ushort fbAttr = BinaryPrimitives.ReadUInt16LittleEndian(att[1..]);
+                var fbReport = att[3..];
+                if (!incomplete && CanBindFallbackSource(fallbackSource, att, fbAttr, fbReport))
+                {
+                    BindLocked(sources, fallbackSource, "probe response + button notification");
+                    boundSource = fallbackSource;
+                }
+                else if (incomplete && fbReport.IsEmpty &&
+                         fallbackSource.Source.Protocol == EtwProtocolKind.GoogleG9N9N &&
+                         expectedPayloadLength is 1 or 2 or 3 or 8 &&
+                         EvaluateG9N9NAttribute(fallbackSource, fbAttr) == G9N9NAttributeDecision.Allowed)
+                {
+                    if (!fallbackSource.SawRedaction)
+                    {
+                        fallbackSource.SawRedaction = true;
+                        redactionLog = $"Windows omitted a verified button code (addr=0x{fallbackSource.Source.Address:X12}, attr=0x{fbAttr:X4}, expectedLen={expectedPayloadLength})";
+                    }
+                    truncatedAddr = fallbackSource.Source.Address;
                 }
             }
             if (pendingSource == null && boundSource == null && att.Length >= 3 && att[0] is 0x1B or 0x1D &&
@@ -846,69 +960,73 @@ public sealed class ChromecastEtwReceiver : IDisposable
         }
     }
 
-    private SourceState? FindUniqueFallbackSourceLocked(
-        SourceState[] sources,
+    private SourceState? GetActiveProbeSourceLocked(SourceState[] sources)
+    {
+        if (_activeProbeAddress == 0 || _activeProbeRound == 0) return null;
+        if (_activeProbeEnded && Environment.TickCount64 - _activeProbeEndedTickMs > ProbeGraceWindowMs)
+        {
+            return null;
+        }
+        return sources.FirstOrDefault(s =>
+            s.Source.Address == _activeProbeAddress &&
+            s.ActiveProbeRound == _activeProbeRound);
+    }
+
+    private void PromoteProbeCandidateLocked(
+        SourceState[] allSources,
+        SourceState source,
+        ref string? bindLog,
+        ref ulong? newlyBoundAddr,
+        ref string? fallbackLog)
+    {
+        if (source.BoundHandle.HasValue || source.SawOutgoingProbeInRound) return;
+        if (_readyAddresses.Count > 0 && !_readyAddresses.Contains(source.Source.Address)) return;
+        if (source.CandidateProbeHandle is not ushort candidate) return;
+        if (source.CandidateProbeConflict && !source.CandidateProbeReadMatched) return;
+        if (allSources.Any(other => other != source && other.BoundHandle == candidate)) return;
+
+        if (source.CandidateProbeReadMatched)
+        {
+            foreach (var other in allSources)
+            {
+                if (other != source && other.PendingFallbackHandle == candidate)
+                {
+                    other.PendingFallbackHandle = null;
+                }
+            }
+            source.ResetConnectionState();
+            source.BoundHandle = candidate;
+            source.PendingHandle = null;
+            newlyBoundAddr = source.Source.Address;
+            string hidRange = source.HasHidRange
+                ? $"0x{source.HidHandleStart:X4}..0x{source.HidHandleEnd:X4}"
+                : "none";
+            bindLog =
+                $"ETW bound 0x{source.Source.Address:X12} to ACL 0x{candidate:X4} (via=ATT read response (no outgoing ACL), protocol={source.Source.Protocol}, hidRange={hidRange}, excluded={source.ExcludedAttributes.Count})";
+            return;
+        }
+
+        if (source.PendingFallbackHandle != candidate)
+        {
+            source.PendingFallbackHandle = candidate;
+            fallbackLog = $"ETW probe armed fallback handle 0x{candidate:X4} for 0x{source.Source.Address:X12} (round={source.ActiveProbeRound})";
+        }
+    }
+
+    private static bool CanBindFallbackSource(
+        SourceState source,
         ReadOnlySpan<byte> att,
         ushort attribute,
         ReadOnlySpan<byte> report)
     {
-        List<SourceState> candidates = [];
-        foreach (var source in sources)
+        if (source.Source.Protocol == EtwProtocolKind.GoogleG9N9N)
         {
-            if (source.BoundHandle.HasValue) continue;
-            if (source.Source.Protocol == EtwProtocolKind.GoogleG9N9N)
-            {
-                if (EvaluateG9N9NAttribute(source, attribute) == G9N9NAttributeDecision.Allowed &&
-                    TryParseG9N9NPayload(report, out _, out bool isDown, out _) &&
-                    isDown)
-                {
-                    candidates.Add(source);
-                }
-            }
-            else if (TryParseButtonReport(att, incomplete: false, source.Source.Protocol, out _, out bool isDown, out _) &&
-                     isDown)
-            {
-                candidates.Add(source);
-            }
+            return EvaluateG9N9NAttribute(source, attribute) == G9N9NAttributeDecision.Allowed &&
+                   TryParseG9N9NPayload(report, out _, out bool isDown, out _) &&
+                   isDown;
         }
-        return NarrowUniqueCandidateLocked(candidates);
-    }
-
-    private SourceState? FindUniqueRedactedG9N9NSourceLocked(SourceState[] sources, ushort attribute)
-    {
-        List<SourceState> candidates = [];
-        foreach (var source in sources)
-        {
-            if (source.BoundHandle.HasValue || source.Source.Protocol != EtwProtocolKind.GoogleG9N9N) continue;
-            if (EvaluateG9N9NAttribute(source, attribute) == G9N9NAttributeDecision.Allowed)
-            {
-                candidates.Add(source);
-            }
-        }
-        return NarrowUniqueCandidateLocked(candidates);
-    }
-
-    private SourceState? NarrowUniqueCandidateLocked(List<SourceState> candidates)
-    {
-        if (candidates.Count == 0) return null;
-        if (candidates.Count == 1)
-        {
-            if (_readyAddresses.Count > 0 && !_readyAddresses.Contains(candidates[0].Source.Address))
-            {
-                return null;
-            }
-            return candidates[0];
-        }
-
-        if (_readyAddresses.Count > 0)
-        {
-            var readyCandidates = candidates.Where(c => _readyAddresses.Contains(c.Source.Address)).ToList();
-            if (readyCandidates.Count == 1) return readyCandidates[0];
-            if (readyCandidates.Count > 1) candidates = readyCandidates;
-        }
-
-        var rangedCandidates = candidates.Where(c => c.HasHidRange).ToList();
-        return rangedCandidates.Count == 1 ? rangedCandidates[0] : null;
+        return TryParseButtonReport(att, incomplete: false, source.Source.Protocol, out _, out bool btnDown, out _) &&
+               btnDown;
     }
 
     private void LogUnmatchedMarker(ReadOnlySpan<byte> packet, string reason)
