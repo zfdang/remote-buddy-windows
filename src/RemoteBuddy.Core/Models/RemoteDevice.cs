@@ -201,6 +201,17 @@ public partial class RemoteDevice : ObservableObject
     [ObservableProperty]
     private List<ButtonMapping> _mappings = CreateDefaultMappings(RemoteModelType.Unknown);
 
+    public static bool HasNativeKeyboardNavigation(RemoteModelType type) =>
+        type is RemoteModelType.XiaomiRC001
+            or RemoteModelType.XiaomiRC003
+            or RemoteModelType.XiaomiARN9
+            or RemoteModelType.T1Remote
+            or RemoteModelType.Unknown;
+
+    public static bool IsNativeKeyboardPassthroughButton(RemoteModelType type, RemoteButton button) =>
+        HasNativeKeyboardNavigation(type) &&
+        button is RemoteButton.Up or RemoteButton.Down or RemoteButton.Left or RemoteButton.Right or RemoteButton.Ok;
+
     public static ConfiguredButtonAction GetDefaultAction(
         RemoteModelType type,
         RemoteButton button,
@@ -271,13 +282,15 @@ public partial class RemoteDevice : ObservableObject
             return list;
         }
 
-        // Xiaomi (RC001 / RC003 / ARN9 / Unknown) — 12 buttons matching macOS layout
+        // Xiaomi (RC001 / RC003 / ARN9 / Unknown) — 12-button layout.
+        // Arrow keys and OK emit native Windows HID keyboard Enter/arrows that Raw Input cannot suppress per-device;
+        // keep them disabled here so native input passes cleanly without overlapping synthetic actions.
         Add(RemoteButton.Power, ButtonAction.DeleteBackward);
-        Add(RemoteButton.Up, ButtonAction.ArrowUp);
-        Add(RemoteButton.Left, ButtonAction.ArrowLeft);
-        Add(RemoteButton.Ok, ButtonAction.ReturnKey, ButtonAction.CommandReturn);
-        Add(RemoteButton.Right, ButtonAction.ArrowRight);
-        Add(RemoteButton.Down, ButtonAction.ArrowDown);
+        Add(RemoteButton.Up, ButtonAction.Disabled);
+        Add(RemoteButton.Left, ButtonAction.Disabled);
+        Add(RemoteButton.Ok, ButtonAction.Disabled);
+        Add(RemoteButton.Right, ButtonAction.Disabled);
+        Add(RemoteButton.Down, ButtonAction.Disabled);
         Add(RemoteButton.Back, ButtonAction.Escape);
         Add(RemoteButton.VolumeUp, ButtonAction.VolumeUp);
         Add(RemoteButton.Home, ButtonAction.TaskView);

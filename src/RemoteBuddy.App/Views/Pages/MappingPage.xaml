@@ -73,6 +73,9 @@
                     <TextBlock Text="T1 背面全键盘、确认键与方向键默认直通系统原生输入，正面 7 颗功能键可自由映射。"
                                FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,10" TextWrapping="Wrap"
                                Visibility="{Binding IsT1, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                    <TextBlock Text="小米遥控器的方向键与确定键在 Windows 上保留系统原生键盘输入，避免与原生 Enter / 方向键叠加触发；其余功能键支持完整自定义映射。"
+                               FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,10" TextWrapping="Wrap"
+                               Visibility="{Binding IsXiaomi, Converter={StaticResource BoolToVisibilityConverter}}"/>
 
                     <!-- Visual Remote Mapping Canvas -->
                     <Border Background="#23252A" BorderBrush="{StaticResource BorderColorBrush}" BorderThickness="1" CornerRadius="12" Padding="16,12" Margin="0,0,0,14">
@@ -92,6 +95,7 @@
                                             Command="{Binding RestoreDefaultActionCommand}"
                                             ToolTip="将当前触发条件的动作恢复为出厂默认设置"/>
                                     <Button Content="清除设置" Padding="10,5" Margin="0,0,8,0"
+                                            Visibility="{Binding CanClearEditingAction, Converter={StaticResource BoolToVisibilityConverter}}"
                                             Command="{Binding ClearEditingActionCommand}"
                                             ToolTip="将当前手势设为不执行任何动作"/>
                                     <Button Content="完成" Padding="12,5" Background="#007ACC" BorderBrush="#0098FF"
@@ -110,6 +114,13 @@
                             <TextBlock Text="当前手势不执行任何动作；该按键的其他手势不受影响。选择下方动作即可立即保存。"
                                        FontSize="12" Foreground="{StaticResource SecondaryTextBrush}" Margin="0,0,0,10" TextWrapping="Wrap"
                                        Visibility="{Binding IsEditingDisabled, Converter={StaticResource BoolToVisibilityConverter}}"/>
+
+                            <!-- Native Keyboard Lock Notice -->
+                            <Border Background="#1B2B3F" BorderBrush="#2F5987" BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,0,0,8"
+                                    Visibility="{Binding IsNativeKeyboardLocked, Converter={StaticResource BoolToVisibilityConverter}}">
+                                <TextBlock Text="ℹ️ 在 Windows 上，此遥控器的方向键与确定键会直接发送系统原生键盘输入。为避免与系统原生按键叠加触发，暂保留这 5 颗按键的原生行为；其余功能键支持完整自定义映射。"
+                                           FontSize="12.5" Foreground="#A9D7FF" TextWrapping="Wrap"/>
+                            </Border>
 
                             <!-- Direct Passthrough Lock Notice -->
                             <Border Background="#1B2B3F" BorderBrush="#2F5987" BorderThickness="1" CornerRadius="8" Padding="12" Margin="0,0,0,8"

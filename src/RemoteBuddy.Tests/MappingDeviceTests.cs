@@ -19,8 +19,13 @@ public class MappingDeviceTests
         Assert.Equal(12, rc003.Count);
         Assert.Equal(ButtonAction.DeleteBackward, rc003.Single(m => m.Button == RemoteButton.Power).GetConfiguredAction(ButtonTrigger.SingleClick).Action);
         Assert.Equal(ButtonAction.RepeatSingleClick, rc003.Single(m => m.Button == RemoteButton.Power).GetConfiguredAction(ButtonTrigger.LongPress).Action);
-        Assert.Equal(ButtonAction.ReturnKey, rc003.Single(m => m.Button == RemoteButton.Ok).GetConfiguredAction(ButtonTrigger.SingleClick).Action);
-        Assert.Equal(ButtonAction.CommandReturn, rc003.Single(m => m.Button == RemoteButton.Ok).GetConfiguredAction(ButtonTrigger.LongPress).Action);
+        // Xiaomi OK and directional keys keep Windows native keyboard behavior (no overlapping Enter / Ctrl+Enter actions)
+        foreach (var nativeBtn in new[] { RemoteButton.Ok, RemoteButton.Up, RemoteButton.Down, RemoteButton.Left, RemoteButton.Right })
+        {
+            var mapping = rc003.Single(m => m.Button == nativeBtn);
+            Assert.All(Enum.GetValues<ButtonTrigger>(), t =>
+                Assert.Equal(ButtonAction.Disabled, mapping.GetConfiguredAction(t).Action));
+        }
         Assert.Equal(ButtonAction.Escape, rc003.Single(m => m.Button == RemoteButton.Back).GetConfiguredAction(ButtonTrigger.SingleClick).Action);
         Assert.Equal(ButtonAction.TaskView, rc003.Single(m => m.Button == RemoteButton.Home).GetConfiguredAction(ButtonTrigger.SingleClick).Action);
         Assert.Equal(ButtonAction.ContextMenu, rc003.Single(m => m.Button == RemoteButton.Menu).GetConfiguredAction(ButtonTrigger.SingleClick).Action);
@@ -40,13 +45,9 @@ public class MappingDeviceTests
     }
 
     [Theory]
-    [InlineData(RemoteModelType.Unknown)]
-    [InlineData(RemoteModelType.XiaomiRC001)]
-    [InlineData(RemoteModelType.XiaomiRC003)]
-    [InlineData(RemoteModelType.XiaomiARN9)]
     [InlineData(RemoteModelType.GoogleG9N9N)]
     [InlineData(RemoteModelType.GoogleGY3LE)]
-    public void DefaultsRepeatOnlyDirectionsVolumeAndPower_WhileOkLongPressSendsCommandReturn(RemoteModelType model)
+    public void GoogleDefaults_RepeatDirectionsVolumeAndPower_WhileOkLongPressSendsCommandReturn(RemoteModelType model)
     {
         var mappings = RemoteDevice.CreateDefaultMappings(model);
         var repeatButtons = mappings
@@ -62,6 +63,25 @@ public class MappingDeviceTests
         ];
         Assert.Equal(expected.Order().ToArray(), repeatButtons);
         Assert.Equal(ButtonAction.CommandReturn, mappings.Single(m => m.Button == RemoteButton.Ok).GetConfiguredAction(ButtonTrigger.LongPress).Action);
+    }
+
+    [Theory]
+    [InlineData(RemoteModelType.Unknown)]
+    [InlineData(RemoteModelType.XiaomiRC001)]
+    [InlineData(RemoteModelType.XiaomiRC003)]
+    [InlineData(RemoteModelType.XiaomiARN9)]
+    public void XiaomiDefaults_RepeatOnlyPowerAndVolume_WhileOkAndArrowsStayDisabled(RemoteModelType model)
+    {
+        var mappings = RemoteDevice.CreateDefaultMappings(model);
+        var repeatButtons = mappings
+            .Where(m => m.GetConfiguredAction(ButtonTrigger.LongPress).Action == ButtonAction.RepeatSingleClick)
+            .Select(m => m.Button)
+            .Order()
+            .ToArray();
+
+        RemoteButton[] expected = [RemoteButton.Power, RemoteButton.VolumeUp, RemoteButton.VolumeDown];
+        Assert.Equal(expected.Order().ToArray(), repeatButtons);
+        Assert.Equal(ButtonAction.Disabled, mappings.Single(m => m.Button == RemoteButton.Ok).GetConfiguredAction(ButtonTrigger.LongPress).Action);
     }
 
     [Fact]
@@ -156,17 +176,40 @@ public class MappingDeviceTests
         config.Current.SelectedDeviceId = first.Id;
 
         var vm = new MappingViewModel(config) { SelectedDevice = second };
-        var up = vm.CurrentMappings.Single(m => m.Button == RemoteButton.Up);
-        up.SingleClick.Action = ButtonAction.CustomShortcut;
-        up.SingleClick.Shortcut = "F2";
+        var home = vm.CurrentMappings.Single(m => m.Button == RemoteButton.Home);
+        home.SingleClick.Action = ButtonAction.CustomShortcut;
+        home.SingleClick.Shortcut = "F2";
         vm.SelectedDevice = first;
         vm.SelectedDevice = second;
-        Assert.Equal("F2", vm.CurrentMappings.Single(m => m.Button == RemoteButton.Up).SingleClick.Shortcut);
+        Assert.Equal("F2", vm.CurrentMappings.Single(m => m.Button == RemoteButton.Home).SingleClick.Shortcut);
         vm.SaveMappings();
 
-        Assert.Equal("F2", second.Mappings.Single(m => m.Button == RemoteButton.Up).GetConfiguredAction(ButtonTrigger.SingleClick).Shortcut);
-        Assert.Equal(ButtonAction.ArrowUp, first.Mappings.Single(m => m.Button == RemoteButton.Up).GetConfiguredAction(ButtonTrigger.SingleClick).Action);
+        Assert.Equal("F2", second.Mappings.Single(m => m.Button == RemoteButton.Home).GetConfiguredAction(ButtonTrigger.SingleClick).Shortcut);
+        Assert.Equal(ButtonAction.TaskView, first.Mappings.Single(m => m.Button == RemoteButton.Home).GetConfiguredAction(ButtonTrigger.SingleClick).Action);
         Assert.Equal(first.Id, config.Current.SelectedDeviceId);
+    }
+
+    [Fact]
+    public void MappingViewModel_XiaomiNativeNavigationButtons_AreLockedAgainstOverlappingActions()
+    {
+        var config = new ConfigService(Path.Combine(Path.GetTempPath(), $"vib-xiaomi-lock-{Guid.NewGuid():N}.json"));
+        var xiaomi = new RemoteDevice { Id = "mi", Name = "MI RC", ModelType = RemoteModelType.XiaomiRC003 };
+        config.Current.Devices.Add(xiaomi);
+        config.Current.SelectedDeviceId = xiaomi.Id;
+
+        var vm = new MappingViewModel(config);
+        Assert.Equal("原生 Enter", vm.GetActionSummary(RemoteButton.Ok, ButtonTrigger.SingleClick));
+        Assert.Equal("-", vm.GetActionSummary(RemoteButton.Ok, ButtonTrigger.LongPress));
+        Assert.Equal("原生 ↑", vm.GetActionSummary(RemoteButton.Up, ButtonTrigger.SingleClick));
+
+        vm.BeginEdit(RemoteButton.Ok, ButtonTrigger.LongPress);
+        Assert.True(vm.IsNativeKeyboardLocked);
+        Assert.False(vm.ShowCategoryGrid);
+        Assert.False(vm.CanClearEditingAction);
+        Assert.False(vm.CanRestoreEditingDefault);
+
+        vm.SelectAction(ButtonAction.CommandReturn);
+        Assert.Equal(ButtonAction.Disabled, vm.GetConfiguredAction(RemoteButton.Ok, ButtonTrigger.LongPress).Action);
     }
 
     [Fact]

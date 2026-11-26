@@ -76,6 +76,7 @@ public partial class CommonPhrasesViewModel : ObservableObject
     public CommonPhrasePositionItem? PadRight { get; private set; }
 
     public bool HasStatusMessage => !string.IsNullOrEmpty(StatusMessage);
+    public bool ShowBasePadButtons => CommonPhraseStore.SupportsBaseButtons(_getRemoteModel());
     public bool CanDelete => !string.IsNullOrEmpty(SelectedPhraseId);
     public bool CanMoveSelected => !string.IsNullOrEmpty(SelectedPhraseId);
     public bool IsOverCharacterLimit => EditText.Length > CommonPhrase.MaximumTextLength;
@@ -133,6 +134,7 @@ public partial class CommonPhrasesViewModel : ObservableObject
         PadDown = BuildPositionItem(RemoteButton.Down);
         PadLeft = BuildPositionItem(RemoteButton.Left);
         PadRight = BuildPositionItem(RemoteButton.Right);
+        OnPropertyChanged(nameof(ShowBasePadButtons));
         OnPropertyChanged(nameof(PadOk));
         OnPropertyChanged(nameof(PadUp));
         OnPropertyChanged(nameof(PadDown));

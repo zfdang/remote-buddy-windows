@@ -55,6 +55,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly CommonPhraseStore _commonPhraseStore;
     private readonly CommonPhraseRouting _commonPhraseRouting = new();
     private bool _isCommonPhraseOverlayOpen;
+    private CommonPhraseTarget? _commonPhraseTarget;
+    private readonly HashSet<ulong> _voiceOverlayDismissHeld = new();
+    internal ICommonPhraseInserter CommonPhraseInserterForTest { get; set; } = new WindowsCommonPhraseInserter();
+    internal nint CommonPhraseTargetWindowHandle => _commonPhraseTarget?.WindowHandle ?? 0;
     private readonly HashSet<ulong> _readyAddresses = new();
     private readonly Dictionary<IntPtr, ulong> _rawAddresses = new();
     private readonly HashSet<IntPtr> _nonTargetRawHandles = new();
@@ -86,7 +90,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         foreach (var key in _buttonLogicalDown.Keys.Where(k => k.Address == address).ToArray())
             _buttonLogicalDown.Remove(key);
         ReleaseHeldDirectPassthrough(address);
-        _commonPhraseRouting.Reset(GetPhraseRoutingSource(address));
+        _voiceOverlayDismissHeld.Remove(address);
+        string phraseSource = GetPhraseRoutingSource(address);
+        if (string.Equals(_commonPhraseRouting.Owner, phraseSource, StringComparison.Ordinal))
+        {
+            CloseCommonPhraseOverlay();
+        }
+        _commonPhraseRouting.Reset(phraseSource);
     }
 
     private void ReleaseHeldDirectPassthrough(ulong? address)
@@ -1144,27 +1154,32 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (ActiveOnboardingVm == null) ShowMappingPress(button, isDown, sourceDevice);
 
         string phraseSource = GetPhraseRoutingSource(address);
-        if (_isCommonPhraseOverlayOpen)
+        if (button == RemoteButton.Voice)
         {
-            if (button == RemoteButton.Voice && isDown && string.Equals(_commonPhraseRouting.Owner, phraseSource, StringComparison.Ordinal))
+            if (_isCommonPhraseOverlayOpen && isDown && string.Equals(_commonPhraseRouting.Owner, phraseSource, StringComparison.Ordinal))
             {
+                _voiceOverlayDismissHeld.Add(address);
                 CloseCommonPhraseOverlay();
                 return;
             }
-            if (_commonPhraseRouting.Claims(button, phraseSource))
+            if (!isDown && _voiceOverlayDismissHeld.Remove(address))
             {
-                var decision = _commonPhraseRouting.Handle(button, isDown, phraseSource);
-                switch (decision.Action)
-                {
-                    case CommonPhraseRoutingAction.Insert:
-                        InsertCommonPhrase(decision.Button);
-                        return;
-                    case CommonPhraseRoutingAction.Close:
-                        CloseCommonPhraseOverlay();
-                        return;
-                    case CommonPhraseRoutingAction.Consumed:
-                        return;
-                }
+                return;
+            }
+        }
+        if (_commonPhraseRouting.Claims(button, phraseSource))
+        {
+            var decision = _commonPhraseRouting.Handle(button, isDown, phraseSource);
+            switch (decision.Action)
+            {
+                case CommonPhraseRoutingAction.Insert:
+                    InsertCommonPhrase(decision.Button);
+                    return;
+                case CommonPhraseRoutingAction.Close:
+                    CloseCommonPhraseOverlay();
+                    return;
+                case CommonPhraseRoutingAction.Consumed:
+                    return;
             }
         }
 
@@ -1194,12 +1209,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
+        if (RemoteDevice.IsNativeKeyboardPassthroughButton(sourceDevice.ModelType, button))
+        {
+            LogButtonRoute("native keyboard passthrough");
+            return;
+        }
+
         var mapping = sourceDevice.Mappings?.FirstOrDefault(m => m.Button == button);
         if (mapping != null &&
             ButtonActionCatalog.IsDirectional(button) &&
             mapping.GetEffectiveAction(ButtonTrigger.SingleClick).Action == ButtonAction.DirectPassthrough)
         {
-            if (!IsNativeKeyboardRemote(sourceDevice.ModelType) &&
+            if (!RemoteDevice.HasNativeKeyboardNavigation(sourceDevice.ModelType) &&
                 NativeInputSender.TryGetDirectionVirtualKey(button, out ushort vk))
             {
                 if (isDown)
@@ -1266,9 +1287,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (IsMappingPreviewSuppressed()) return;
 
         var dev = KnownRemotes().FirstOrDefault(d => d.BluetoothAddress == address);
-        if (dev != null && IsNativeKeyboardRemote(dev.ModelType) && IsIdentityKeyboardAction(button, assignment))
+        if (dev != null && RemoteDevice.IsNativeKeyboardPassthroughButton(dev.ModelType, button))
         {
-            AppLogger.Debug($"Skipping duplicate identity action '{assignment.Action}' for native keyboard remote {dev.ModelType} {button}", "MainViewModel");
+            AppLogger.Debug($"Skipping synthetic action '{assignment.Action}' for native keyboard passthrough button {dev.ModelType} {button}", "MainViewModel");
             return;
         }
 
@@ -1276,41 +1297,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _executeMappingOverride(assignment);
         else
             ExecuteButtonAction(address, button, assignment);
-    }
-
-    private static bool IsNativeKeyboardRemote(RemoteModelType type) =>
-        type is RemoteModelType.XiaomiRC003 or RemoteModelType.XiaomiRC001 or RemoteModelType.XiaomiARN9 or RemoteModelType.T1Remote;
-
-    private static bool IsIdentityKeyboardAction(RemoteButton button, ConfiguredButtonAction assignment)
-    {
-        if (assignment.Action == ButtonAction.DirectPassthrough && ButtonActionCatalog.IsDirectional(button))
-            return true;
-
-        bool matchesPreset = (button, assignment.Action) switch
-        {
-            (RemoteButton.Up, ButtonAction.ArrowUp) => true,
-            (RemoteButton.Down, ButtonAction.ArrowDown) => true,
-            (RemoteButton.Left, ButtonAction.ArrowLeft) => true,
-            (RemoteButton.Right, ButtonAction.ArrowRight) => true,
-            (RemoteButton.Ok, ButtonAction.ReturnKey) => true,
-            _ => false
-        };
-        if (matchesPreset) return true;
-
-        if (assignment.Action != ButtonAction.CustomShortcut || string.IsNullOrWhiteSpace(assignment.Shortcut))
-            return false;
-
-        string shortcut = assignment.Shortcut.Trim();
-        return button switch
-        {
-            RemoteButton.Up => shortcut.Equals("Up", StringComparison.OrdinalIgnoreCase),
-            RemoteButton.Down => shortcut.Equals("Down", StringComparison.OrdinalIgnoreCase),
-            RemoteButton.Left => shortcut.Equals("Left", StringComparison.OrdinalIgnoreCase),
-            RemoteButton.Right => shortcut.Equals("Right", StringComparison.OrdinalIgnoreCase),
-            RemoteButton.Ok => shortcut.Equals("Enter", StringComparison.OrdinalIgnoreCase) ||
-                               shortcut.Equals("Return", StringComparison.OrdinalIgnoreCase),
-            _ => false
-        };
     }
 
     private void ShowMappingPress(RemoteButton button, bool isDown, RemoteDevice? sourceDevice = null)
@@ -1640,7 +1626,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 break;
 
             case ButtonAction.TextSnippet when !string.IsNullOrEmpty(assignment.Text):
-                LogDispatch("text snippet", NativeInputSender.SendUnicodeText(assignment.Text));
+                LogDispatch("text snippet", CommonPhraseInserterForTest.InsertText(assignment.Text));
                 break;
 
             case ButtonAction.OpenUrl when !string.IsNullOrWhiteSpace(assignment.Url):
@@ -1701,9 +1687,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
+        var target = CommonPhraseInserterForTest.CaptureTarget();
+        if (target == null)
+        {
+            CloseCommonPhraseOverlay();
+            AppLogger.Info($"Common phrase overlay skipped: no external foreground target (addr=0x{address:X12})", "MainViewModel");
+            return;
+        }
+
         var dev = KnownRemotes().FirstOrDefault(d => d.BluetoothAddress == address) ?? MappingVm.SelectedDevice;
         var model = dev?.ModelType;
         var buttons = CommonPhraseStore.GetButtons(model);
+        if (buttons.Count == 0)
+        {
+            CloseCommonPhraseOverlay();
+            return;
+        }
+
+        _commonPhraseTarget = target;
         _commonPhraseRouting.Open(source, buttons);
         _isCommonPhraseOverlayOpen = true;
         RequestToggleCommonPhraseOverlay?.Invoke(model, _commonPhraseStore);
@@ -1711,6 +1712,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public void CloseCommonPhraseOverlay()
     {
+        _commonPhraseTarget = null;
         if (!_isCommonPhraseOverlayOpen) return;
         _isCommonPhraseOverlayOpen = false;
         _commonPhraseRouting.Close();
@@ -1719,11 +1721,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public void InsertCommonPhrase(RemoteButton button)
     {
+        var target = _commonPhraseTarget;
         var phrase = _commonPhraseStore.GetPhrase(button);
         CloseCommonPhraseOverlay();
+        if (target == null || !CommonPhraseInserterForTest.IsTargetActive(target))
+        {
+            AppLogger.Info($"Common phrase insertion cancelled: foreground target changed before inserting {button}", "MainViewModel");
+            return;
+        }
+
         if (phrase != null && !string.IsNullOrEmpty(phrase.InsertionText))
         {
-            NativeInputSender.SendUnicodeText(phrase.InsertionText);
+            CommonPhraseInserterForTest.InsertText(phrase.InsertionText, target);
         }
     }
 

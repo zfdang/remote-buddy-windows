@@ -36,7 +36,18 @@ public sealed class CommonPhraseStoreTests : IDisposable
 
         Assert.Contains(RemoteButton.YouTube, CommonPhraseStore.GetButtons(RemoteModelType.GoogleG9N9N));
         Assert.Contains(RemoteButton.Custom, CommonPhraseStore.GetButtons(RemoteModelType.GoogleGY3LE));
+        Assert.True(CommonPhraseStore.SupportsBaseButtons(RemoteModelType.GoogleG9N9N));
+        Assert.True(CommonPhraseStore.SupportsBaseButtons(RemoteModelType.GoogleGY3LE));
+
+        Assert.False(CommonPhraseStore.SupportsBaseButtons(RemoteModelType.XiaomiRC003));
+        Assert.DoesNotContain(RemoteButton.Ok, CommonPhraseStore.GetButtons(RemoteModelType.XiaomiRC003));
+        Assert.DoesNotContain(RemoteButton.Up, CommonPhraseStore.GetButtons(RemoteModelType.XiaomiRC003));
+        Assert.Contains(RemoteButton.Menu, CommonPhraseStore.GetButtons(RemoteModelType.XiaomiRC003));
+
+        Assert.False(CommonPhraseStore.SupportsBaseButtons(RemoteModelType.T1Remote));
+        Assert.DoesNotContain(RemoteButton.Ok, CommonPhraseStore.GetButtons(RemoteModelType.T1Remote));
         Assert.DoesNotContain(RemoteButton.Power, CommonPhraseStore.GetButtons(RemoteModelType.T1Remote));
+        Assert.Contains(RemoteButton.Menu, CommonPhraseStore.GetButtons(RemoteModelType.T1Remote));
     }
 
     [Fact]
@@ -76,7 +87,7 @@ public sealed class CommonPhraseStoreTests : IDisposable
     public void Routing_ClaimsInsertAndExitButtons_AndConsumesHeldReleases()
     {
         var routing = new CommonPhraseRouting();
-        routing.Open("hid:01", CommonPhraseStore.GetButtons(RemoteModelType.XiaomiRC003));
+        routing.Open("hid:01", CommonPhraseStore.GetButtons(RemoteModelType.GoogleG9N9N));
 
         Assert.True(routing.Claims(RemoteButton.Ok, "hid:01"));
         Assert.True(routing.Claims(RemoteButton.Back, "hid:01"));
@@ -91,6 +102,13 @@ public sealed class CommonPhraseStoreTests : IDisposable
         var release = routing.Handle(RemoteButton.Ok, isDown: false, "hid:01");
         Assert.Equal(CommonPhraseRoutingAction.Consumed, release.Action);
         Assert.False(routing.Claims(RemoteButton.Ok, "hid:01"));
+
+        // Xiaomi excludes native-keyboard Ok/arrows from phrase claims while keeping non-keyboard buttons and exit keys
+        routing.Open("hid:mi", CommonPhraseStore.GetButtons(RemoteModelType.XiaomiRC003));
+        Assert.False(routing.Claims(RemoteButton.Ok, "hid:mi"));
+        Assert.False(routing.Claims(RemoteButton.Up, "hid:mi"));
+        Assert.True(routing.Claims(RemoteButton.Menu, "hid:mi"));
+        Assert.True(routing.Claims(RemoteButton.Back, "hid:mi"));
     }
 
     [Fact]

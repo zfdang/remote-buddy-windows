@@ -22,8 +22,14 @@
                         Click="OnCloseClick"/>
             </Grid>
 
+            <!-- Native Keyboard Notice (Xiaomi / T1) -->
+            <TextBlock x:Name="NativeKeysNotice"
+                       Text="方向键与 OK 保留系统原生输入，请按下方按键插入常用语"
+                       FontSize="12" Foreground="#A9D7FF" TextAlignment="Center" TextWrapping="Wrap"
+                       Margin="0,0,0,8" Visibility="Collapsed"/>
+
             <!-- Circular D-Pad -->
-            <Border Width="252" Height="252" CornerRadius="126" Background="#FF24272D" BorderBrush="#38FFFFFF" BorderThickness="1" HorizontalAlignment="Center">
+            <Border x:Name="DpadBorder" Width="252" Height="252" CornerRadius="126" Background="#FF24272D" BorderBrush="#38FFFFFF" BorderThickness="1" HorizontalAlignment="Center">
                 <Grid>
                     <Button x:Name="BtnUp" HorizontalAlignment="Center" VerticalAlignment="Top" Width="110" Height="62" Margin="0,8,0,0"
                             Background="Transparent" BorderBrush="Transparent" Foreground="#FFFFFF" Click="OnButtonClick">

@@ -368,7 +368,13 @@ public partial class MappingViewModel : ObservableObject
     public bool HasShortcutError => !string.IsNullOrEmpty(ShortcutValidationError);
     public bool HasCustomAppShortcutError => !string.IsNullOrEmpty(CustomAppShortcutError);
     public bool HasUrlTestFeedback => !string.IsNullOrEmpty(UrlTestFeedback);
-    public bool CanRestoreEditingDefault => EditingTrigger is ButtonTrigger.SingleClick or ButtonTrigger.LongPress;
+    public bool IsNativeKeyboardPassthrough(RemoteButton button) =>
+        SelectedDevice != null && RemoteDevice.IsNativeKeyboardPassthroughButton(SelectedDevice.ModelType, button);
+    public bool IsNativeKeyboardLocked =>
+        EditingButton is { } lockedBtn && IsNativeKeyboardPassthrough(lockedBtn);
+    public bool CanRestoreEditingDefault =>
+        !IsNativeKeyboardLocked && EditingTrigger is ButtonTrigger.SingleClick or ButtonTrigger.LongPress;
+    public bool CanClearEditingAction => !IsNativeKeyboardLocked;
 
     public string EditingButtonDisplayName => EditingButton is { } b ? MappingItemViewModel.GetButtonDisplayName(b) : string.Empty;
     public string EditingTriggerDisplayName => EditingTrigger switch
@@ -382,16 +388,17 @@ public partial class MappingViewModel : ObservableObject
     public ConfiguredButtonAction EditingConfiguredAction =>
         GetEditingGesture()?.Configured ?? ConfiguredButtonAction.Disabled;
 
-    public bool IsEditingDisabled => EditingConfiguredAction.Action == ButtonAction.Disabled;
+    public bool IsEditingDisabled => !IsNativeKeyboardLocked && EditingConfiguredAction.Action == ButtonAction.Disabled;
 
     public bool IsDirectPassthroughLockActive =>
+        !IsNativeKeyboardLocked &&
         EditingButton is { } btn &&
         EditingTrigger is { } trig &&
         trig != ButtonTrigger.SingleClick &&
         GetConfiguredAction(btn, ButtonTrigger.SingleClick).Action == ButtonAction.DirectPassthrough;
 
     public bool ShowLongPressHoldRepeatOption =>
-        EditingTrigger == ButtonTrigger.LongPress && !IsDirectPassthroughLockActive;
+        EditingTrigger == ButtonTrigger.LongPress && !IsDirectPassthroughLockActive && !IsNativeKeyboardLocked;
 
     public bool IsHoldRepeatSelected => EditingConfiguredAction.Action == ButtonAction.RepeatSingleClick;
 
@@ -400,13 +407,13 @@ public partial class MappingViewModel : ObservableObject
         EditingButton is { } btn &&
         GetConfiguredAction(btn, ButtonTrigger.SingleClick).Action is ButtonAction.Disabled or ButtonAction.OpenUrl;
 
-    public bool ShowCategoryGrid => !IsDirectPassthroughLockActive;
-    public bool ShowDirectPassthroughHelp => !IsDirectPassthroughLockActive && SelectedCategory == ButtonActionCategory.DirectPassthrough;
-    public bool ShowCommonPhrasesAdjustTile => !IsDirectPassthroughLockActive && SelectedCategory == ButtonActionCategory.CommonPhrases;
-    public bool ShowCustomShortcutEditor => !IsDirectPassthroughLockActive && SelectedCategory == ButtonActionCategory.Custom && EditingConfiguredAction.Action == ButtonAction.CustomShortcut;
-    public bool ShowOpenUrlEditor => !IsDirectPassthroughLockActive && SelectedCategory == ButtonActionCategory.Custom && EditingConfiguredAction.Action == ButtonAction.OpenUrl;
-    public bool ShowTextSnippetEditor => !IsDirectPassthroughLockActive && SelectedCategory == ButtonActionCategory.CommonPhrases && EditingConfiguredAction.Action == ButtonAction.TextSnippet;
-    public bool ShowCustomApplicationEditor => !IsDirectPassthroughLockActive && SelectedCategory == ButtonActionCategory.Applications && EditingConfiguredAction.Action == ButtonAction.OpenCustomApplication;
+    public bool ShowCategoryGrid => !IsDirectPassthroughLockActive && !IsNativeKeyboardLocked;
+    public bool ShowDirectPassthroughHelp => !IsDirectPassthroughLockActive && !IsNativeKeyboardLocked && SelectedCategory == ButtonActionCategory.DirectPassthrough;
+    public bool ShowCommonPhrasesAdjustTile => !IsDirectPassthroughLockActive && !IsNativeKeyboardLocked && SelectedCategory == ButtonActionCategory.CommonPhrases;
+    public bool ShowCustomShortcutEditor => !IsDirectPassthroughLockActive && !IsNativeKeyboardLocked && SelectedCategory == ButtonActionCategory.Custom && EditingConfiguredAction.Action == ButtonAction.CustomShortcut;
+    public bool ShowOpenUrlEditor => !IsDirectPassthroughLockActive && !IsNativeKeyboardLocked && SelectedCategory == ButtonActionCategory.Custom && EditingConfiguredAction.Action == ButtonAction.OpenUrl;
+    public bool ShowTextSnippetEditor => !IsDirectPassthroughLockActive && !IsNativeKeyboardLocked && SelectedCategory == ButtonActionCategory.CommonPhrases && EditingConfiguredAction.Action == ButtonAction.TextSnippet;
+    public bool ShowCustomApplicationEditor => !IsDirectPassthroughLockActive && !IsNativeKeyboardLocked && SelectedCategory == ButtonActionCategory.Applications && EditingConfiguredAction.Action == ButtonAction.OpenCustomApplication;
 
     public string CustomShortcutDisplay =>
         string.IsNullOrWhiteSpace(EditingConfiguredAction.Shortcut) ? "未录入" : EditingConfiguredAction.Shortcut!;
@@ -457,7 +464,7 @@ public partial class MappingViewModel : ObservableObject
                 ? "Chromecast (G9N9N) 支持自定义单击、双击和长按动作；语音键固定用于遥控器麦克风。"
                 : IsT1
                     ? "T1 飞鼠遥控器正面 7 颗按键支持自定义；语音键固定用于遥控器麦克风。"
-                    : "选择遥控器上的按键，可分别为单击、双击与长按设置不同动作；语音键固定用于遥控器麦克风。";
+                    : "方向键与确定键保留 Windows 原生键盘行为；其余按键可分别自定义单击、双击与长按动作，语音键固定用于遥控器麦克风。";
 
     public string MappingStatusText => !CustomMappingEnabled
         ? "按键映射未启用（所有按键保持 Windows 原生输入）"
@@ -653,7 +660,7 @@ public partial class MappingViewModel : ObservableObject
     [RelayCommand]
     public void SelectAction(ButtonAction action)
     {
-        if (GetEditingGesture() is not { } gesture) return;
+        if (IsNativeKeyboardLocked || GetEditingGesture() is not { } gesture) return;
 
         if (action == ButtonAction.CustomShortcut)
         {
@@ -681,14 +688,14 @@ public partial class MappingViewModel : ObservableObject
     [RelayCommand]
     public void SelectHoldRepeat()
     {
-        if (EditingTrigger != ButtonTrigger.LongPress) return;
+        if (IsNativeKeyboardLocked || EditingTrigger != ButtonTrigger.LongPress) return;
         SelectAction(ButtonAction.RepeatSingleClick);
     }
 
     [RelayCommand]
     public void RestoreDefaultAction()
     {
-        if (EditingButton is not { } btn || EditingTrigger is not { } trig || SelectedDevice == null) return;
+        if (IsNativeKeyboardLocked || EditingButton is not { } btn || EditingTrigger is not { } trig || SelectedDevice == null) return;
         if (trig == ButtonTrigger.DoubleClick) return;
         if (GetEditingGesture() is not { } gesture) return;
 
@@ -708,7 +715,7 @@ public partial class MappingViewModel : ObservableObject
     [RelayCommand]
     public void ClearEditingAction()
     {
-        if (GetEditingGesture() is not { } gesture) return;
+        if (IsNativeKeyboardLocked || GetEditingGesture() is not { } gesture) return;
         gesture.Clear();
         SyncSubEditorInputs(ConfiguredButtonAction.Disabled);
         RefreshEditorCollections();
@@ -718,12 +725,13 @@ public partial class MappingViewModel : ObservableObject
     [RelayCommand]
     public void OpenShortcutPicker()
     {
+        if (IsNativeKeyboardLocked) return;
         RequestOpenShortcutPicker?.Invoke(EditingConfiguredAction.Shortcut);
     }
 
     public void ApplyCustomShortcut(string? shortcut)
     {
-        if (GetEditingGesture() is not { } gesture) return;
+        if (IsNativeKeyboardLocked || GetEditingGesture() is not { } gesture) return;
         string? normalized = string.IsNullOrWhiteSpace(shortcut) ? null : shortcut.Trim();
         if (normalized != null && !NativeInputSender.TryParseShortcut(normalized, out _, out _))
         {
@@ -743,7 +751,7 @@ public partial class MappingViewModel : ObservableObject
     [RelayCommand]
     public void ClearCustomShortcut()
     {
-        if (GetEditingGesture() is not { } gesture) return;
+        if (IsNativeKeyboardLocked || GetEditingGesture() is not { } gesture) return;
         ShortcutValidationError = string.Empty;
         var next = gesture.Configured.Clone();
         next.Shortcut = null;
@@ -775,7 +783,7 @@ public partial class MappingViewModel : ObservableObject
 
     public void AddCustomApplication(string executablePath)
     {
-        if (string.IsNullOrWhiteSpace(executablePath) || GetEditingGesture() is not { } gesture) return;
+        if (IsNativeKeyboardLocked || string.IsNullOrWhiteSpace(executablePath) || GetEditingGesture() is not { } gesture) return;
         string normalizedPath = executablePath.Trim();
         var existing = _config.Current.CustomApplications.FirstOrDefault(a =>
             string.Equals(a.ExecutablePath, normalizedPath, StringComparison.OrdinalIgnoreCase));
@@ -806,7 +814,7 @@ public partial class MappingViewModel : ObservableObject
     [RelayCommand]
     public void SelectCustomApplication(string profileId)
     {
-        if (GetEditingGesture() is not { } gesture) return;
+        if (IsNativeKeyboardLocked || GetEditingGesture() is not { } gesture) return;
         var next = gesture.Configured.Clone();
         next.Action = ButtonAction.OpenCustomApplication;
         next.ApplicationProfileId = profileId;
@@ -880,6 +888,29 @@ public partial class MappingViewModel : ObservableObject
 
     public string GetActionSummary(RemoteButton button, ButtonTrigger trigger, bool detailed = false)
     {
+        if (IsNativeKeyboardPassthrough(button))
+        {
+            if (trigger != ButtonTrigger.SingleClick)
+            {
+                return detailed ? "此按键在 Windows 上保留系统原生键盘输入，不支持叠加手势" : "-";
+            }
+
+            if (detailed)
+            {
+                return "系统原生键盘输入（不叠加自定义动作）";
+            }
+
+            return button switch
+            {
+                RemoteButton.Up => "原生 ↑",
+                RemoteButton.Down => "原生 ↓",
+                RemoteButton.Left => "原生 ←",
+                RemoteButton.Right => "原生 →",
+                RemoteButton.Ok => "原生 Enter",
+                _ => "原生"
+            };
+        }
+
         var configured = GetConfiguredAction(button, trigger);
         var single = GetConfiguredAction(button, ButtonTrigger.SingleClick);
         return ButtonActionCatalog.FormatActionSummary(
@@ -919,7 +950,7 @@ public partial class MappingViewModel : ObservableObject
     [RelayCommand]
     public void ClearSelectedMapping()
     {
-        if (SelectedMapping != null)
+        if (SelectedMapping != null && !IsNativeKeyboardPassthrough(SelectedMapping.Button))
         {
             SelectedMapping.Clear();
             SaveMappings();
@@ -1272,6 +1303,8 @@ public partial class MappingViewModel : ObservableObject
     private void NotifyEditorProperties()
     {
         OnPropertyChanged(nameof(EditingConfiguredAction));
+        OnPropertyChanged(nameof(IsNativeKeyboardLocked));
+        OnPropertyChanged(nameof(CanClearEditingAction));
         OnPropertyChanged(nameof(IsEditingDisabled));
         OnPropertyChanged(nameof(IsDirectPassthroughLockActive));
         OnPropertyChanged(nameof(ShowLongPressHoldRepeatOption));

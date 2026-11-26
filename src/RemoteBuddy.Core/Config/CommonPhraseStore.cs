@@ -156,11 +156,16 @@ public sealed class CommonPhraseStore
         _ => XiaomiExtraRows
     };
 
+    public static bool SupportsBaseButtons(RemoteModelType? model) =>
+        model is RemoteModelType.GoogleG9N9N or RemoteModelType.GoogleGY3LE;
+
     public static IReadOnlyList<RemoteButton> GetExtraButtons(RemoteModelType? model) =>
         GetExtraButtonRows(model).SelectMany(row => row).Where(b => b.HasValue).Select(b => b!.Value).ToArray();
 
     public static IReadOnlyList<RemoteButton> GetButtons(RemoteModelType? model) =>
-        BaseButtons.Concat(GetExtraButtons(model)).ToArray();
+        SupportsBaseButtons(model)
+            ? BaseButtons.Concat(GetExtraButtons(model)).ToArray()
+            : GetExtraButtons(model);
 
     public static string? ToKey(RemoteButton button) =>
         ButtonToKey.TryGetValue(button, out string? key) ? key : null;

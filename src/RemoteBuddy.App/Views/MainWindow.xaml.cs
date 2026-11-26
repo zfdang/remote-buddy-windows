@@ -375,6 +375,7 @@ public partial class MainWindow : Window
     private void OnRequestToggleCommonPhraseOverlay(Core.Models.RemoteModelType? model, Core.Config.CommonPhraseStore store)
     {
         if (DataContext is not MainViewModel vm) return;
+        nint targetHwnd = vm.CommonPhraseTargetWindowHandle;
         Dispatcher.BeginInvoke(() =>
         {
             if (_commonPhraseOverlayWindow == null)
@@ -382,12 +383,13 @@ public partial class MainWindow : Window
                 _commonPhraseOverlayWindow = new CommonPhraseOverlayWindow(
                     model,
                     store,
+                    targetHwnd,
                     button => vm.InsertCommonPhrase(button),
                     () => vm.CloseCommonPhraseOverlay());
             }
             else
             {
-                _commonPhraseOverlayWindow.BindContent(model, store);
+                _commonPhraseOverlayWindow.BindContent(model, store, targetHwnd);
             }
             _commonPhraseOverlayWindow.Show();
         });
