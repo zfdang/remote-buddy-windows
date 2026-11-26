@@ -17,6 +17,9 @@ internal sealed record WindowsRelease(string Tag, long PackageSize, Version Vers
 
     public string PackageDescription => $"Windows x64 · {PackageSize / 1048576.0:0.0} MB";
 
+    internal static string FormatTag(Version version) =>
+        $"v{version.Major:D2}-{version.Minor:D2}-{version.Build:D2}.{version.Revision:D3}";
+
     internal static async Task<WindowsRelease> FetchAsync(CancellationToken cancellationToken)
     {
         using var response = await Client.GetAsync(ManifestUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
@@ -32,7 +35,7 @@ internal sealed record WindowsRelease(string Tag, long PackageSize, Version Vers
     {
         string? tag = manifest.GetProperty("tag").GetString();
         if (tag is not { Length: 13 } ||
-            tag[0] != 'v' ||
+            tag[0] is not ('v' or 'V') ||
             tag[3] != '-' ||
             tag[6] != '-' ||
             tag[9] != '.' ||
@@ -54,7 +57,7 @@ internal sealed record WindowsRelease(string Tag, long PackageSize, Version Vers
 
     internal static Version? ParseVersion(string value)
     {
-        string normalized = value.TrimStart('v').Replace('-', '.');
+        string normalized = value.TrimStart('v', 'V').Replace('-', '.');
         if (!Version.TryParse(normalized, out var version) ||
             version.Revision < 0 ||
             version.Major > 99 ||

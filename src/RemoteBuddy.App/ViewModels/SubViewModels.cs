@@ -1857,7 +1857,10 @@ public partial class AboutViewModel : ObservableObject
             .InformationalVersion;
         if (!string.IsNullOrEmpty(infoVer))
         {
-            return "v" + infoVer.Split('+')[0];
+            string version = infoVer.Split('+')[0];
+            return WindowsRelease.ParseVersion(version) is { } releaseVersion
+                ? WindowsRelease.FormatTag(releaseVersion)
+                : "v" + version;
         }
 
         var ver = Assembly.GetExecutingAssembly().GetName().Version;

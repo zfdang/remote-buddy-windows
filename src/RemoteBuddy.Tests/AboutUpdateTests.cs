@@ -29,6 +29,8 @@ public class AboutUpdateTests
         Assert.Equal(Published, WindowsRelease.Parse(json.RootElement));
         Assert.Equal(Published.Version, WindowsRelease.ParseVersion("v26.11.24.117"));
         Assert.Equal(Published.Version, WindowsRelease.ParseVersion("v26.11.24.1117"));
+        Assert.Equal("v26-11-24.117", WindowsRelease.FormatTag(Published.Version));
+        Assert.Equal("v26-01-02.009", WindowsRelease.FormatTag(new Version(26, 1, 2, 9)));
         Assert.Null(WindowsRelease.ParseVersion("v1.0.0"));
 
         using var wrongPackage = JsonDocument.Parse("""
@@ -69,7 +71,7 @@ public class AboutUpdateTests
             await vm.CheckForUpdatesCommand.ExecuteAsync(null);
             Assert.Equal(2, checks.Count);
             Assert.Equal(Published, vm.AvailableRelease);
-            Assert.Contains(Published.Tag, vm.AvailableVersionText);
+            Assert.Equal("官网最新版本 v26-11-24.117", vm.AvailableVersionText);
             Assert.True(vm.HasUpdateBadge);
         }
         finally
@@ -123,7 +125,7 @@ public class AboutUpdateTests
     }
 
     [Fact]
-    public async Task SidebarBadgeRemainsVisibleAfterLeavingAboutUntilTheOfficialVersionMatches()
+    public async Task SidebarBadgeRemainsVisibleAfterLeavingAboutUntilNoNewerReleaseIsAvailable()
     {
         var vm = new AboutViewModel(null, _ => Task.FromResult(Published)) { AppVersion = "v26.11.24.116" };
 
@@ -157,18 +159,34 @@ public class AboutUpdateTests
     }
 
     [Theory]
-    [InlineData("v1.0.0")]
-    [InlineData("v26.11.24.116")]
-    [InlineData("v26.11.24.118")]
-    public async Task AnyDifferentVersionShowsTheOfficialRelease(string installedVersion)
+    [InlineData("v26-11-25.152", "v26.11.26.169", false, "当前版本高于官网已发布版本。")]
+    [InlineData("v26-11-25.152", "v26-11-26.169", false, "当前版本高于官网已发布版本。")]
+    [InlineData("v26-11-26.168", "v26.11.26.169", false, "当前版本高于官网已发布版本。")]
+    [InlineData("v26-11-26.169", "v26.11.26.169", false, "已是最新版本。")]
+    [InlineData("V26-11-26.169", "v26.11.26.169", false, "已是最新版本。")]
+    [InlineData("v26-11-26.170", "v26.11.26.169", true, "")]
+    [InlineData("v26-11-26.170", "v1.0.0", false, "当前构建没有可比较的正式版本号。")]
+    public async Task OnlyNewerReleaseShowsDownloadAndBadge(
+        string tag, string installedVersion, bool expectUpdate, string manualStatus)
     {
-        var vm = new AboutViewModel(null, _ => Task.FromResult(Published)) { AppVersion = installedVersion };
+        var manifest = JsonSerializer.SerializeToElement(new
+        {
+            tag,
+            packages = new { x64 = new { name = $"Remote_Buddy_Windows_{tag}_x64.zip", size = 72116327 } }
+        });
+        var release = WindowsRelease.Parse(manifest);
+        var vm = new AboutViewModel(null, _ => Task.FromResult(release)) { AppVersion = installedVersion };
 
+        await vm.CheckForUpdateReminderAsync();
+        Assert.Equal(expectUpdate, vm.HasUpdateBadge);
+        Assert.Equal(expectUpdate, vm.HasAvailableRelease);
+        Assert.Empty(vm.UpdateStatus);
         await vm.CheckForUpdatesCommand.ExecuteAsync(null);
 
-        Assert.Equal(Published, vm.AvailableRelease);
-        Assert.Contains(Published.Tag, vm.AvailableVersionText);
-        Assert.Empty(vm.UpdateStatus);
+        Assert.Equal(expectUpdate, vm.HasUpdateBadge);
+        Assert.Equal(expectUpdate, vm.HasAvailableRelease);
+        Assert.Equal(expectUpdate ? "官网最新版本 v26-11-26.170" : string.Empty, vm.AvailableVersionText);
+        Assert.Equal(manualStatus, vm.UpdateStatus);
     }
 
     [Fact]
