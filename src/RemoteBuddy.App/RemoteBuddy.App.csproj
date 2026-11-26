@@ -25,4 +25,31 @@
   <ItemGroup>
     <InternalsVisibleTo Include="RemoteBuddy.Tests" />
   </ItemGroup>
+
+  <!-- Match the commit date and count used by scripts/release-metadata.sh for builds without an explicit version. -->
+  <Target Name="SetLocalGitVersion" BeforeTargets="GetAssemblyVersion"
+          Condition="'$(Version)' == '1.0.0' and '$(DesignTimeBuild)' != 'true' and Exists('$(MSBuildProjectDirectory)/../../.git')">
+    <Exec Command="git rev-list --timestamp -1 HEAD" WorkingDirectory="$(MSBuildProjectDirectory)"
+          ConsoleToMSBuild="true" IgnoreExitCode="true"
+          IgnoreStandardErrorWarningFormat="true" StandardOutputImportance="Low" StandardErrorImportance="Low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_LocalGitHead" />
+      <Output TaskParameter="ExitCode" PropertyName="_LocalGitHeadExitCode" />
+    </Exec>
+    <PropertyGroup Condition="'$(_LocalGitHeadExitCode)' == '0' and $([System.Text.RegularExpressions.Regex]::IsMatch('$(_LocalGitHead)', '^[0-9]+ [0-9a-f]+$'))">
+      <_LocalGitCommitTime>$([System.Text.RegularExpressions.Regex]::Replace('$(_LocalGitHead)', ' .+$', ''))</_LocalGitCommitTime>
+      <_LocalGitCommitId>$([System.Text.RegularExpressions.Regex]::Replace('$(_LocalGitHead)', '^[0-9]+ ', ''))</_LocalGitCommitId>
+    </PropertyGroup>
+    <Exec Command="git rev-list --count $(_LocalGitCommitId)" WorkingDirectory="$(MSBuildProjectDirectory)"
+          Condition="'$(_LocalGitCommitId)' != ''" ConsoleToMSBuild="true" IgnoreExitCode="true"
+          IgnoreStandardErrorWarningFormat="true" StandardOutputImportance="Low" StandardErrorImportance="Low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_LocalGitCommitCount" />
+      <Output TaskParameter="ExitCode" PropertyName="_LocalGitCommitCountExitCode" />
+    </Exec>
+    <PropertyGroup Condition="'$(_LocalGitCommitCountExitCode)' == '0'">
+      <_LocalGitBuildDate>$([System.DateTimeOffset]::FromUnixTimeSeconds($(_LocalGitCommitTime)).UtcDateTime.AddHours(8).ToString('yy.MM.dd', $([System.Globalization.CultureInfo]::GetCultureInfo(''))))</_LocalGitBuildDate>
+      <Version>$(_LocalGitBuildDate).$(_LocalGitCommitCount)</Version>
+    </PropertyGroup>
+    <Warning Condition="'$(_LocalGitCommitCountExitCode)' != '0'"
+             Text="Could not read local Git version metadata. Using the default application version." />
+  </Target>
 </Project>

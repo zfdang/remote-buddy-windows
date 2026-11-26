@@ -100,18 +100,25 @@ public partial class AboutViewModel
             var latest = await _fetchRelease(request.Token);
             if (!ReferenceEquals(_updateCheck, request)) return;
 
-            var installed = WindowsRelease.ParseVersion(AppVersion);
-            bool hasDifferentVersion = latest.Version != installed;
-            HasUpdateBadge = hasDifferentVersion;
-            if (hasDifferentVersion)
+            if (WindowsRelease.ParseVersion(AppVersion) is not { } installed)
+            {
+                HasUpdateBadge = false;
+                UpdateStatus = manual ? "当前构建没有可比较的正式版本号。" : string.Empty;
+                return;
+            }
+
+            int comparison = latest.Version.CompareTo(installed);
+            HasUpdateBadge = comparison > 0;
+            if (comparison > 0)
             {
                 AvailableRelease = latest;
-                UpdateStatus = string.Empty;
             }
-            else
+            UpdateStatus = manual ? comparison switch
             {
-                UpdateStatus = manual ? "已是最新版本。" : string.Empty;
-            }
+                < 0 => "当前版本高于官网已发布版本。",
+                0 => "已是最新版本。",
+                _ => string.Empty
+            } : string.Empty;
         }
         catch (Exception error)
         {
