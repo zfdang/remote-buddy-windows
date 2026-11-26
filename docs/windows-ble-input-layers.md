@@ -131,6 +131,7 @@
 
 ## 相关文档
 
+- [同类 Windows 蓝牙遥控器方案技术实现对比](remote-voice-implementations-comparison.md)
 - [Windows 遥控器输入实现](windows-remote-input.md)
 - [Remote Buddy 软件架构设计](architecture.md)
 - [Frida / Frida Gadget 驱动层 HID 采集方案调研（暂不采用）](frida-gadget-hid-tap-design.md)
