@@ -100,6 +100,10 @@ public sealed class ChromecastButtonReceiver : IDisposable
         UnexpectedDisconnect?.Invoke();
     }
 
+    public void SetReadyAddresses(IEnumerable<ulong> addresses) => _etwReceiver.SetReadyAddresses(addresses);
+
+    public void NotifyProbeCompleted() => _etwReceiver.ArmFallbackIfNoOutgoingAcl();
+
     public async Task<bool> StartAsync(IReadOnlyList<EtwButtonSource> sources, CancellationToken ct = default)
     {
         if (IsRunningInTestHost())

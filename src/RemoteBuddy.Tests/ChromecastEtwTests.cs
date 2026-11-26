@@ -1091,4 +1091,82 @@ public class ChromecastEtwTests
             catch { }
         }
     }
+
+    [Fact]
+    public void FallbackBinding_WithoutOutgoingAcl_BindsG9N9NOnProbeResponseAndNotification_EvenWithSiblingXiaomi()
+    {
+        using var receiver = new ChromecastEtwReceiver();
+        var g9 = new EtwButtonSource(0x4754514C9587, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B, [0x003C, 0x003F]);
+        var xiaomi = new EtwButtonSource(0xC05D39FA361E, Guid.NewGuid(), EtwProtocolKind.Xiaomi);
+        receiver.SetSources([g9, xiaomi]);
+        receiver.SetReadyAddresses([g9.Address, xiaomi.Address]);
+
+        var bound = new List<ulong>();
+        var edges = new List<(ulong Address, RemoteButton Button, bool Down)>();
+        receiver.SourceBound += bound.Add;
+        receiver.ButtonEvent += (addr, btn, down) => edges.Add((addr, btn, down));
+
+        // Simulate Windows 10: probe completes without outgoing ACL (kind=4), incoming ATT Error Response arrives
+        receiver.ProcessPacket(3, CreateAclPacket(0x01, 0x0106, [0x00, 0x0A], connectionHandle: 0x0E01));
+        receiver.ArmFallbackIfNoOutgoingAcl();
+        Assert.Empty(bound);
+
+        // First G9N9N button press on 0x0029 immediately binds and dispatches
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x03, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0E01));
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, new byte[8], connectionHandle: 0x0E01));
+
+        Assert.Equal([g9.Address], bound);
+        Assert.Equal([(g9.Address, RemoteButton.Up, true), (g9.Address, RemoteButton.Up, false)], edges);
+    }
+
+    [Fact]
+    public void FallbackBinding_ArmedWithoutAttError_NarrowsByReadyAddressAndRespectsOutgoingAclMode()
+    {
+        using var receiver = new ChromecastEtwReceiver();
+        var activeG9 = new EtwButtonSource(0x111111111111, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B);
+        var sleepingG9 = new EtwButtonSource(0x222222222222, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B);
+        receiver.SetSources([activeG9, sleepingG9]);
+        receiver.SetReadyAddresses([activeG9.Address]);
+        receiver.ArmFallbackIfNoOutgoingAcl();
+
+        var edges = new List<(ulong Address, RemoteButton Button, bool Down)>();
+        receiver.ButtonEvent += (addr, btn, down) => edges.Add((addr, btn, down));
+
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x07, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0E02));
+        receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, new byte[8], connectionHandle: 0x0E02));
+        Assert.Equal([(activeG9.Address, RemoteButton.Ok, true), (activeG9.Address, RemoteButton.Ok, false)], edges);
+
+        // If outgoing ACL IS seen (Windows 11), fallback must NOT bind another connection without marker match
+        using var win11Receiver = new ChromecastEtwReceiver();
+        var s1 = new EtwButtonSource(0x333333333333, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B);
+        var s2 = new EtwButtonSource(0x444444444444, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B);
+        win11Receiver.SetSources([s1, s2]);
+        win11Receiver.SetReadyAddresses([s1.Address, s2.Address]);
+        var win11Edges = new List<(ulong Address, RemoteButton Button, bool Down)>();
+        win11Receiver.ButtonEvent += (addr, btn, down) => win11Edges.Add((addr, btn, down));
+
+        BindSource(win11Receiver, s1, connectionHandle: 0x0040);
+        win11Receiver.ArmFallbackIfNoOutgoingAcl();
+        win11Receiver.ProcessPacket(3, CreateAclPacket(0x1B, 0x0029, [0x07, 0, 0, 0, 0, 0, 0, 0], connectionHandle: 0x0041));
+        Assert.Empty(win11Edges);
+    }
+
+    [Fact]
+    public void FallbackBinding_WithoutOutgoingAcl_DetectsRedactedNotificationAfterProbeResponse()
+    {
+        using var receiver = new ChromecastEtwReceiver();
+        var g9 = new EtwButtonSource(0x4754514C9587, Guid.NewGuid(), EtwProtocolKind.GoogleG9N9N, 0x001F, 0x002B);
+        receiver.SetSources([g9]);
+        receiver.SetReadyAddresses([g9.Address]);
+
+        var truncated = new List<ulong>();
+        receiver.TruncatedPacketDetected += truncated.Add;
+
+        receiver.ProcessPacket(3, CreateAclPacket(0x01, 0x0106, [0x00, 0x0A], connectionHandle: 0x0E01));
+        receiver.ArmFallbackIfNoOutgoingAcl();
+        byte[] redacted = CreateAclPacket(0x1B, 0x0029, new byte[8], connectionHandle: 0x0E01)[..11];
+        receiver.ProcessPacket(3, redacted);
+
+        Assert.Equal([g9.Address], truncated);
+    }
 }

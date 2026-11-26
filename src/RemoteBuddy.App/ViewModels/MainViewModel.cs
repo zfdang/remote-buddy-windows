@@ -352,6 +352,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var devices = KnownRemotes().DistinctBy(device => device.BluetoothAddress).ToArray();
         var ready = devices.Where(device => _bluetoothManager.IsDeviceReady(device.BluetoothAddress)).ToArray();
         var addresses = ready.Select(device => device.BluetoothAddress).ToHashSet();
+        _chromecastButtonReceiver.SetReadyAddresses(addresses);
         foreach (ulong address in _readyAddresses.Except(addresses).ToArray())
         {
             _loggedButtonRoutes.RemoveWhere(entry => entry.Address == address);
@@ -437,7 +438,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (source.Address != 0 && _chromecastButtonReceiver.IsRunning)
                 {
                     lock (_etwProbeLock) _unboundEtwAddresses.Add(address);
-                    _ = _bluetoothManager.ProbeButtonSourceAsync(source.Marker, address);
+                    _ = ProbeButtonSourceWithFallbackAsync(source.Marker, address);
                     StartProbeRetryLoop(Volatile.Read(ref _buttonSourceGeneration));
                 }
             }
@@ -546,11 +547,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (ct.IsCancellationRequested) return;
             if (_bluetoothManager.IsDeviceReady(source.Address))
             {
-                _ = _bluetoothManager.ProbeButtonSourceAsync(source.Marker, source.Address);
+                _ = ProbeButtonSourceWithFallbackAsync(source.Marker, source.Address);
             }
         }
 
         StartProbeRetryLoop(generation);
+    }
+
+    private async Task ProbeButtonSourceWithFallbackAsync(Guid marker, ulong address)
+    {
+        await _bluetoothManager.ProbeButtonSourceAsync(marker, address).ConfigureAwait(false);
+        if (_bluetoothManager.IsDeviceReady(address))
+        {
+            _chromecastButtonReceiver.NotifyProbeCompleted();
+        }
     }
 
     private void StartProbeRetryLoop(int generation)
@@ -594,7 +604,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 foreach (var src in remaining)
                 {
                     AppLogger.Info($"Retrying ETW GATT probe for unbound remote 0x{src.Address:X12}", "MainViewModel");
-                    _ = _bluetoothManager.ProbeButtonSourceAsync(src.Marker, src.Address);
+                    _ = ProbeButtonSourceWithFallbackAsync(src.Marker, src.Address);
                 }
             }
         }, CancellationToken.None);
@@ -636,7 +646,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (source.Address != 0)
             {
                 lock (_etwProbeLock) _unboundEtwAddresses.Add(address);
-                _ = _bluetoothManager.ProbeButtonSourceAsync(source.Marker, address);
+                _ = ProbeButtonSourceWithFallbackAsync(source.Marker, address);
                 StartProbeRetryLoop(Volatile.Read(ref _buttonSourceGeneration));
             }
         }

@@ -122,7 +122,12 @@ public sealed class ChromecastEtwReceiver : IDisposable
     private readonly object _stateLock = new();
     private SourceState[] _sources = [];
     private volatile bool _sawPacketEvent;
+    private volatile bool _sawOutgoingAcl;
+    private bool _allowUnassignedNotificationFallback;
     private readonly HashSet<string> _loggedProbeStages = [];
+    private readonly HashSet<byte> _loggedUnsupportedKinds = [];
+    private readonly HashSet<ushort> _observedProbeResponseHandles = [];
+    private readonly HashSet<ulong> _readyAddresses = [];
     private readonly HashSet<(ushort Connection, ushort Attribute, int Captured, int Expected)> _loggedUnassignedNotifications = [];
 
     internal void SetSources(IEnumerable<EtwButtonSource> sources)
@@ -140,8 +145,41 @@ public sealed class ChromecastEtwReceiver : IDisposable
         {
             _sources = next;
             _sawPacketEvent = false;
+            _sawOutgoingAcl = false;
+            _allowUnassignedNotificationFallback = false;
             _loggedProbeStages.Clear();
+            _loggedUnsupportedKinds.Clear();
+            _observedProbeResponseHandles.Clear();
             _loggedUnassignedNotifications.Clear();
+        }
+    }
+
+    internal void SetReadyAddresses(IEnumerable<ulong> addresses)
+    {
+        lock (_stateLock)
+        {
+            _readyAddresses.Clear();
+            foreach (ulong address in addresses)
+            {
+                if (address != 0) _readyAddresses.Add(address);
+            }
+        }
+    }
+
+    internal void ArmFallbackIfNoOutgoingAcl()
+    {
+        bool logEnabled = false;
+        lock (_stateLock)
+        {
+            if (!_sawOutgoingAcl && !_allowUnassignedNotificationFallback)
+            {
+                _allowUnassignedNotificationFallback = true;
+                logEnabled = true;
+            }
+        }
+        if (logEnabled)
+        {
+            AppLogger.Info("BthPort Event 402 did not emit outgoing ACL packets; enabling incoming-notification fallback binding", "ChromecastEtwReceiver");
         }
     }
 
@@ -328,12 +366,22 @@ public sealed class ChromecastEtwReceiver : IDisposable
 
             if (cancellationToken.IsCancellationRequested) return;
             string[] unboundSources;
+            bool enableFallbackLog = false;
             lock (_stateLock)
             {
+                if (_sawPacketEvent && !_sawOutgoingAcl && !_allowUnassignedNotificationFallback)
+                {
+                    _allowUnassignedNotificationFallback = true;
+                    enableFallbackLog = true;
+                }
                 unboundSources = _sources.Where(s => !s.BoundHandle.HasValue).Select(s =>
                     $"0x{s.Source.Address:X12}/{s.Source.Protocol}=" +
                     (s.PendingHandle is ushort handle ? $"awaiting ATT response on ACL 0x{handle:X4}" : "no matching ATT request"))
                     .ToArray();
+            }
+            if (enableFallbackLog)
+            {
+                AppLogger.Info("BthPort Event 402 did not emit outgoing ACL packets; enabling incoming-notification fallback binding", "ChromecastEtwReceiver");
             }
             if (cancellationToken.IsCancellationRequested) return;
             if (unboundSources.Length == 0) continue;
@@ -392,7 +440,17 @@ public sealed class ChromecastEtwReceiver : IDisposable
             {
                 if (!IsPacketEventKind(kind[0]))
                 {
-                    if (ShouldLogProbeStage("EventKind"))
+                    bool logKind = false;
+                    lock (_stateLock)
+                    {
+                        if (_sources.Any(source => !source.BoundHandle.HasValue) &&
+                            _loggedUnsupportedKinds.Count < 8 &&
+                            _loggedUnsupportedKinds.Add(kind[0]))
+                        {
+                            logKind = true;
+                        }
+                    }
+                    if (logKind)
                         AppLogger.Info($"ETW probe saw unsupported Event 402 packet kind: version={header.EventDescriptor.Version}, kind=0x{kind[0]:X2}", "ChromecastEtwReceiver");
                     return;
                 }
@@ -456,6 +514,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 ushort handle = (ushort)(BinaryPrimitives.ReadUInt16LittleEndian(packet[3..]) & 0x0FFF);
                 lock (_stateLock)
                 {
+                    _observedProbeResponseHandles.Remove(handle);
                     foreach (var source in _sources)
                     {
                         if (source.PendingHandle == handle) source.PendingHandle = null;
@@ -487,6 +546,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
         }
         if (kind == AclSent)
         {
+            _sawOutgoingAcl = true;
             if (ShouldLogProbeStage("OutgoingAtt"))
                 AppLogger.Info($"ETW probe saw outgoing ATT: opcode=0x{att[0]:X2}, len={att.Length}, incomplete={incomplete}", "ChromecastEtwReceiver");
             if (incomplete)
@@ -527,6 +587,49 @@ public sealed class ChromecastEtwReceiver : IDisposable
             var sources = _sources;
             var pendingSource = sources.FirstOrDefault(source => source.PendingHandle == connection);
             var boundSource = sources.FirstOrDefault(source => source.BoundHandle == connection);
+            if (pendingSource == null && boundSource == null)
+            {
+                if (!_sawOutgoingAcl && !incomplete && (att is [0x01, 0x06, _, _, _] or [0x07, ..]))
+                {
+                    if (_observedProbeResponseHandles.Add(connection))
+                    {
+                        diagnosticLog = $"ETW probe saw incoming ATT response without outgoing ACL: acl=0x{connection:X4}, opcode=0x{att[0]:X2}";
+                    }
+                }
+                else if (!_sawOutgoingAcl && _allowUnassignedNotificationFallback &&
+                         att.Length >= 3 && att[0] is 0x1B or 0x1D)
+                {
+                    ushort fallbackAttr = BinaryPrimitives.ReadUInt16LittleEndian(att[1..]);
+                    var fallbackReport = att[3..];
+                    if (!incomplete)
+                    {
+                        var matched = FindUniqueFallbackSourceLocked(sources, att, fallbackAttr, fallbackReport);
+                        if (matched != null)
+                        {
+                            string evidence = _observedProbeResponseHandles.Contains(connection)
+                                ? "ATT probe response + button notification"
+                                : "unassigned button notification (no outgoing ACL)";
+                            BindLocked(sources, matched, evidence);
+                            boundSource = matched;
+                        }
+                    }
+                    else if (fallbackReport.IsEmpty &&
+                             expectedPayloadLength is 1 or 2 or 3 or 8 &&
+                             _observedProbeResponseHandles.Contains(connection))
+                    {
+                        var redactedMatch = FindUniqueRedactedG9N9NSourceLocked(sources, fallbackAttr);
+                        if (redactedMatch != null)
+                        {
+                            if (!redactedMatch.SawRedaction)
+                            {
+                                redactedMatch.SawRedaction = true;
+                                redactionLog = $"Windows omitted a verified button code (addr=0x{redactedMatch.Source.Address:X12}, attr=0x{fallbackAttr:X4}, expectedLen={expectedPayloadLength})";
+                            }
+                            truncatedAddr = redactedMatch.Source.Address;
+                        }
+                    }
+                }
+            }
             if (pendingSource == null && boundSource == null && att.Length >= 3 && att[0] is 0x1B or 0x1D &&
                 _loggedUnassignedNotifications.Count < MaxUnassignedNotificationShapes)
             {
@@ -741,6 +844,71 @@ public sealed class ChromecastEtwReceiver : IDisposable
         {
             TruncatedPacketDetected?.Invoke(truncatedAddr.Value);
         }
+    }
+
+    private SourceState? FindUniqueFallbackSourceLocked(
+        SourceState[] sources,
+        ReadOnlySpan<byte> att,
+        ushort attribute,
+        ReadOnlySpan<byte> report)
+    {
+        List<SourceState> candidates = [];
+        foreach (var source in sources)
+        {
+            if (source.BoundHandle.HasValue) continue;
+            if (source.Source.Protocol == EtwProtocolKind.GoogleG9N9N)
+            {
+                if (EvaluateG9N9NAttribute(source, attribute) == G9N9NAttributeDecision.Allowed &&
+                    TryParseG9N9NPayload(report, out _, out bool isDown, out _) &&
+                    isDown)
+                {
+                    candidates.Add(source);
+                }
+            }
+            else if (TryParseButtonReport(att, incomplete: false, source.Source.Protocol, out _, out bool isDown, out _) &&
+                     isDown)
+            {
+                candidates.Add(source);
+            }
+        }
+        return NarrowUniqueCandidateLocked(candidates);
+    }
+
+    private SourceState? FindUniqueRedactedG9N9NSourceLocked(SourceState[] sources, ushort attribute)
+    {
+        List<SourceState> candidates = [];
+        foreach (var source in sources)
+        {
+            if (source.BoundHandle.HasValue || source.Source.Protocol != EtwProtocolKind.GoogleG9N9N) continue;
+            if (EvaluateG9N9NAttribute(source, attribute) == G9N9NAttributeDecision.Allowed)
+            {
+                candidates.Add(source);
+            }
+        }
+        return NarrowUniqueCandidateLocked(candidates);
+    }
+
+    private SourceState? NarrowUniqueCandidateLocked(List<SourceState> candidates)
+    {
+        if (candidates.Count == 0) return null;
+        if (candidates.Count == 1)
+        {
+            if (_readyAddresses.Count > 0 && !_readyAddresses.Contains(candidates[0].Source.Address))
+            {
+                return null;
+            }
+            return candidates[0];
+        }
+
+        if (_readyAddresses.Count > 0)
+        {
+            var readyCandidates = candidates.Where(c => _readyAddresses.Contains(c.Source.Address)).ToList();
+            if (readyCandidates.Count == 1) return readyCandidates[0];
+            if (readyCandidates.Count > 1) candidates = readyCandidates;
+        }
+
+        var rangedCandidates = candidates.Where(c => c.HasHidRange).ToList();
+        return rangedCandidates.Count == 1 ? rangedCandidates[0] : null;
     }
 
     private void LogUnmatchedMarker(ReadOnlySpan<byte> packet, string reason)
