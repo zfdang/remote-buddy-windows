@@ -87,6 +87,7 @@
 
 ## 相关文档
 
+- [Windows 蓝牙遥控器信号处理分层架构总结](windows-ble-input-layers.md)
 - [Windows 遥控器输入实现](windows-remote-input.md)
 - [G9N9N 按键与 Windows 报告](g9n9n-buttons.md)
 - [小米 RC003 按键说明](xiaomi-rc003-buttons.md)
