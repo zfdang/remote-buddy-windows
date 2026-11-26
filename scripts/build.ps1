@@ -102,7 +102,7 @@ if ($Publish) {
     $targetExe = Join-Path $OutputDir "RemoteBuddy.App.exe"
     Write-Host "`n[SUCCESS] Build and publish completed successfully!" -ForegroundColor Green
     Write-Host "Executable binary: $targetExe" -ForegroundColor Yellow
-    Write-Host "Note: Local build did not execute tests (run scripts/test.ps1) and uses default dev assembly version." -ForegroundColor DarkGray
+    Write-Host "Note: Local build did not execute tests (run scripts/test.ps1)." -ForegroundColor DarkGray
 } else {
     Write-Host "`n[SUCCESS] Solution build completed successfully!" -ForegroundColor Green
     Write-Host "Note: Local build did not execute tests (run scripts/test.ps1)." -ForegroundColor DarkGray
