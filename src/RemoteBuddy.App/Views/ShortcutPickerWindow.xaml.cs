@@ -93,7 +93,7 @@ public partial class ShortcutPickerWindow : Window
 
         foreach (var row in Rows)
         {
-            var grid = new Grid { Margin = new Thickness(0, 3, 0, 3) };
+            var grid = new Grid { Margin = new Thickness(0, 2, 0, 2) };
             for (int i = 0; i < row.Length; i++)
             {
                 grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(row[i].WidthUnits, GridUnitType.Star) });
@@ -101,7 +101,7 @@ public partial class ShortcutPickerWindow : Window
                 var btn = new Button
                 {
                     Content = def.Label,
-                    Height = 38,
+                    Height = 34,
                     Margin = new Thickness(2),
                     Padding = new Thickness(4, 2, 4, 2),
                     FontSize = 12,
