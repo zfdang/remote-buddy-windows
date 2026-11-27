@@ -279,6 +279,54 @@ public class MappingDeviceTests
     }
 
     [Fact]
+    public void SelectingCustomShortcut_AndCancellingPicker_PreservesExistingMappingInMemoryAndDisk()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"rb-cancel-shortcut-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var dev = new RemoteDevice
+            {
+                Id = "mi",
+                Name = "MI RC",
+                ModelType = RemoteModelType.XiaomiRC003,
+                Mappings = RemoteDevice.CreateDefaultMappings(RemoteModelType.XiaomiRC003)
+            };
+            config.Current.Devices.Add(dev);
+            config.Current.SelectedDeviceId = dev.Id;
+            config.Save();
+
+            var vm = new MappingViewModel(config);
+            int pickerRequests = 0;
+            vm.RequestOpenShortcutPicker += _ => pickerRequests++;
+
+            vm.BeginEdit(RemoteButton.Back, ButtonTrigger.SingleClick);
+            Assert.Equal(ButtonAction.Escape, vm.GetConfiguredAction(RemoteButton.Back, ButtonTrigger.SingleClick).Action);
+
+            // Simulate clicking CustomShortcut and then cancelling the picker (ApplyCustomShortcut not called)
+            vm.SelectAction(ButtonAction.CustomShortcut);
+            Assert.Equal(1, pickerRequests);
+            Assert.Equal(ButtonAction.Escape, vm.GetConfiguredAction(RemoteButton.Back, ButtonTrigger.SingleClick).Action);
+
+            var reloaded = new ConfigService(path).Current.Devices.Single().Mappings
+                .Single(m => m.Button == RemoteButton.Back).GetConfiguredAction(ButtonTrigger.SingleClick);
+            Assert.Equal(ButtonAction.Escape, reloaded.Action);
+            Assert.Null(reloaded.Shortcut);
+
+            // Confirming a valid shortcut updates and persists CustomShortcut
+            vm.ApplyCustomShortcut("Ctrl+K");
+            var updated = new ConfigService(path).Current.Devices.Single().Mappings
+                .Single(m => m.Button == RemoteButton.Back).GetConfiguredAction(ButtonTrigger.SingleClick);
+            Assert.Equal(ButtonAction.CustomShortcut, updated.Action);
+            Assert.Equal("Ctrl+K", updated.Shortcut);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void MappingGesture_DisplaySummaryAndStatus_ReflectsConfiguration()
     {
         var mapping = new ButtonMapping { Button = RemoteButton.Up };

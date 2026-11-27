@@ -664,16 +664,11 @@ public partial class MappingViewModel : ObservableObject
 
         if (action == ButtonAction.CustomShortcut)
         {
-            var next = gesture.Configured.Clone();
-            next.Action = ButtonAction.CustomShortcut;
-            gesture.SetConfigured(next);
-            SyncSubEditorInputs(next);
-            RefreshEditorCollections();
-            NotifyEditorProperties();
-            if (string.IsNullOrWhiteSpace(next.Shortcut))
+            if (gesture.Action == ButtonAction.CustomShortcut && !string.IsNullOrWhiteSpace(gesture.Configured.Shortcut))
             {
-                RequestOpenShortcutPicker?.Invoke(next.Shortcut);
+                return;
             }
+            RequestOpenShortcutPicker?.Invoke(null);
             return;
         }
 
@@ -739,6 +734,7 @@ public partial class MappingViewModel : ObservableObject
             return;
         }
         ShortcutValidationError = string.Empty;
+        SelectedCategory = ButtonActionCategory.Custom;
         var next = gesture.Configured.Clone();
         next.Action = ButtonAction.CustomShortcut;
         next.Shortcut = normalized;
