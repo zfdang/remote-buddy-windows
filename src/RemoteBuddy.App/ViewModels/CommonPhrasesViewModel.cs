@@ -29,6 +29,14 @@ public sealed class CommonPhrasePositionItem
     public bool IsSelected { get; init; }
 }
 
+public sealed class CommonPhrasePositionRow
+{
+    public CommonPhrasePositionItem? Left { get; init; }
+    public CommonPhrasePositionItem? Right { get; init; }
+    public bool HasLeft => Left != null;
+    public bool HasRight => Right != null;
+}
+
 public partial class CommonPhrasesViewModel : ObservableObject
 {
     private readonly CommonPhraseStore _store;
@@ -68,6 +76,7 @@ public partial class CommonPhrasesViewModel : ObservableObject
 
     public ObservableCollection<CommonPhraseItemViewModel> FilteredPhrases { get; } = new();
     public ObservableCollection<CommonPhrasePositionItem> ExtraButtons { get; } = new();
+    public ObservableCollection<CommonPhrasePositionRow> ExtraButtonRows { get; } = new();
 
     public CommonPhrasePositionItem? PadOk { get; private set; }
     public CommonPhrasePositionItem? PadUp { get; private set; }
@@ -142,9 +151,18 @@ public partial class CommonPhrasesViewModel : ObservableObject
         OnPropertyChanged(nameof(PadRight));
 
         ExtraButtons.Clear();
-        foreach (var extra in CommonPhraseStore.GetExtraButtons(model))
+        ExtraButtonRows.Clear();
+        foreach (var row in CommonPhraseStore.GetExtraButtonRows(model))
         {
-            ExtraButtons.Add(BuildPositionItem(extra));
+            var left = row.Length > 0 && row[0] is { } leftButton ? BuildPositionItem(leftButton) : null;
+            var right = row.Length > 1 && row[1] is { } rightButton ? BuildPositionItem(rightButton) : null;
+            if (left != null) ExtraButtons.Add(left);
+            if (right != null) ExtraButtons.Add(right);
+            ExtraButtonRows.Add(new CommonPhrasePositionRow
+            {
+                Left = left,
+                Right = right
+            });
         }
 
         RebuildLibrary();

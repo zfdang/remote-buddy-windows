@@ -149,33 +149,56 @@
                                    FontSize="12" Foreground="#A9D7FF" TextWrapping="Wrap" Margin="0,0,0,10"
                                    Visibility="{Binding ShowBasePadButtons, Converter={StaticResource BoolToVisibilityConverter}, ConverterParameter=Inverse}"/>
 
-                        <!-- Model Extra Buttons -->
-                        <ItemsControl ItemsSource="{Binding ExtraButtons}" Margin="0,0,0,10">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <UniformGrid Columns="2"/>
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
+                        <!-- Model Extra Buttons (aligned to physical 2-column remote layout) -->
+                        <ItemsControl ItemsSource="{Binding ExtraButtonRows}" Margin="0,0,0,10">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
-                                    <Button Margin="3" Padding="8,7" Click="OnPadButtonClick" Tag="{Binding Button}">
-                                        <Button.Style>
-                                            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-                                                <Setter Property="Background" Value="#23252A"/>
-                                                <Setter Property="BorderBrush" Value="#3B3F47"/>
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                                                        <Setter Property="Background" Value="#1B3C5E"/>
-                                                        <Setter Property="BorderBrush" Value="#3399FF"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </Button.Style>
-                                        <StackPanel HorizontalAlignment="Center">
-                                            <TextBlock Text="{Binding ShortTitle}" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" HorizontalAlignment="Center"/>
-                                            <TextBlock Text="{Binding AssignedLabel}" FontSize="11.5" Foreground="{StaticResource SecondaryTextBrush}" TextTrimming="CharacterEllipsis" MaxWidth="105" HorizontalAlignment="Center"/>
-                                        </StackPanel>
-                                    </Button>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Button Grid.Column="0" Margin="3" Padding="8,7" Click="OnPadButtonClick"
+                                                Tag="{Binding Left.Button}"
+                                                Visibility="{Binding HasLeft, Converter={StaticResource BoolToVisibilityConverter}}">
+                                            <Button.Style>
+                                                <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                                    <Setter Property="Background" Value="#23252A"/>
+                                                    <Setter Property="BorderBrush" Value="#3B3F47"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Left.IsSelected}" Value="True">
+                                                            <Setter Property="Background" Value="#1B3C5E"/>
+                                                            <Setter Property="BorderBrush" Value="#3399FF"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Button.Style>
+                                            <StackPanel HorizontalAlignment="Center">
+                                                <TextBlock Text="{Binding Left.ShortTitle}" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" HorizontalAlignment="Center"/>
+                                                <TextBlock Text="{Binding Left.AssignedLabel}" FontSize="11.5" Foreground="{StaticResource SecondaryTextBrush}" TextTrimming="CharacterEllipsis" MaxWidth="105" HorizontalAlignment="Center"/>
+                                            </StackPanel>
+                                        </Button>
+                                        <Button Grid.Column="1" Margin="3" Padding="8,7" Click="OnPadButtonClick"
+                                                Tag="{Binding Right.Button}"
+                                                Visibility="{Binding HasRight, Converter={StaticResource BoolToVisibilityConverter}}">
+                                            <Button.Style>
+                                                <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                                    <Setter Property="Background" Value="#23252A"/>
+                                                    <Setter Property="BorderBrush" Value="#3B3F47"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Right.IsSelected}" Value="True">
+                                                            <Setter Property="Background" Value="#1B3C5E"/>
+                                                            <Setter Property="BorderBrush" Value="#3399FF"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Button.Style>
+                                            <StackPanel HorizontalAlignment="Center">
+                                                <TextBlock Text="{Binding Right.ShortTitle}" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" HorizontalAlignment="Center"/>
+                                                <TextBlock Text="{Binding Right.AssignedLabel}" FontSize="11.5" Foreground="{StaticResource SecondaryTextBrush}" TextTrimming="CharacterEllipsis" MaxWidth="105" HorizontalAlignment="Center"/>
+                                            </StackPanel>
+                                        </Button>
+                                    </Grid>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>

@@ -118,6 +118,14 @@ public sealed class CommonPhraseStoreTests : IDisposable
         bool returned = false;
         var vm = new CommonPhrasesViewModel(store, () => RemoteModelType.XiaomiRC003, () => returned = true);
 
+        Assert.Equal(3, vm.ExtraButtonRows.Count);
+        Assert.Null(vm.ExtraButtonRows[0].Left);
+        Assert.Equal(RemoteButton.VolumeUp, vm.ExtraButtonRows[0].Right?.Button);
+        Assert.Equal(RemoteButton.Home, vm.ExtraButtonRows[1].Left?.Button);
+        Assert.Equal(RemoteButton.VolumeDown, vm.ExtraButtonRows[1].Right?.Button);
+        Assert.Equal(RemoteButton.Menu, vm.ExtraButtonRows[2].Left?.Button);
+        Assert.Equal(RemoteButton.LiveTv, vm.ExtraButtonRows[2].Right?.Button);
+
         vm.SelectPosition(RemoteButton.Menu);
         vm.ChoosePhrase("builtin-12");
         Assert.Equal("builtin-12", store.GetPhrase(RemoteButton.Menu)?.Id);
