@@ -10,34 +10,55 @@ public class CommonPhraseInserterTests
 {
     private sealed class FakeClipboardAccess : IClipboardAccess
     {
-        public string? CurrentText { get; set; }
+        public ClipboardSnapshot? CurrentSnapshot { get; set; }
+        public bool FailSnapshot { get; set; }
         public uint Sequence { get; private set; } = 1;
         public List<string> WrittenTexts { get; } = [];
         public int RestoreCalls { get; private set; }
 
-        public bool TryWriteTextWithSnapshot(string text, out string? previousText, out bool hadPreviousText, out uint leaseSequence)
+        public void SetText(string text) =>
+            CurrentSnapshot = new ClipboardSnapshot([new ClipboardFormatEntry(13, System.Text.Encoding.Unicode.GetBytes(text + "\0"))]);
+
+        public string? CurrentText
         {
-            previousText = CurrentText;
-            hadPreviousText = CurrentText != null;
-            CurrentText = text;
+            get
+            {
+                var entry = CurrentSnapshot?.Entries.FirstOrDefault(e => e.Format == 13);
+                return entry == null ? null : System.Text.Encoding.Unicode.GetString(entry.Data).TrimEnd('\0');
+            }
+            set
+            {
+                if (value == null) CurrentSnapshot = null;
+                else SetText(value);
+            }
+        }
+
+        public bool TryWriteTextWithSnapshot(string text, out ClipboardSnapshot? snapshot, out uint leaseSequence)
+        {
+            snapshot = null;
+            leaseSequence = 0;
+            if (FailSnapshot) return false;
+
+            snapshot = CurrentSnapshot;
+            SetText(text);
             Sequence++;
             leaseSequence = Sequence;
             WrittenTexts.Add(text);
             return true;
         }
 
-        public bool TryRestoreTextIfUnchanged(string? previousText, bool hadPreviousText, uint expectedSequence)
+        public bool TryRestoreSnapshotIfUnchanged(ClipboardSnapshot? snapshot, uint expectedSequence)
         {
             RestoreCalls++;
             if (Sequence != expectedSequence) return false;
-            CurrentText = hadPreviousText ? previousText : null;
+            CurrentSnapshot = snapshot;
             Sequence++;
             return true;
         }
 
         public void SimulateExternalWrite(string text)
         {
-            CurrentText = text;
+            SetText(text);
             Sequence++;
         }
     }
@@ -140,5 +161,65 @@ public class CommonPhraseInserterTests
         Assert.False(inserter.InsertText("line1\nline2"));
         Assert.Null(pendingRestore);
         Assert.Equal("safe backup", clipboard.CurrentText);
+    }
+
+    [Fact]
+    public void InsertText_PreservesMultiFormatClipboardSnapshot_AndAbortsWhenSnapshotFails()
+    {
+        var original = new ClipboardSnapshot(
+        [
+            new ClipboardFormatEntry(15, [1, 2, 3, 4]), // CF_HDROP file list
+            new ClipboardFormatEntry(8, [5, 6, 7, 8])   // CF_DIB image
+        ]);
+        var clipboard = new FakeClipboardAccess { CurrentSnapshot = original };
+        Action? pendingRestore = null;
+
+        var inserter = new WindowsCommonPhraseInserter(
+            clipboard,
+            () => true,
+            () => null,
+            _ => true,
+            (_, callback) => pendingRestore = callback);
+
+        Assert.True(inserter.InsertText("hello"));
+        Assert.Equal("hello", clipboard.CurrentText);
+        pendingRestore!();
+        Assert.Same(original, clipboard.CurrentSnapshot);
+
+        clipboard.FailSnapshot = true;
+        Assert.False(inserter.InsertText("blocked"));
+        Assert.Same(original, clipboard.CurrentSnapshot);
+    }
+
+    [Fact]
+    public void Win32ClipboardAccess_PreservesDibAndFileDropFormats_RejectsUncopyableGdiOrNullOwner()
+    {
+        // Rejects null owner HWND without touching the clipboard
+        var noOwner = new Win32ClipboardAccess(() => 0);
+        Assert.False(noOwner.TryWriteTextWithSnapshot("test", out _, out _));
+
+        // Image with CF_DIB + synthesized CF_BITMAP succeeds by capturing CF_DIB and skipping CF_BITMAP
+        Assert.True(Win32ClipboardAccess.TryCaptureSnapshotFromFormats(
+            [2, 8, 17],
+            fmt => [(byte)fmt, 1, 2],
+            out var dibSnapshot));
+        Assert.NotNull(dibSnapshot);
+        Assert.Equal([8u, 17u], dibSnapshot!.Entries.Select(e => e.Format));
+
+        // Raw CF_BITMAP without CF_DIB/CF_DIBV5 is rejected so clipboard data is never lost
+        Assert.False(Win32ClipboardAccess.TryCaptureSnapshotFromFormats(
+            [2],
+            _ => [1, 2, 3],
+            out _));
+
+        // Delayed rendering (null handle) or non-HGLOBAL format aborts snapshot
+        Assert.False(Win32ClipboardAccess.TryCaptureSnapshotFromFormats(
+            [15],
+            _ => null,
+            out _));
+        Assert.False(Win32ClipboardAccess.TryCaptureSnapshotFromFormats(
+            [14], // CF_ENHMETAFILE
+            _ => [1, 2, 3],
+            out _));
     }
 }
