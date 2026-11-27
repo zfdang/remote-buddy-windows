@@ -68,6 +68,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private CancellationTokenSource? _etwStartCts;
     private CancellationTokenSource? _probeRetryCts;
     private readonly HashSet<ulong> _unboundEtwAddresses = [];
+    private readonly HashSet<ulong> _boundEtwAddresses = [];
     private readonly object _etwProbeLock = new();
     private readonly SemaphoreSlim _etwProbeSerializeLock = new(1, 1);
     private long _etwProbeRound;
@@ -222,6 +223,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     internal bool IsMappingPreviewSuppressed() =>
         ActiveOnboardingVm == null && (IsMainWindowActive || IsModalConfirmationOpen) && ActivePageName == "Mapping";
 
+    internal Func<bool>? IsEtwCaptureRunningForTest { get; set; }
+
+    internal void SimulateEtwSourceBoundForTest(ulong address) => OnEtwSourceBound(address);
+
     internal bool ShouldSuppressAppsKey()
     {
         if (ActiveOnboardingVm != null || IsMappingPreviewSuppressed() || !MappingVm.CustomMappingEnabled)
@@ -234,9 +239,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return false;
         }
 
+        bool etwRunning = IsEtwCaptureRunningForTest?.Invoke() ?? _chromecastButtonReceiver.IsRunning;
+        if (!etwRunning)
+        {
+            return false;
+        }
+
         foreach (var dev in KnownRemotes())
         {
             if (!_bluetoothManager.IsDeviceReady(dev.BluetoothAddress)) continue;
+            bool etwBound;
+            lock (_etwProbeLock) etwBound = _boundEtwAddresses.Contains(dev.BluetoothAddress);
+            if (!etwBound) continue;
 
             if (_isCommonPhraseOverlayOpen && CommonPhraseStore.GetButtons(dev.ModelType).Contains(RemoteButton.Menu))
             {
@@ -752,14 +766,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnEtwSourceBound(ulong address)
     {
-        lock (_etwProbeLock) _unboundEtwAddresses.Remove(address);
+        lock (_etwProbeLock)
+        {
+            _unboundEtwAddresses.Remove(address);
+            if (address != 0) _boundEtwAddresses.Add(address);
+        }
     }
 
     private void OnEtwUnexpectedDisconnect() => RunOnUi(() =>
     {
         AppLogger.Warn("ETW button capture disconnected unexpectedly; clearing held button gestures", "MainViewModel");
         ResetGestures();
-        lock (_etwProbeLock) _unboundEtwAddresses.Clear();
+        lock (_etwProbeLock)
+        {
+            _unboundEtwAddresses.Clear();
+            _boundEtwAddresses.Clear();
+        }
     });
 
     internal void TriggerEtwUnexpectedDisconnectForTest() => OnEtwUnexpectedDisconnect();
@@ -780,6 +802,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private void OnEtwDeviceDisconnected(ulong address) => RunOnUi(() =>
     {
         ResetDeviceGestures(address);
+        lock (_etwProbeLock) _boundEtwAddresses.Remove(address);
         if (_bluetoothManager.IsDeviceReady(address) && _chromecastButtonReceiver.IsRunning)
         {
             var source = _etwSources.FirstOrDefault(s => s.Address == address);
@@ -853,10 +876,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (!anyConnected || address == 0)
             {
                 _rawInputReceiver.ResetDeviceState();
+                lock (_etwProbeLock) _boundEtwAddresses.Clear();
             }
             else
             {
                 ResetDeviceGestures(address);
+                lock (_etwProbeLock) _boundEtwAddresses.Remove(address);
                 foreach (var handle in _rawAddresses.Where(pair => pair.Value == address).Select(pair => pair.Key).ToArray())
                 {
                     _rawAddresses.Remove(handle);

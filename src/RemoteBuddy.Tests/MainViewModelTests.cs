@@ -2040,13 +2040,16 @@ public class MainViewModelTests
             };
             config.Current.Devices.Add(dev);
 
+            bool etwRunning = true;
             var inserter = new FakeCommonPhraseInserter();
             using var vm = new MainViewModel(config, bt)
             {
-                CommonPhraseInserterForTest = inserter
+                CommonPhraseInserterForTest = inserter,
+                IsEtwCaptureRunningForTest = () => etwRunning
             };
 
-            // Default Menu -> ContextMenu does not suppress VK_APPS
+            // Default Menu -> ContextMenu does not suppress VK_APPS even when ETW is bound
+            vm.SimulateEtwSourceBoundForTest(addr);
             Assert.False(vm.ShouldSuppressAppsKey());
 
             // Opening Common Phrase overlay on Xiaomi claims Menu, so VK_APPS is suppressed
@@ -2055,9 +2058,15 @@ public class MainViewModelTests
             vm.CloseCommonPhraseOverlay();
             Assert.False(vm.ShouldSuppressAppsKey());
 
-            // Remapping Menu to OpenCommonPhrases enables VK_APPS suppression
+            // Remapping Menu to OpenCommonPhrases enables VK_APPS suppression while ETW is running & bound
             var menuMapping = dev.Mappings.Single(m => m.Button == RemoteButton.Menu);
             menuMapping.SingleClick = new ConfiguredButtonAction { Action = ButtonAction.OpenCommonPhrases };
+            Assert.True(vm.ShouldSuppressAppsKey());
+
+            // Without ETW running, VK_APPS must not be suppressed so Raw Input keeps working
+            etwRunning = false;
+            Assert.False(vm.ShouldSuppressAppsKey());
+            etwRunning = true;
             Assert.True(vm.ShouldSuppressAppsKey());
 
             // Mapping page preview or modal shortcut picker temporarily allows VK_APPS through

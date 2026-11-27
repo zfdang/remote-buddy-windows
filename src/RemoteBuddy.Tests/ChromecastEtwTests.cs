@@ -151,6 +151,7 @@ public class ChromecastEtwTests
     }
 
     [Theory]
+    [InlineData(0x65, RemoteButton.Menu, true, true)]
     [InlineData(0xF1, RemoteButton.Back, true, true)]
     [InlineData(0x80, RemoteButton.VolumeUp, true, true)]
     [InlineData(0x81, RemoteButton.VolumeDown, true, true)]
