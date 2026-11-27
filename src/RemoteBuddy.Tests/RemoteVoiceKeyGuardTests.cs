@@ -185,4 +185,38 @@ public class RemoteVoiceKeyGuardTests
         }
         finally { Marshal.FreeHGlobal(packet); }
     }
+
+    [Fact]
+    public void AppsKey_BlocksPhysicalPressAndMatchingReleaseWhenSuppressed_ButPassesInjectedEvents()
+    {
+        bool suppressApps = true;
+        using var guard = new RemoteVoiceKeyGuard(() => false)
+        {
+            ShouldSuppressAppsKey = () => suppressApps
+        };
+
+        var callback = typeof(RemoteVoiceKeyGuard).GetMethod("OnKeyboard", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        IntPtr packet = Marshal.AllocHGlobal(24);
+        try
+        {
+            for (int i = 0; i < 24; i++) Marshal.WriteByte(packet, i, 0);
+            Marshal.WriteInt32(packet, 0, NativeInputSender.VK_APPS);
+
+            // Physical VK_APPS down and matching up are blocked even if predicate flips before release
+            Assert.Equal((IntPtr)1, (IntPtr)callback.Invoke(guard, [0, (IntPtr)0x100, packet])!);
+            suppressApps = false;
+            Assert.Equal((IntPtr)1, (IntPtr)callback.Invoke(guard, [0, (IntPtr)0x101, packet])!);
+
+            // Next physical VK_APPS press/release passes when predicate is false
+            Assert.NotEqual((IntPtr)1, (IntPtr)callback.Invoke(guard, [0, (IntPtr)0x100, packet])!);
+            Assert.NotEqual((IntPtr)1, (IntPtr)callback.Invoke(guard, [0, (IntPtr)0x101, packet])!);
+
+            // Injected VK_APPS (e.g. SendInput ContextMenu) always passes even when suppression is active
+            suppressApps = true;
+            Marshal.WriteInt32(packet, 8, 0x10);
+            Assert.NotEqual((IntPtr)1, (IntPtr)callback.Invoke(guard, [0, (IntPtr)0x100, packet])!);
+            Assert.NotEqual((IntPtr)1, (IntPtr)callback.Invoke(guard, [0, (IntPtr)0x101, packet])!);
+        }
+        finally { Marshal.FreeHGlobal(packet); }
+    }
 }

@@ -24,8 +24,10 @@ public sealed class RemoteVoiceKeyGuard(Func<bool> voiceSessionActive) : IDispos
     private ushort[] _requiredModifierVks = [];
     private int _allowedUsbF5Downs;
     private int _allowedUsbF5Ups;
+    private bool _appsKeyDownSuppressed;
 
     internal Func<ushort, bool> IsKeyDownForTest { get; set; } = NativeInputSender.IsKeyPhysicallyDown;
+    public Func<bool>? ShouldSuppressAppsKey { get; set; }
 
     public void BeginShortcutHold(string shortcut)
     {
@@ -117,6 +119,7 @@ public sealed class RemoteVoiceKeyGuard(Func<bool> voiceSessionActive) : IDispos
     public void Clear()
     {
         _armed = false;
+        _appsKeyDownSuppressed = false;
         EndShortcutHold();
     }
 
@@ -124,55 +127,80 @@ public sealed class RemoteVoiceKeyGuard(Func<bool> voiceSessionActive) : IDispos
     {
         try
         {
-            if (code >= 0 && Marshal.ReadInt32(data) == 0x74)
+            if (code >= 0)
             {
-                uint flags = (uint)Marshal.ReadInt32(data, 8);
-                // Let injected cleanup events through. Observe no other keys.
-                if ((flags & 0x10) == 0)
+                int vkCode = Marshal.ReadInt32(data);
+                if (vkCode == 0x74)
                 {
-                    // The app owns the injected F5 until audio drain completes.
-                    // Physical repeats can re-trigger the IME; physical key-up
-                    // can release the injected hold before our balanced key-up.
-                    if (_ownsF5)
+                    uint flags = (uint)Marshal.ReadInt32(data, 8);
+                    // Let injected cleanup events through. Observe no other keys.
+                    if ((flags & 0x10) == 0)
                     {
-                        long heldMs = Environment.TickCount64 - Volatile.Read(ref _holdStartedAt);
-                        if (heldMs > AbsoluteMaxHoldDurationMs || (heldMs > MaxHoldDurationMs && !voiceSessionActive()))
+                        // The app owns the injected F5 until audio drain completes.
+                        // Physical repeats can re-trigger the IME; physical key-up
+                        // can release the injected hold before our balanced key-up.
+                        if (_ownsF5)
                         {
-                            _ownsF5 = false;
-                        }
-                        else
-                        {
-                            bool isKeyUp = message.ToInt64() is 0x101 or 0x105;
-                            if (isKeyUp)
+                            long heldMs = Environment.TickCount64 - Volatile.Read(ref _holdStartedAt);
+                            if (heldMs > AbsoluteMaxHoldDurationMs || (heldMs > MaxHoldDurationMs && !voiceSessionActive()))
                             {
-                                if (Interlocked.Decrement(ref _allowedUsbF5Ups) >= 0)
-                                {
-                                    return CallNextHookEx(_hook, code, message, data);
-                                }
-                                Interlocked.Increment(ref _allowedUsbF5Ups);
-                                Interlocked.Increment(ref _blockedUps);
+                                _ownsF5 = false;
                             }
                             else
                             {
-                                if (Volatile.Read(ref _allowedUsbF5Downs) > 0 &&
-                                    AreRequiredModifiersDown() &&
-                                    Interlocked.Decrement(ref _allowedUsbF5Downs) >= 0)
+                                bool isKeyUp = message.ToInt64() is 0x101 or 0x105;
+                                if (isKeyUp)
                                 {
-                                    return CallNextHookEx(_hook, code, message, data);
+                                    if (Interlocked.Decrement(ref _allowedUsbF5Ups) >= 0)
+                                    {
+                                        return CallNextHookEx(_hook, code, message, data);
+                                    }
+                                    Interlocked.Increment(ref _allowedUsbF5Ups);
+                                    Interlocked.Increment(ref _blockedUps);
                                 }
-                                Interlocked.Increment(ref _blockedDowns);
+                                else
+                                {
+                                    if (Volatile.Read(ref _allowedUsbF5Downs) > 0 &&
+                                        AreRequiredModifiersDown() &&
+                                        Interlocked.Decrement(ref _allowedUsbF5Downs) >= 0)
+                                    {
+                                        return CallNextHookEx(_hook, code, message, data);
+                                    }
+                                    Interlocked.Increment(ref _blockedDowns);
+                                }
+                                return (IntPtr)1;
                             }
+                        }
+                        if (!IsSuppressionEnabled) return CallNextHookEx(_hook, code, message, data);
+                        bool sessionActive = voiceSessionActive();
+                        if (!sessionActive && _armed && Environment.TickCount64 - Volatile.Read(ref _armedAt) > 2000)
+                            _armed = false;
+                        if (sessionActive || _armed)
+                        {
+                            if (message.ToInt64() is 0x101 or 0x105) _armed = false;
                             return (IntPtr)1;
                         }
                     }
-                    if (!IsSuppressionEnabled) return CallNextHookEx(_hook, code, message, data);
-                    bool sessionActive = voiceSessionActive();
-                    if (!sessionActive && _armed && Environment.TickCount64 - Volatile.Read(ref _armedAt) > 2000)
-                        _armed = false;
-                    if (sessionActive || _armed)
+                }
+                else if (vkCode == NativeInputSender.VK_APPS)
+                {
+                    uint flags = (uint)Marshal.ReadInt32(data, 8);
+                    if ((flags & 0x10) == 0)
                     {
-                        if (message.ToInt64() is 0x101 or 0x105) _armed = false;
-                        return (IntPtr)1;
+                        bool isKeyUp = message.ToInt64() is 0x101 or 0x105;
+                        if (isKeyUp)
+                        {
+                            if (_appsKeyDownSuppressed)
+                            {
+                                _appsKeyDownSuppressed = false;
+                                return (IntPtr)1;
+                            }
+                        }
+                        else if (ShouldSuppressAppsKey?.Invoke() == true)
+                        {
+                            _appsKeyDownSuppressed = true;
+                            return (IntPtr)1;
+                        }
                     }
                 }
             }
@@ -197,6 +225,7 @@ public sealed class RemoteVoiceKeyGuard(Func<bool> voiceSessionActive) : IDispos
     {
         EndShortcutHold();
         _armed = false;
+        _appsKeyDownSuppressed = false;
         if (_hook != IntPtr.Zero)
         {
             UnhookWindowsHookEx(_hook);

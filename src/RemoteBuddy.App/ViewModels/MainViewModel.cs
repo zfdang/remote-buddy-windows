@@ -222,6 +222,47 @@ public partial class MainViewModel : ObservableObject, IDisposable
     internal bool IsMappingPreviewSuppressed() =>
         ActiveOnboardingVm == null && (IsMainWindowActive || IsModalConfirmationOpen) && ActivePageName == "Mapping";
 
+    internal bool ShouldSuppressAppsKey()
+    {
+        if (ActiveOnboardingVm != null || IsMappingPreviewSuppressed() || !MappingVm.CustomMappingEnabled)
+        {
+            return false;
+        }
+
+        if (!_bluetoothManager.IsConnected)
+        {
+            return false;
+        }
+
+        foreach (var dev in KnownRemotes())
+        {
+            if (!_bluetoothManager.IsDeviceReady(dev.BluetoothAddress)) continue;
+
+            if (_isCommonPhraseOverlayOpen && CommonPhraseStore.GetButtons(dev.ModelType).Contains(RemoteButton.Menu))
+            {
+                return true;
+            }
+
+            var menuMapping = dev.Mappings?.FirstOrDefault(m => m.Button == RemoteButton.Menu);
+            if (menuMapping != null && HasRemappedNonContextMenuAction(menuMapping))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasRemappedNonContextMenuAction(ButtonMapping mapping)
+    {
+        return IsNonContextMenuAction(mapping.GetEffectiveAction(ButtonTrigger.SingleClick).Action)
+            || IsNonContextMenuAction(mapping.GetEffectiveAction(ButtonTrigger.DoubleClick).Action)
+            || IsNonContextMenuAction(mapping.GetEffectiveAction(ButtonTrigger.LongPress).Action);
+
+        static bool IsNonContextMenuAction(ButtonAction action) =>
+            action is not ButtonAction.Disabled and not ButtonAction.ContextMenu;
+    }
+
     private int _buttonSourceGeneration;
 
     public event Action<WizardMode>? RequestOpenWizard;
@@ -240,7 +281,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _commonPhraseStore = new CommonPhraseStore(
             CommonPhraseStore.ResolveDefaultPathForConfigDirectory(_configService.ConfigFilePath));
         _voiceKeyGuard = new RemoteVoiceKeyGuard(() =>
-            _bluetoothManager.SessionState is BluetoothSessionState.Opening or BluetoothSessionState.Streaming or BluetoothSessionState.Draining);
+            _bluetoothManager.SessionState is BluetoothSessionState.Opening or BluetoothSessionState.Streaming or BluetoothSessionState.Draining)
+        {
+            ShouldSuppressAppsKey = ShouldSuppressAppsKey
+        };
         _rawInputReceiver.PhysicalVoiceKeyPressed += OnRawVoiceKey;
 
         GeneralVm = new GeneralViewModel(_configService, _bluetoothManager, mode => RequestOpenWizard?.Invoke(mode), Navigate);

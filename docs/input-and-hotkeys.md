@@ -31,7 +31,7 @@
   * 若要彻底“吞掉（Block）”原始按键，传统 Windows API 需要使用低级键盘钩子 `SetWindowsHookEx(WH_KEYBOARD_LL)`；
   * 但是，[KBDLLHOOKSTRUCT 结构体](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-kbdllhookstruct) **根本不包含设备句柄 `hDevice`**！
   * 如果在全局钩子中直接拦截并返回 1，会导致用户电脑自带的物理键盘对应按键也被误拦截。
-普通键当前采用附加映射。语音链路另有针对物理 F5 的防护，是否启用取决于目标输入法快捷键。
+普通键当前采用附加映射。其中对系统 `VK_APPS`（`0x5D`，遥控器菜单键）在已连接遥控器将其重映射为非上下文菜单动作或处于常用语浮窗期间会通过 `WH_KEYBOARD_LL` 做条件抑制（放行 `LLKHF_INJECTED`）。语音链路另有针对物理 F5 的防护，是否启用取决于目标输入法快捷键。
 
 ---
 

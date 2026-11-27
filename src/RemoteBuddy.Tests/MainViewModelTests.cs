@@ -2019,4 +2019,69 @@ public class MainViewModelTests
             if (File.Exists(path)) File.Delete(path);
         }
     }
+
+    [Fact]
+    public void ShouldSuppressAppsKey_TracksRemappedMenuActionOverlayAndPreviewState()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"apps-suppress-{Guid.NewGuid():N}.json");
+        try
+        {
+            var config = new ConfigService(path);
+            var bt = new TestBluetoothManager { IsConnected = true, IsReady = true };
+            const ulong addr = 0xC05D39F86E0C;
+            bt.ReadyAddresses.Add(addr);
+            var dev = new RemoteDevice
+            {
+                Id = "mi",
+                BluetoothAddress = addr,
+                Name = "MI RC",
+                ModelType = RemoteModelType.XiaomiRC003,
+                Mappings = RemoteDevice.CreateDefaultMappings(RemoteModelType.XiaomiRC003)
+            };
+            config.Current.Devices.Add(dev);
+
+            var inserter = new FakeCommonPhraseInserter();
+            using var vm = new MainViewModel(config, bt)
+            {
+                CommonPhraseInserterForTest = inserter
+            };
+
+            // Default Menu -> ContextMenu does not suppress VK_APPS
+            Assert.False(vm.ShouldSuppressAppsKey());
+
+            // Opening Common Phrase overlay on Xiaomi claims Menu, so VK_APPS is suppressed
+            vm.ToggleCommonPhraseOverlay(addr);
+            Assert.True(vm.ShouldSuppressAppsKey());
+            vm.CloseCommonPhraseOverlay();
+            Assert.False(vm.ShouldSuppressAppsKey());
+
+            // Remapping Menu to OpenCommonPhrases enables VK_APPS suppression
+            var menuMapping = dev.Mappings.Single(m => m.Button == RemoteButton.Menu);
+            menuMapping.SingleClick = new ConfiguredButtonAction { Action = ButtonAction.OpenCommonPhrases };
+            Assert.True(vm.ShouldSuppressAppsKey());
+
+            // Mapping page preview or modal shortcut picker temporarily allows VK_APPS through
+            vm.Navigate("Mapping");
+            vm.IsMainWindowActive = true;
+            Assert.False(vm.ShouldSuppressAppsKey());
+            vm.IsMainWindowActive = false;
+            vm.IsModalConfirmationOpen = true;
+            Assert.False(vm.ShouldSuppressAppsKey());
+            vm.IsModalConfirmationOpen = false;
+            Assert.True(vm.ShouldSuppressAppsKey());
+
+            // Disabling custom mapping or disconnecting disables VK_APPS suppression
+            vm.MappingVm.CustomMappingEnabled = false;
+            Assert.False(vm.ShouldSuppressAppsKey());
+            vm.MappingVm.CustomMappingEnabled = true;
+            bt.IsConnected = false;
+            Assert.False(vm.ShouldSuppressAppsKey());
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+            string phrasesPath = CommonPhraseStore.ResolveDefaultPathForConfigDirectory(path);
+            if (File.Exists(phrasesPath)) File.Delete(phrasesPath);
+        }
+    }
 }

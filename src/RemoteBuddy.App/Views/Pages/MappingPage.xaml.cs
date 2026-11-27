@@ -74,10 +74,19 @@ public partial class MappingPage : UserControl
     {
         if (_mappingViewModel == null) return;
         var owner = Window.GetWindow(this);
-        var dialog = new ShortcutPickerWindow(currentShortcut) { Owner = owner };
-        if (dialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(dialog.SelectedShortcut))
+        var mainVm = owner?.DataContext as MainViewModel;
+        if (mainVm != null) mainVm.IsModalConfirmationOpen = true;
+        try
         {
-            _mappingViewModel.ApplyCustomShortcut(dialog.SelectedShortcut);
+            var dialog = new ShortcutPickerWindow(currentShortcut) { Owner = owner };
+            if (dialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(dialog.SelectedShortcut))
+            {
+                _mappingViewModel.ApplyCustomShortcut(dialog.SelectedShortcut);
+            }
+        }
+        finally
+        {
+            if (mainVm != null) mainVm.IsModalConfirmationOpen = false;
         }
     }
 
