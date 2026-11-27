@@ -109,9 +109,11 @@ public partial class MainWindow : Window
     private DevicesPage? _devicesPage;
     private IntegrationsPage? _integrationsPage;
     private MappingPage? _mappingPage;
+    private CommonPhrasesPage? _commonPhrasesPage;
     private AppIntegrationPage? _appIntegrationPage;
     private AboutPage? _aboutPage;
     private SettingsPage? _settingsPage;
+    private CommonPhraseOverlayWindow? _commonPhraseOverlayWindow;
 
     private bool _isSystemShutdown = false;
 
@@ -332,7 +334,11 @@ public partial class MainWindow : Window
         {
             vm.IsMainWindowActive = false;
             vm.PropertyChanged -= OnViewModelPropertyChanged;
+            vm.RequestToggleCommonPhraseOverlay -= OnRequestToggleCommonPhraseOverlay;
+            vm.RequestCloseCommonPhraseOverlay -= OnRequestCloseCommonPhraseOverlay;
+            vm.RequestActivateMainWindow -= RestoreWindow;
         }
+        OnRequestCloseCommonPhraseOverlay();
 
         if (_trayIconCreated)
         {
@@ -352,13 +358,55 @@ public partial class MainWindow : Window
             _devicesPage = new DevicesPage { DataContext = vm.DevicesVm };
             _integrationsPage = new IntegrationsPage { DataContext = vm.IntegrationsVm };
             _mappingPage = new MappingPage { DataContext = vm.MappingVm };
+            _commonPhrasesPage = new CommonPhrasesPage { DataContext = vm.CommonPhrasesVm };
             _appIntegrationPage = new AppIntegrationPage { DataContext = vm.AppIntegrationVm };
             _aboutPage = new AboutPage { DataContext = vm.AboutVm };
             _settingsPage = new SettingsPage { DataContext = vm.SettingsVm };
 
             vm.PropertyChanged += OnViewModelPropertyChanged;
+            vm.RequestToggleCommonPhraseOverlay += OnRequestToggleCommonPhraseOverlay;
+            vm.RequestCloseCommonPhraseOverlay += OnRequestCloseCommonPhraseOverlay;
+            vm.RequestActivateMainWindow += RestoreWindow;
             SwitchPage(vm.ActivePageName);
             UpdateWindowActiveState();
+        }
+    }
+
+    private void OnRequestToggleCommonPhraseOverlay(Core.Models.RemoteModelType? model, Core.Config.CommonPhraseStore store)
+    {
+        if (DataContext is not MainViewModel vm) return;
+        nint targetHwnd = vm.CommonPhraseTargetWindowHandle;
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (_commonPhraseOverlayWindow == null)
+            {
+                _commonPhraseOverlayWindow = new CommonPhraseOverlayWindow(
+                    model,
+                    store,
+                    targetHwnd,
+                    button => vm.InsertCommonPhrase(button),
+                    () => vm.CloseCommonPhraseOverlay());
+            }
+            else
+            {
+                _commonPhraseOverlayWindow.BindContent(model, store, targetHwnd);
+            }
+            _commonPhraseOverlayWindow.Show();
+        });
+    }
+
+    private void OnRequestCloseCommonPhraseOverlay()
+    {
+        if (_commonPhraseOverlayWindow == null) return;
+        var win = _commonPhraseOverlayWindow;
+        _commonPhraseOverlayWindow = null;
+        if (Dispatcher.CheckAccess())
+        {
+            win.Close();
+        }
+        else
+        {
+            Dispatcher.BeginInvoke(win.Close);
         }
     }
 
@@ -397,6 +445,7 @@ public partial class MainWindow : Window
             "Devices" or "Connection" => _devicesPage,
             "Integrations" => _integrationsPage,
             "Mapping" => _mappingPage,
+            "CommonPhrases" => _commonPhrasesPage,
             "AppIntegration" => _appIntegrationPage,
             "About" => _aboutPage,
             "Settings" => _settingsPage,

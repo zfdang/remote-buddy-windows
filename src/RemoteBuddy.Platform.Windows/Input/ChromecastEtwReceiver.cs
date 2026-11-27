@@ -958,7 +958,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
                     }
                     else if (!isDown && source.Source.Protocol == EtwProtocolKind.Xiaomi &&
                         att.Length == 11 && BinaryPrimitives.ReadUInt16LittleEndian(att[1..]) == XiaomiKeyboardAttribute &&
-                        source.Held is not (RemoteButton.Back or RemoteButton.VolumeUp or RemoteButton.VolumeDown))
+                        source.Held is not (RemoteButton.Back or RemoteButton.VolumeUp or RemoteButton.VolumeDown or RemoteButton.Menu))
                     {
                         break;
                     }
@@ -1296,7 +1296,8 @@ public sealed class ChromecastEtwReceiver : IDisposable
             }
 
             // The RC003 sends an eight-byte keyboard report without a report ID.
-            // Standard keys already arrive through Raw Input. Recover only the dropped usages.
+            // Standard keys arrive through Raw Input, while dropped usages (and Menu when VK_APPS is suppressed)
+            // are recovered from this report.
             if (attribute == XiaomiKeyboardAttribute && report.Length == 8)
             {
                 if (report[0] != 0 || report[1] != 0) return false;
@@ -1304,6 +1305,7 @@ public sealed class ChromecastEtwReceiver : IDisposable
                 {
                     button = usage switch
                     {
+                        0x65 => RemoteButton.Menu,
                         0xF1 => RemoteButton.Back,
                         0x80 => RemoteButton.VolumeUp,
                         0x81 => RemoteButton.VolumeDown,

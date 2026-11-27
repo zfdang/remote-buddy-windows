@@ -5,11 +5,10 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
-using System.Windows.Media.Animation;
 using System.Windows.Threading;
+using Microsoft.Win32;
 using RemoteBuddy.App.ViewModels;
 using RemoteBuddy.Core.Models;
-using RemoteBuddy.Platform.Windows.Input;
 
 namespace RemoteBuddy.App.Views.Pages;
 
@@ -21,45 +20,79 @@ public partial class MappingPage : UserControl
     public MappingPage()
     {
         InitializeComponent();
+        DataContextChanged += OnDataContextChanged;
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
     }
 
+    private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        DetachViewModel();
+        AttachViewModel(DataContext as MappingViewModel);
+        MappingCanvasControl.DataContext = DataContext;
+    }
+
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
-        _mappingViewModel = DataContext as MappingViewModel;
-        if (_mappingViewModel != null)
-            _mappingViewModel.HardwareButtonPressed += AnimateHardwareButton;
+        AttachViewModel(DataContext as MappingViewModel);
+        MappingCanvasControl.DataContext = DataContext;
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
-        if (_mappingViewModel != null)
-            _mappingViewModel.HardwareButtonPressed -= AnimateHardwareButton;
+        DetachViewModel();
+    }
+
+    private void AttachViewModel(MappingViewModel? vm)
+    {
+        if (vm == null || ReferenceEquals(_mappingViewModel, vm)) return;
+        _mappingViewModel = vm;
+        _mappingViewModel.RequestOpenShortcutPicker += OnRequestOpenShortcutPicker;
+        _mappingViewModel.RequestScrollEditorIntoView += OnRequestScrollEditorIntoView;
+    }
+
+    private void DetachViewModel()
+    {
+        if (_mappingViewModel == null) return;
+        _mappingViewModel.RequestOpenShortcutPicker -= OnRequestOpenShortcutPicker;
+        _mappingViewModel.RequestScrollEditorIntoView -= OnRequestScrollEditorIntoView;
         _mappingViewModel = null;
     }
 
-    private void AnimateHardwareButton(RemoteButton button)
+    private void OnRequestScrollEditorIntoView()
     {
-        var control = FindVisibleButton(RemoteButtons, button.ToString());
-        if (control != null)
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
         {
-            var press = (Storyboard)FindResource("RemoteButtonPress");
-            press.Begin(control, HandoffBehavior.SnapshotAndReplace, isControllable: false);
+            if (ActionEditorCard.IsVisible)
+            {
+                ActionEditorCard.BringIntoView();
+            }
+        });
+    }
+
+    private void OnRequestOpenShortcutPicker(string? currentShortcut)
+    {
+        if (_mappingViewModel == null) return;
+        var owner = Window.GetWindow(this);
+        var mainVm = owner?.DataContext as MainViewModel;
+        if (mainVm != null) mainVm.IsModalConfirmationOpen = true;
+        try
+        {
+            var dialog = new ShortcutPickerWindow(currentShortcut) { Owner = owner };
+            if (dialog.ShowDialog() == true && !string.IsNullOrWhiteSpace(dialog.SelectedShortcut))
+            {
+                _mappingViewModel.ApplyCustomShortcut(dialog.SelectedShortcut);
+            }
+        }
+        finally
+        {
+            if (mainVm != null) mainVm.IsModalConfirmationOpen = false;
         }
     }
 
-    private static Button? FindVisibleButton(FrameworkElement element, string tag)
+    private void OpenShortcutPickerDialog(object sender, RoutedEventArgs e)
     {
-        if (!element.IsVisible) return null;
-        if (element is Button button && Equals(button.Tag, tag)) return button;
-
-        foreach (var child in LogicalTreeHelper.GetChildren(element).OfType<FrameworkElement>())
-        {
-            var match = FindVisibleButton(child, tag);
-            if (match != null) return match;
-        }
-        return null;
+        OnRequestOpenShortcutPicker(_mappingViewModel?.EditingConfiguredAction.Shortcut);
     }
 
     private static void FlushFocusedTextBoxBinding()
@@ -68,11 +101,6 @@ public partial class MappingPage : UserControl
         {
             tb.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
         }
-    }
-
-    private void FlushFocusedInput(object sender, MouseButtonEventArgs e)
-    {
-        FlushFocusedTextBoxBinding();
     }
 
     private void OnDeviceSelectorPreviewMouseDown(object sender, MouseButtonEventArgs e)
@@ -95,6 +123,7 @@ public partial class MappingPage : UserControl
     private void OnDeviceSelectorSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         ClearDeviceSelectorFocus(sender as ComboBox);
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () => PageScrollViewer?.ScrollToTop());
     }
 
     private void OnDeviceSelectorDropDownClosed(object sender, EventArgs e)
@@ -124,19 +153,72 @@ public partial class MappingPage : UserControl
         Dispatcher.BeginInvoke(DispatcherPriority.Input, (Action)ReleaseFocus);
     }
 
-    private void SelectRemoteButton(object sender, RoutedEventArgs e)
+    private void OnCategoryButtonClick(object sender, RoutedEventArgs e)
     {
-        FlushFocusedTextBoxBinding();
-        if (DataContext is MappingViewModel vm && sender is Button { Tag: string tag })
-            vm.SelectButton(tag);
+        if (_mappingViewModel != null && sender is Button { Tag: ButtonActionCategory category })
+        {
+            _mappingViewModel.SelectCategory(category);
+        }
+    }
+
+    private void OnActionOptionClick(object sender, RoutedEventArgs e)
+    {
+        if (_mappingViewModel != null && sender is Button { Tag: ButtonAction action })
+        {
+            _mappingViewModel.SelectAction(action);
+        }
+    }
+
+    private void ChooseCustomApplication(object sender, RoutedEventArgs e)
+    {
+        if (_mappingViewModel == null) return;
+        var dialog = new OpenFileDialog
+        {
+            Title = "选择应用程序",
+            Filter = "应用程序 (*.exe)|*.exe|所有文件 (*.*)|*.*",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        var owner = Window.GetWindow(this);
+        bool? picked = owner != null ? dialog.ShowDialog(owner) : dialog.ShowDialog();
+        if (picked == true && !string.IsNullOrWhiteSpace(dialog.FileName))
+        {
+            _mappingViewModel.AddCustomApplication(dialog.FileName);
+        }
+    }
+
+    private void OnSelectCustomAppClick(object sender, RoutedEventArgs e)
+    {
+        if (_mappingViewModel != null && sender is Button { Tag: string id })
+        {
+            _mappingViewModel.SelectCustomApplication(id);
+        }
+    }
+
+    private void OnDeleteCustomAppClick(object sender, RoutedEventArgs e)
+    {
+        if (_mappingViewModel != null && sender is Button { Tag: string id })
+        {
+            _mappingViewModel.DeleteCustomApplication(id);
+        }
+    }
+
+    private void OnSelectCustomAppStrategyNone(object sender, RoutedEventArgs e)
+    {
+        _mappingViewModel?.SetCustomAppFocusStrategy(CustomApplicationFocusStrategy.None);
+    }
+
+    private void OnSelectCustomAppStrategyShortcut(object sender, RoutedEventArgs e)
+    {
+        _mappingViewModel?.SetCustomAppFocusStrategy(CustomApplicationFocusStrategy.KeyboardShortcut);
     }
 
     private void ConfirmResetAllMappings(object sender, RoutedEventArgs e)
     {
         if (DataContext is not MappingViewModel { SelectedDevice: { } device } vm) return;
-        string message = $"将「{device.Name}」的所有按键恢复为默认映射？\n\n此遥控器的单击、长按和双击自定义映射都会被覆盖，且无法撤销。";
+        string message = $"此操作将把「{device.Name}」的所有按键动作恢复为出厂默认设置，已录入的自定义快捷键将被清空。此操作无法撤销。";
         var owner = Window.GetWindow(this);
-        const string title = "恢复所有按键的默认映射";
+        const string title = "确认恢复所有默认设置？";
         var mainVm = (owner?.DataContext ?? Application.Current?.MainWindow?.DataContext) as MainViewModel;
         if (mainVm != null) mainVm.IsModalConfirmationOpen = true;
         MessageBoxResult result;
@@ -151,7 +233,9 @@ public partial class MappingPage : UserControl
             if (mainVm != null) mainVm.IsModalConfirmationOpen = false;
         }
         if (result == MessageBoxResult.Yes && ReferenceEquals(vm.SelectedDevice, device))
+        {
             vm.ResetToDefaults();
+        }
     }
 
     private void OnRecordShortcutChecked(object sender, RoutedEventArgs e)
@@ -165,7 +249,7 @@ public partial class MappingPage : UserControl
 
     private void RecordShortcut(object sender, KeyEventArgs e)
     {
-        if (sender is not ToggleButton { IsChecked: true, DataContext: MappingGestureViewModel gesture } recorder) return;
+        if (sender is not ToggleButton { IsChecked: true } recorder || _mappingViewModel == null) return;
         e.Handled = true;
 
         if (_shortcutRecorder.OnKeyDown(e.Key, e.SystemKey, Keyboard.Modifiers, out var captured, out bool cancelled))
@@ -176,7 +260,7 @@ public partial class MappingPage : UserControl
             }
             else if (!string.IsNullOrEmpty(captured))
             {
-                gesture.Shortcut = captured;
+                _mappingViewModel.ApplyCustomShortcut(captured);
                 recorder.IsChecked = false;
             }
         }
@@ -184,12 +268,12 @@ public partial class MappingPage : UserControl
 
     private void RecordShortcutKeyUp(object sender, KeyEventArgs e)
     {
-        if (sender is not ToggleButton { IsChecked: true, DataContext: MappingGestureViewModel gesture } recorder) return;
+        if (sender is not ToggleButton { IsChecked: true } recorder || _mappingViewModel == null) return;
         e.Handled = true;
 
         if (_shortcutRecorder.OnKeyUp(e.Key, e.SystemKey, out var captured) && !string.IsNullOrEmpty(captured))
         {
-            gesture.Shortcut = captured;
+            _mappingViewModel.ApplyCustomShortcut(captured);
             recorder.IsChecked = false;
         }
     }
@@ -198,32 +282,5 @@ public partial class MappingPage : UserControl
     {
         _shortcutRecorder.Reset();
         if (sender is ToggleButton recorder) recorder.IsChecked = false;
-    }
-
-    private void ApplyShortcutPreset(object sender, SelectionChangedEventArgs e)
-    {
-        if (sender is ComboBox { SelectedItem: KeyValuePair<string, string> preset, DataContext: MappingGestureViewModel gesture } picker)
-        {
-            gesture.Shortcut = preset.Value;
-            picker.SelectedIndex = -1;
-        }
-    }
-
-    private void SelectSingleClickFromStatus(object sender, MouseButtonEventArgs e)
-    {
-        FlushFocusedTextBoxBinding();
-        if (DataContext is MappingViewModel vm) vm.SelectedTrigger = ButtonTrigger.SingleClick;
-    }
-
-    private void SelectLongPressFromStatus(object sender, MouseButtonEventArgs e)
-    {
-        FlushFocusedTextBoxBinding();
-        if (DataContext is MappingViewModel vm) vm.SelectedTrigger = ButtonTrigger.LongPress;
-    }
-
-    private void SelectDoubleClickFromStatus(object sender, MouseButtonEventArgs e)
-    {
-        FlushFocusedTextBoxBinding();
-        if (DataContext is MappingViewModel vm) vm.SelectedTrigger = ButtonTrigger.DoubleClick;
     }
 }

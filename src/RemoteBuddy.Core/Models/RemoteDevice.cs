@@ -140,9 +140,11 @@ public partial class RemoteDevice : ObservableObject
     };
 
     [JsonIgnore]
-    public string IllustrationSource => IsG9N9N
-        ? "/Resources/ChromecastG9N9NPhoto.png"
-        : (IsT1 ? "/Resources/T1RemoteIllustration.png" : "/Resources/BuddyRemoteIllustration.png");
+    public string IllustrationSource => IsGY3LELayout
+        ? "/Resources/GoogleStreamerGY3LEIllustration.png"
+        : (IsG9N9N
+            ? "/Resources/ChromecastG9N9NPhoto.png"
+            : (IsT1 ? "/Resources/T1RemoteIllustration.png" : "/Resources/BuddyRemoteIllustration.png"));
 
     [JsonIgnore]
     public string VoiceModeHelp => VoiceButtonMode == G9N9NVoiceButtonMode.SmartToggle
@@ -199,82 +201,102 @@ public partial class RemoteDevice : ObservableObject
     [ObservableProperty]
     private List<ButtonMapping> _mappings = CreateDefaultMappings(RemoteModelType.Unknown);
 
+    public static bool HasNativeKeyboardNavigation(RemoteModelType type) =>
+        type is RemoteModelType.XiaomiRC001
+            or RemoteModelType.XiaomiRC003
+            or RemoteModelType.XiaomiARN9
+            or RemoteModelType.T1Remote
+            or RemoteModelType.Unknown;
+
+    public static bool IsNativeKeyboardPassthroughButton(RemoteModelType type, RemoteButton button) =>
+        HasNativeKeyboardNavigation(type) &&
+        button is RemoteButton.Up or RemoteButton.Down or RemoteButton.Left or RemoteButton.Right or RemoteButton.Ok;
+
+    public static ConfiguredButtonAction GetDefaultAction(
+        RemoteModelType type,
+        RemoteButton button,
+        ButtonTrigger trigger)
+    {
+        var defaults = CreateDefaultMappings(type);
+        var match = defaults.FirstOrDefault(m => m.Button == button);
+        return match?.GetConfiguredAction(trigger).Clone() ?? ConfiguredButtonAction.Disabled;
+    }
+
     public static List<ButtonMapping> CreateDefaultMappings(RemoteModelType type)
     {
-        bool isG9N9N = type == RemoteModelType.GoogleG9N9N;
         var list = new List<ButtonMapping>();
-        void Add(RemoteButton btn, ButtonActionType click, MediaCommand media = MediaCommand.None, string? shortcut = null)
+        void Add(
+            RemoteButton btn,
+            ButtonAction singleAction,
+            ButtonAction? longPressOverride = null)
         {
-            bool repeats = click != ButtonActionType.None && (btn switch
-            {
-                RemoteButton.Up or RemoteButton.Down or RemoteButton.Left or RemoteButton.Right or
-                    RemoteButton.Ok or RemoteButton.VolumeUp or RemoteButton.VolumeDown => true,
-                RemoteButton.Power => click == ButtonActionType.KeyboardShortcut && shortcut == "Backspace",
-                _ => false
-            });
+            bool repeats = singleAction != ButtonAction.Disabled &&
+                btn is RemoteButton.Up or RemoteButton.Down or RemoteButton.Left or RemoteButton.Right or
+                    RemoteButton.Power or RemoteButton.VolumeUp or RemoteButton.VolumeDown;
+            var longPress = longPressOverride ?? (repeats ? ButtonAction.RepeatSingleClick : ButtonAction.Disabled);
             list.Add(new ButtonMapping
             {
                 Button = btn,
-                ClickAction = click,
-                ClickMedia = media,
-                ClickShortcut = shortcut,
-                LongPressAction = repeats ? ButtonActionType.ContinuousRepeat : ButtonActionType.None
+                SingleClick = new ConfiguredButtonAction { Action = singleAction },
+                DoubleClick = ConfiguredButtonAction.Disabled,
+                LongPress = new ConfiguredButtonAction { Action = longPress }
             });
         }
 
         if (type == RemoteModelType.T1Remote)
         {
-            // T1 Front-panel 7 customizable buttons: Power, Back, Home, Menu, VolumeUp, VolumeDown, Mute
-            // (OK/Enter and arrow keys pass through natively so rear QWERTY typing is never intercepted)
-            Add(RemoteButton.Power, ButtonActionType.KeyboardShortcut, shortcut: "Backspace");
-            Add(RemoteButton.Back, ButtonActionType.KeyboardShortcut, shortcut: "Escape");
-            Add(RemoteButton.Home, ButtonActionType.KeyboardShortcut, shortcut: "Win+Tab");
-            Add(RemoteButton.Menu, ButtonActionType.KeyboardShortcut, shortcut: "Apps");
-            Add(RemoteButton.VolumeUp, ButtonActionType.MediaControl, media: MediaCommand.VolumeUp);
-            Add(RemoteButton.VolumeDown, ButtonActionType.MediaControl, media: MediaCommand.VolumeDown);
-            Add(RemoteButton.Mute, ButtonActionType.MediaControl, media: MediaCommand.Mute);
+            // T1 front-panel 7 customizable buttons (OK/arrows and rear QWERTY keyboard stay native).
+            Add(RemoteButton.Power, ButtonAction.DeleteBackward);
+            Add(RemoteButton.Back, ButtonAction.Escape);
+            Add(RemoteButton.Home, ButtonAction.TaskView);
+            Add(RemoteButton.Menu, ButtonAction.ContextMenu);
+            Add(RemoteButton.VolumeUp, ButtonAction.VolumeUp);
+            Add(RemoteButton.VolumeDown, ButtonAction.VolumeDown);
+            Add(RemoteButton.Mute, ButtonAction.VolumeMute);
             return list;
         }
 
-        bool isGoogle = isG9N9N || type == RemoteModelType.GoogleGY3LE;
-        bool isRc003 = type == RemoteModelType.XiaomiRC003;
-        bool isXiaomi = isRc003 || type == RemoteModelType.XiaomiRC001;
-
-        // Xiaomi and T1 arrow keys / OK arrive natively via Windows Bluetooth HID keyboard.
-        // Defaulting them to None prevents duplicate synthetic keystrokes while allowing custom remapping.
-        Add(RemoteButton.Up, isXiaomi ? ButtonActionType.None : ButtonActionType.KeyboardShortcut, shortcut: isXiaomi ? null : "Up");
-        Add(RemoteButton.Down, isXiaomi ? ButtonActionType.None : ButtonActionType.KeyboardShortcut, shortcut: isXiaomi ? null : "Down");
-        Add(RemoteButton.Left, isXiaomi ? ButtonActionType.None : ButtonActionType.KeyboardShortcut, shortcut: isXiaomi ? null : "Left");
-        Add(RemoteButton.Right, isXiaomi ? ButtonActionType.None : ButtonActionType.KeyboardShortcut, shortcut: isXiaomi ? null : "Right");
-        Add(RemoteButton.Ok, isXiaomi ? ButtonActionType.None : ButtonActionType.KeyboardShortcut, shortcut: isXiaomi ? null : "Enter");
-        Add(RemoteButton.Back, ButtonActionType.KeyboardShortcut, shortcut: "Escape");
-        Add(RemoteButton.Home, ButtonActionType.KeyboardShortcut, shortcut: type == RemoteModelType.GoogleGY3LE ? "Alt+Tab" : "Win+Tab");
-        Add(RemoteButton.VolumeUp, ButtonActionType.MediaControl, media: MediaCommand.VolumeUp);
-        Add(RemoteButton.VolumeDown, ButtonActionType.MediaControl, media: MediaCommand.VolumeDown);
-        Add(RemoteButton.Mute, ButtonActionType.MediaControl, media: MediaCommand.Mute);
-        Add(RemoteButton.PlayPause, ButtonActionType.MediaControl, media: MediaCommand.PlayPause);
-        Add(RemoteButton.Menu, isRc003 ? ButtonActionType.TextSnippet : ButtonActionType.KeyboardShortcut,
-            shortcut: isRc003 ? null : "Apps");
-        Add(RemoteButton.LiveTv, isRc003 ? ButtonActionType.MediaControl : ButtonActionType.None,
-            media: isRc003 ? MediaCommand.PlayPause : MediaCommand.None);
-        bool hasPowerShortcut = !isGoogle || isG9N9N;
-        Add(RemoteButton.Power, hasPowerShortcut ? ButtonActionType.KeyboardShortcut : ButtonActionType.None,
-            shortcut: hasPowerShortcut ? "Backspace" : null);
-
         if (type is RemoteModelType.GoogleG9N9N or RemoteModelType.GoogleGY3LE)
         {
-            Add(RemoteButton.YouTube, isG9N9N ? ButtonActionType.KeyboardShortcut : ButtonActionType.None,
-                shortcut: isG9N9N ? "Ctrl+R" : null);
-            Add(RemoteButton.Netflix, isG9N9N ? ButtonActionType.KeyboardShortcut : ButtonActionType.None,
-                shortcut: isG9N9N ? "Ctrl+W" : null);
-            Add(RemoteButton.Input, isG9N9N ? ButtonActionType.MediaControl : ButtonActionType.None,
-                media: isG9N9N ? MediaCommand.PlayPause : MediaCommand.None);
-            if (type == RemoteModelType.GoogleGY3LE)
+            Add(RemoteButton.Power, ButtonAction.DeleteBackward);
+            Add(RemoteButton.Up, ButtonAction.ArrowUp);
+            Add(RemoteButton.Left, ButtonAction.ArrowLeft);
+            Add(RemoteButton.Ok, ButtonAction.ReturnKey, ButtonAction.CommandReturn);
+            Add(RemoteButton.Right, ButtonAction.ArrowRight);
+            Add(RemoteButton.Down, ButtonAction.ArrowDown);
+            Add(RemoteButton.Back, ButtonAction.Escape);
+            Add(RemoteButton.Home, ButtonAction.TaskView);
+            Add(RemoteButton.VolumeUp, ButtonAction.VolumeUp);
+            Add(RemoteButton.VolumeDown, ButtonAction.VolumeDown);
+            Add(RemoteButton.Mute, ButtonAction.VolumeMute);
+            Add(RemoteButton.YouTube, ButtonAction.PreviousTrack);
+            Add(RemoteButton.Netflix, ButtonAction.NextTrack);
+            if (type == RemoteModelType.GoogleG9N9N)
             {
-                Add(RemoteButton.Custom, ButtonActionType.None);
+                Add(RemoteButton.Input, ButtonAction.PlayPause);
             }
+            else
+            {
+                Add(RemoteButton.Custom, ButtonAction.Disabled);
+            }
+            return list;
         }
 
+        // Xiaomi (RC001 / RC003 / ARN9 / Unknown) — 12-button layout.
+        // Arrow keys and OK emit native Windows HID keyboard Enter/arrows that Raw Input cannot suppress per-device;
+        // keep them disabled here so native input passes cleanly without overlapping synthetic actions.
+        Add(RemoteButton.Power, ButtonAction.DeleteBackward);
+        Add(RemoteButton.Up, ButtonAction.Disabled);
+        Add(RemoteButton.Left, ButtonAction.Disabled);
+        Add(RemoteButton.Ok, ButtonAction.Disabled);
+        Add(RemoteButton.Right, ButtonAction.Disabled);
+        Add(RemoteButton.Down, ButtonAction.Disabled);
+        Add(RemoteButton.Back, ButtonAction.Escape);
+        Add(RemoteButton.VolumeUp, ButtonAction.VolumeUp);
+        Add(RemoteButton.Home, ButtonAction.TaskView);
+        Add(RemoteButton.VolumeDown, ButtonAction.VolumeDown);
+        Add(RemoteButton.Menu, ButtonAction.ContextMenu);
+        Add(RemoteButton.LiveTv, ButtonAction.PlayPause);
         return list;
     }
 }
@@ -313,9 +335,11 @@ public class AppConfig
     public bool ReceiveUpdateNotifications { get; set; } = true;
     public bool DiagnosticLoggingEnabled { get; set; } = true;
     public bool HasCompletedOnboarding { get; set; } = false;
+    public bool CustomMappingEnabled { get; set; } = true;
 
     public InputToolConfig InputTool { get; set; } = new();
     public List<RemoteDevice> Devices { get; set; } = new();
     public string? SelectedDeviceId { get; set; }
     public Dictionary<string, bool> AppIntegrations { get; set; } = new();
+    public List<CustomApplicationProfile> CustomApplications { get; set; } = new();
 }
