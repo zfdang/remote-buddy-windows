@@ -45,6 +45,8 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
     private static readonly Guid ModelNumberUuid = new("00002A24-0000-1000-8000-00805F9B34FB");
     private static readonly Guid FirmwareRevisionUuid = new("00002A26-0000-1000-8000-00805F9B34FB");
     private static readonly Guid HardwareRevisionUuid = new("00002A27-0000-1000-8000-00805F9B34FB");
+    private static readonly Guid SoftwareRevisionUuid = new("00002A28-0000-1000-8000-00805F9B34FB");
+    private static readonly Guid ManufacturerNameUuid = new("00002A29-0000-1000-8000-00805F9B34FB");
     private static readonly Guid PnpIdUuid = new("00002A50-0000-1000-8000-00805F9B34FB");
     private static readonly Guid HidServiceUuid = new("00001812-0000-1000-8000-00805F9B34FB");
 
@@ -572,7 +574,9 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
                 }
             }
 
-            AppLogger.Info("ATVV GetCapabilities sent, awaiting remote response...", "BluetoothManager");
+            AppLogger.Info(
+                $"ATVV GetCapabilities sent, awaiting remote response... (txProps={tx.CharacteristicProperties}, writeOption={SelectWriteOption(tx.CharacteristicProperties)})",
+                "BluetoothManager");
             var completedTask = await Task.WhenAny(capabilitiesTcs.Task, Task.Delay(5000));
             ATVVCapabilities? capabilities;
             lock (_stateLock)
@@ -860,7 +864,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
         }
 
         AppLogger.Info(
-            $"Bluetooth remote hardware: addr=0x{updated.BluetoothAddress:X12}, model='{updated.ModelNumber ?? "unavailable"}', firmware='{updated.FirmwareRevision ?? "unavailable"}', hardwareRev='{updated.HardwareRevision ?? "unavailable"}', pnp='{updated.VendorProductId ?? "unavailable"}', pnpVersion='{updated.HidVersionText ?? "unavailable"}', voiceProtocol='{updated.VoiceProtocol ?? "unavailable"}'",
+            $"Bluetooth remote hardware: addr=0x{updated.BluetoothAddress:X12}, model='{updated.ModelNumber ?? "unavailable"}', firmware='{updated.FirmwareRevision ?? "unavailable"}', softwareRev='{updated.SoftwareRevision ?? "unavailable"}', hardwareRev='{updated.HardwareRevision ?? "unavailable"}', manufacturer='{updated.ManufacturerName ?? "unavailable"}', pnp='{updated.VendorProductId ?? "unavailable"}', pnpVersion='{updated.HidVersionText ?? "unavailable"}', voiceProtocol='{updated.VoiceProtocol ?? "unavailable"}'",
             "BluetoothManager");
         if (updated == information) return;
 
@@ -885,11 +889,15 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
 
                 var firmware = await ReadDeviceInformationValueAsync(service, FirmwareRevisionUuid).ConfigureAwait(false);
                 var hardware = await ReadDeviceInformationValueAsync(service, HardwareRevisionUuid).ConfigureAwait(false);
+                var software = await ReadDeviceInformationValueAsync(service, SoftwareRevisionUuid).ConfigureAwait(false);
+                var manufacturer = await ReadDeviceInformationValueAsync(service, ManufacturerNameUuid).ConfigureAwait(false);
                 var pnpId = await ReadDeviceInformationValueAsync(service, PnpIdUuid).ConfigureAwait(false);
                 return information with
                 {
                     FirmwareRevision = RemoteDeviceInformation.DecodeDeviceString(firmware),
                     HardwareRevision = RemoteDeviceInformation.DecodeDeviceString(hardware),
+                    SoftwareRevision = RemoteDeviceInformation.DecodeDeviceString(software),
+                    ManufacturerName = RemoteDeviceInformation.DecodeDeviceString(manufacturer),
                     PnpId = RemoteDeviceInformation.DecodePnpId(pnpId),
                     ProductVersion = RemoteDeviceInformation.DecodePnpProductVersion(pnpId),
                 };
@@ -940,6 +948,21 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
         }
     }
 
+    internal static GattWriteOption SelectWriteOption(GattCharacteristicProperties properties)
+    {
+        if (properties.HasFlag(GattCharacteristicProperties.WriteWithoutResponse))
+        {
+            return GattWriteOption.WriteWithoutResponse;
+        }
+
+        if (properties.HasFlag(GattCharacteristicProperties.Write))
+        {
+            return GattWriteOption.WriteWithResponse;
+        }
+
+        return GattWriteOption.WriteWithoutResponse;
+    }
+
     private static async Task<GattCommunicationStatus> WriteCharacteristicWithTimeoutAsync(
         GattCharacteristic tx,
         byte[] payload,
@@ -947,7 +970,7 @@ public sealed class WinRtBluetoothManager : IBluetoothManager
         CancellationToken cancellationToken = default)
     {
         var buffer = CryptographicBuffer.CreateFromByteArray(payload);
-        var writeOp = tx.WriteValueAsync(buffer, GattWriteOption.WriteWithoutResponse);
+        var writeOp = tx.WriteValueAsync(buffer, SelectWriteOption(tx.CharacteristicProperties));
         var writeTask = writeOp.AsTask();
         _ = writeTask.ContinueWith(
             static t => _ = t.Exception,

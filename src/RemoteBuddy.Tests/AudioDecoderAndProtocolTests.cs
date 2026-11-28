@@ -943,4 +943,40 @@ public class AudioDecoderAndProtocolTests
         Assert.Equal(2, Volatile.Read(ref levelEvents));
         Assert.False(manager.IsAudioAwaitingResyncForTest);
     }
+
+    [Fact]
+    public void G9N9NDetails_DecodeSoftwareRevisionAndManufacturerName()
+    {
+        var information = new RemoteDeviceInformation(
+            1,
+            SoftwareRevision: RemoteDeviceInformation.DecodeDeviceString("26.7-JP\0"u8),
+            ManufacturerName: RemoteDeviceInformation.DecodeDeviceString("Google Inc.\0"u8),
+            HardwareRevision: RemoteDeviceInformation.DecodeDeviceString("PVT/MP\0"u8));
+
+        Assert.Equal("26.7-JP", information.SoftwareRevision);
+        Assert.Equal("Google Inc.", information.ManufacturerName);
+        Assert.Equal("PVT/MP", information.HardwareRevision);
+    }
+
+    [Fact]
+    public void WinRtBluetoothManager_SelectWriteOption_RespectsCharacteristicProperties()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        Assert.Equal(
+            global::Windows.Devices.Bluetooth.GenericAttributeProfile.GattWriteOption.WriteWithoutResponse,
+            RemoteBuddy.Platform.Windows.Bluetooth.WinRtBluetoothManager.SelectWriteOption(
+                global::Windows.Devices.Bluetooth.GenericAttributeProfile.GattCharacteristicProperties.WriteWithoutResponse));
+
+        Assert.Equal(
+            global::Windows.Devices.Bluetooth.GenericAttributeProfile.GattWriteOption.WriteWithoutResponse,
+            RemoteBuddy.Platform.Windows.Bluetooth.WinRtBluetoothManager.SelectWriteOption(
+                global::Windows.Devices.Bluetooth.GenericAttributeProfile.GattCharacteristicProperties.WriteWithoutResponse |
+                global::Windows.Devices.Bluetooth.GenericAttributeProfile.GattCharacteristicProperties.Write));
+
+        Assert.Equal(
+            global::Windows.Devices.Bluetooth.GenericAttributeProfile.GattWriteOption.WriteWithResponse,
+            RemoteBuddy.Platform.Windows.Bluetooth.WinRtBluetoothManager.SelectWriteOption(
+                global::Windows.Devices.Bluetooth.GenericAttributeProfile.GattCharacteristicProperties.Write));
+    }
 }
