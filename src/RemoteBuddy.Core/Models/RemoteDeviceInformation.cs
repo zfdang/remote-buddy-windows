@@ -14,7 +14,9 @@ public sealed record RemoteDeviceInformation(
     string? FirmwareRevision = null,
     (ushort VendorId, ushort ProductId)? PnpId = null,
     ushort? ProductVersion = null,
-    string? HardwareRevision = null)
+    string? HardwareRevision = null,
+    string? SoftwareRevision = null,
+    string? ManufacturerName = null)
 {
     private static readonly UTF8Encoding DeviceEncoding = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 

@@ -14,7 +14,7 @@
 | **小米遥控器 (`RC001` 等同系)** | VID `2717` | BLE GATT ATVV（`AB5E0001`） | Raw Input + Xiaomi HID/ETW 解析 | 协议共享实现，**Windows 真机验收待补** |
 | **G9N9N — 8 字节索引批次 (`0x0110`)** | `18D1:9450`（ATT 句柄 `0x0029`） | BLE GATT ATVV（`0x08 -> MIC_OPEN -> 0x04`） | BthPort ETW 解析 8 字节索引 `[code, 0..0]`（命中 `0x0029` 后自动锁定） | **已在 Windows 11 真机验证** |
 | **G9N9N — 规范 Report 1 两字节/三字节批次 (`0x0110 / FW 26.2`)** | `18D1:9450`，`HID 0x0110` / 固件 `26.2` | 同上 ATVV 语音链路 | BthPort ETW 解析 2 字节索引 `[code, slot2]` 与含 ID 3 字节 `[0x01, code, slot2]`（均解码首键 `code`） | 协议实现并通过单元测试，**对应批次 Windows 真机验收待补** |
-| **G9N9N — 1 字节短包批次 (`A0 / FW 26.7`, `0x0110 / FW 26.0`)** | `18D1:9450`，如句柄 `0x0046` | 同上 ATVV 语音链路 | BthPort ETW 直接解析 1 字节索引 `[code]` 与 `[0x00]` 松开（以及 2 字节 `[c1, c2]`，解码首键 `c1`） | 协议实现并通过单元测试，**对应批次 Windows 真机验收待补** |
+| **G9N9N — 1 字节短包批次 (`A0 / FW 26.7` 含 `26.7-JP`, `0x0110 / FW 26.0`)** | `18D1:9450`，硬件 `PVT/MP`，如句柄 `0x0046` | 同上 ATVV 语音链路（`ATT MTU 247`） | BthPort ETW 直接解析 1 字节索引 `[code]` 与 `[0x00]` 松开（以及 2 字节 `[c1, c2]`，解码首键 `c1`） | 协议实现并通过单元测试，**对应批次 Windows 真机验收待补** |
 | **G9N9N — `HID 0x011B` Report 2 批次** | `18D1:9450`，`HID 0x011B` | 同上 ATVV 语音链路 | BthPort ETW 解析 2 字节/3 字节小端 Consumer Usage（及含 ID `0x02` 3 字节） | 协议实现并通过单元测试，**对应批次 Windows 真机验收待补** |
 | **Google `GY3LE`** | 同系候选名称识别 | BLE GATT ATVV | 按 G9N9N 同系列规则解析 | **Windows 真机验收待补** |
 | **T1-Remote** | VID `620A` / PID `0407` | BLE GATT ATVV（16 kHz / 8 kHz 等） | Raw Input / 直接 HID / ETW | **Windows 真机验收待补** |
@@ -33,7 +33,28 @@
 
 在 Windows 上，Remote Buddy 通过 **BthPort ETW（Event 402）** 读取蓝牙栈提供的 **HCI ACL / L2CAP / ATT（`0x1B` Notification / `0x1D` Indication）帧**。只要 Windows 提供载荷且应用能确认连接归属，就可以尝试解码实际报文，即使字节数与 HID 描述符不同。Windows 可能省略载荷，连接探测也可能匹配失败。
 
-> 注意：ATVV 语音按键与 16 kHz IMA-ADPCM 音频流走独立的 BLE GATT 服务（`AB5E0001`），与上述 HID 报告格式无关，在所有已知批次上均采用相同协议交互。
+> 注意：ATVV 语音按键与 16 kHz 4-bit IMA-ADPCM 音频流走独立的 BLE GATT 服务（`AB5E0001`），与上述 HID 报告格式无关，在所有已知批次上均采用相同协议交互（ATVV `codec = 0x02` 表示 16 kHz 采样率下的 IMA-ADPCM 压缩流，解码还原后为 16 kHz / 16-bit 单声道 PCM，而非空口直传未压缩 PCM）。
+
+### Windows 11（26100）`A0 / 26.7-JP` 实测 GATT 全景与常见误判
+
+以下为 Windows 11（Build 26100）BLE 直接枚举一台日版 G9N9N（广播名 `Chromecast Remote`）的实测参考，可用于比对新收到的硬件日志：
+
+- **DIS 服务（`0x180A`，9 个只读特征）**：
+  - `0x2A24` 型号：`A0`
+  - `0x2A26` 固件版本：`26.7`
+  - `0x2A27` 硬件版本：`PVT/MP`
+  - `0x2A28` 软件版本：`26.7-JP`（含区域固件后缀）
+  - `0x2A29` 制造商：`Google Inc.`
+  - `0x2A50` PnP ID 原始值：`01 D1 18 50 94 10 01`（源 `01` Bluetooth SIG，`VID=0x18D1`，`PID=0x9450`，`REV=0x0110`）
+  - 另含 `0x2A23`（System ID）、`0x2A25`（序列号）、`0x2A2A`（IEEE 认证数据）。
+- **10 个 GATT 服务全景（`ATT MTU = 247`）**：
+  - 标准服务：`0x1800`（Generic Access，3 特征）、`0x1801`（Generic Attribute，0 特征）、`0x180A`（DIS，9 特征）、`0x180F`（电量 `0x2A19` 读+通知）、`0x1813`（扫描参数 `0x2A4F` 无响应写、`0x2A31` 通知）、`0x1812`（HID over GATT）、`AB5E0001`（ATVV 语音 `AB5E0002/0003/0004`）。
+  - 私有服务：`F000BBC0`（`BBC1` 读写、`BBC2` 写、`BBC3` 读）、`6C6F6701`（`6705` 读）、`D343BFC0`（`BFC1–BFC4` 写、`BFC5` 通知）。这些服务句柄通常在 `0x1812` 区间之外，不会进入按键解码。
+- **排雷基线（区分非标准/无语音兼容款）**：
+  - `AB5E0001` 必须存在且可发现 `0002/0003/0004` 三个特征，缺少语音服务的通常不是原厂固件；同时 `0x2A29` 应为 `"Google Inc."`、`0x2A50` 应解出 `18D1:9450:0110`（注：静态字符串与 ID 可被高仿固件复制，仅作为基础排除下限，不能单独证明原装）。
+- **两个常见 Windows 枚举误判**：
+  1. **`0x1812` 显示 0 特征**：由 Windows HOGP 驱动独占所致，第三方枚举返回空或 `AccessDenied` 属正常现象，不代表设备没有 HID；Remote Buddy 仅读取服务级 `StartHandle` 计算 `hidRange`，不依赖枚举 `0x1812` 内部特征。
+  2. **`AB5E0001` 枚举 0 特征或全服务为空**：常见原因是 Windows 蓝牙绑定/GATT 缓存损坏（重新配对可恢复，应用亦会在缓存失败时自动以 `BluetoothCacheMode.Uncached` 重试）、另一程序占用该服务，或遥控器处于休眠/断链状态。
 
 ---
 
@@ -116,9 +137,9 @@
 
 1. **硬件与 PnP 版本信息 (`BluetoothManager`)**
    ```text
-   Bluetooth remote hardware: addr=0x..., model='A0', firmware='26.7', hardwareRev='...', pnp='18D1 / 9450', pnpVersion='0x0110', voiceProtocol='ATVV 1.0'
+   Bluetooth remote hardware: addr=0x..., model='A0', firmware='26.7', softwareRev='26.7-JP', hardwareRev='PVT/MP', manufacturer='Google Inc.', pnp='18D1 / 9450', pnpVersion='0x0110', voiceProtocol='ATVV 1.0'
    ```
-   用于确认遥控器的 DIS 型号、固件版本、硬件修订以及 `PnP ID` 中的 `HID ProductVersion`（例如 `0x0110` 或 `0x011B`）。
+   用于确认遥控器的 DIS 型号、固件版本、软件区域版本、硬件修订、制造商以及 `PnP ID` 中的 `HID ProductVersion`（例如 `0x0110` 或 `0x011B`）。
 
 2. **GATT 服务布局与筛选区间 (`BluetoothManager`)**
    ```text
